@@ -26,6 +26,17 @@
       ]
     },
     {
+      "Name": "SMAssistMonolithBridge",
+      "Type": "Editor",
+      "LoadingPhase": "PostEngineInit",
+      "Optional": true,
+      "PlatformAllowList": [
+        "Win64",
+        "Mac",
+        "Linux"
+      ]
+    },
+    {
       "Name": "SMAssistTests",
       "Type": "UncookedOnly",
       "LoadingPhase": "Default",
@@ -40,6 +51,11 @@
     {
       "Name": "SMSystem",
       "Enabled": true
+    },
+    {
+      "Name": "Monolith",
+      "Enabled": true,
+      "Optional": true
     }
   ]
 }
