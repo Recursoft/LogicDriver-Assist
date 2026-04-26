@@ -1,0 +1,45 @@
+{
+  "FileVersion": 3,
+  "Version": 1,
+  "VersionName": "0.1.0",
+  "FriendlyName": "Logic Driver - Assist",
+  "Description": "Programmatic state machine authoring API powering MCP-style integrations.",
+  "Category": "Editor",
+  "CreatedBy": "Recursoft",
+  "CreatedByURL": "https://recursoft.net/",
+  "DocsURL": "https://recursoft.net/logicdriver",
+  "MarketplaceURL": "",
+  "SupportURL": "https://recursoft.net/logicdriver",
+  "EngineVersion": "5.7.0",
+  "CanContainContent": false,
+  "IsBetaVersion": true,
+  "Installed": false,
+  "Modules": [
+    {
+      "Name": "SMAssist",
+      "Type": "Editor",
+      "LoadingPhase": "Default",
+      "PlatformAllowList": [
+        "Win64",
+        "Mac",
+        "Linux"
+      ]
+    },
+    {
+      "Name": "SMAssistTests",
+      "Type": "UncookedOnly",
+      "LoadingPhase": "Default",
+      "PlatformAllowList": [
+        "Win64",
+        "Mac",
+        "Linux"
+      ]
+    }
+  ],
+  "Plugins": [
+    {
+      "Name": "SMSystem",
+      "Enabled": true
+    }
+  ]
+}

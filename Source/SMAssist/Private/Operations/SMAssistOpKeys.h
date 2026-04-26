@@ -1,0 +1,141 @@
+// Copyright Recursoft LLC. All Rights Reserved.
+
+#pragma once
+
+#include "HAL/Platform.h"
+
+namespace LD::Assist::Ops
+{
+	inline constexpr const TCHAR* CreateBlueprint = TEXT("sm.create_blueprint");
+	inline constexpr const TCHAR* AddState = TEXT("sm.add_state");
+	inline constexpr const TCHAR* AddTransition = TEXT("sm.add_transition");
+	inline constexpr const TCHAR* ListAssets = TEXT("sm.list_assets");
+	inline constexpr const TCHAR* GetAsset = TEXT("sm.get_asset");
+	inline constexpr const TCHAR* RemoveNode = TEXT("sm.remove_node");
+	inline constexpr const TCHAR* SetNodeProperty = TEXT("sm.set_node_property");
+	inline constexpr const TCHAR* Compile = TEXT("sm.compile");
+	inline constexpr const TCHAR* RenameState = TEXT("sm.rename_state");
+	inline constexpr const TCHAR* SetInitialState = TEXT("sm.set_initial_state");
+	inline constexpr const TCHAR* AddStateStack = TEXT("sm.add_state_stack");
+	inline constexpr const TCHAR* AddTransitionStack = TEXT("sm.add_transition_stack");
+	inline constexpr const TCHAR* AddConduit = TEXT("sm.add_conduit");
+	inline constexpr const TCHAR* AddReference = TEXT("sm.add_reference");
+	inline constexpr const TCHAR* AddAnyState = TEXT("sm.add_any_state");
+	inline constexpr const TCHAR* AddLinkState = TEXT("sm.add_link_state");
+	inline constexpr const TCHAR* GetNodeProperties = TEXT("sm.get_node_properties");
+	inline constexpr const TCHAR* SetTransitionCondition = TEXT("sm.set_transition_condition");
+	inline constexpr const TCHAR* GetGraphView = TEXT("sm.get_graph_view");
+	inline constexpr const TCHAR* CaptureGraphView = TEXT("sm.capture_graph_view");
+	inline constexpr const TCHAR* ClearScreenshots = TEXT("sm.clear_screenshots");
+	inline constexpr const TCHAR* LayoutStates = TEXT("sm.layout_states");
+}
+
+namespace LD::Assist::Args
+{
+	inline constexpr const TCHAR* AssetPath = TEXT("asset_path");
+	inline constexpr const TCHAR* Name = TEXT("name");
+	inline constexpr const TCHAR* Path = TEXT("path");
+	inline constexpr const TCHAR* PathPrefix = TEXT("path_prefix");
+	inline constexpr const TCHAR* ParentClass = TEXT("parent_class");
+
+	inline constexpr const TCHAR* StateName = TEXT("state_name");
+	inline constexpr const TCHAR* StateGuid = TEXT("state_guid");
+	inline constexpr const TCHAR* StateClass = TEXT("state_class");
+	inline constexpr const TCHAR* IsEntry = TEXT("is_entry");
+	inline constexpr const TCHAR* PositionX = TEXT("position_x");
+	inline constexpr const TCHAR* PositionY = TEXT("position_y");
+	inline constexpr const TCHAR* NewName = TEXT("new_name");
+
+	inline constexpr const TCHAR* FromStateGuid = TEXT("from_state_guid");
+	inline constexpr const TCHAR* ToStateGuid = TEXT("to_state_guid");
+	inline constexpr const TCHAR* TransitionGuid = TEXT("transition_guid");
+	inline constexpr const TCHAR* TransitionClass = TEXT("transition_class");
+
+	inline constexpr const TCHAR* NodeGuid = TEXT("node_guid");
+	inline constexpr const TCHAR* PropertyName = TEXT("property_name");
+	inline constexpr const TCHAR* Value = TEXT("value");
+	inline constexpr const TCHAR* ArrayIndex = TEXT("array_index");
+	inline constexpr const TCHAR* TargetIndex = TEXT("target_index");
+	inline constexpr const TCHAR* ArrayAction = TEXT("array_action");
+	inline constexpr const TCHAR* StackIndex = TEXT("stack_index");
+	inline constexpr const TCHAR* TemplateGuid = TEXT("template_guid");
+	inline constexpr const TCHAR* ElementCount = TEXT("element_count");
+
+	inline constexpr const TCHAR* States = TEXT("states");
+	inline constexpr const TCHAR* Transitions = TEXT("transitions");
+	inline constexpr const TCHAR* Assets = TEXT("assets");
+	inline constexpr const TCHAR* Count = TEXT("count");
+	inline constexpr const TCHAR* EntryStateGuids = TEXT("entry_state_guids");
+
+	inline constexpr const TCHAR* UpToDate = TEXT("up_to_date");
+	inline constexpr const TCHAR* HasWarnings = TEXT("has_warnings");
+	inline constexpr const TCHAR* HasErrors = TEXT("has_errors");
+	inline constexpr const TCHAR* Status = TEXT("status");
+
+	inline constexpr const TCHAR* ReferenceAssetPath = TEXT("reference_asset_path");
+	inline constexpr const TCHAR* EvalWithTransitions = TEXT("eval_with_transitions");
+	inline constexpr const TCHAR* Properties = TEXT("properties");
+	inline constexpr const TCHAR* Type = TEXT("type");
+	inline constexpr const TCHAR* Category = TEXT("category");
+	inline constexpr const TCHAR* Condition = TEXT("condition");
+
+	inline constexpr const TCHAR* Kind = TEXT("kind");
+	inline constexpr const TCHAR* LinkToStateName = TEXT("link_to_state_name");
+	inline constexpr const TCHAR* LinkedStateGuid = TEXT("linked_state_guid");
+
+	inline constexpr const TCHAR* IncludeTransitions = TEXT("include_transitions");
+	inline constexpr const TCHAR* IncludePins = TEXT("include_pins");
+	inline constexpr const TCHAR* Nodes = TEXT("nodes");
+	inline constexpr const TCHAR* PanelView = TEXT("panel_view");
+	inline constexpr const TCHAR* Zoom = TEXT("zoom");
+	inline constexpr const TCHAR* ViewOffset = TEXT("view_offset");
+	inline constexpr const TCHAR* LogicalPosition = TEXT("logical_position");
+	inline constexpr const TCHAR* WidgetPosition = TEXT("widget_position");
+	inline constexpr const TCHAR* WidgetSize = TEXT("widget_size");
+	inline constexpr const TCHAR* TitleText = TEXT("title_text");
+	inline constexpr const TCHAR* BodyColor = TEXT("body_color");
+	inline constexpr const TCHAR* TitleColor = TEXT("title_color");
+	inline constexpr const TCHAR* Comment = TEXT("comment");
+	inline constexpr const TCHAR* IsSelected = TEXT("is_selected");
+	inline constexpr const TCHAR* Pins = TEXT("pins");
+	inline constexpr const TCHAR* PinId = TEXT("pin_id");
+	inline constexpr const TCHAR* PinName = TEXT("pin_name");
+	inline constexpr const TCHAR* PinDirection = TEXT("pin_direction");
+	inline constexpr const TCHAR* DisplayedText = TEXT("displayed_text");
+
+	inline constexpr const TCHAR* ClipToPanel = TEXT("clip_to_panel");
+	inline constexpr const TCHAR* FitToContent = TEXT("fit_to_content");
+	inline constexpr const TCHAR* OutputSubdir = TEXT("output_subdir");
+	inline constexpr const TCHAR* Prefix = TEXT("prefix");
+	inline constexpr const TCHAR* Width = TEXT("width");
+	inline constexpr const TCHAR* Height = TEXT("height");
+	inline constexpr const TCHAR* Bytes = TEXT("bytes");
+	inline constexpr const TCHAR* Mime = TEXT("mime");
+
+	inline constexpr const TCHAR* OlderThanSeconds = TEXT("older_than_seconds");
+	inline constexpr const TCHAR* DryRun = TEXT("dry_run");
+	inline constexpr const TCHAR* DeletedCount = TEXT("deleted_count");
+	inline constexpr const TCHAR* FreedBytes = TEXT("freed_bytes");
+	inline constexpr const TCHAR* Paths = TEXT("paths");
+	inline constexpr const TCHAR* Directory = TEXT("directory");
+
+	inline constexpr const TCHAR* Strategy = TEXT("strategy");
+	inline constexpr const TCHAR* Apply = TEXT("apply");
+	inline constexpr const TCHAR* Scope = TEXT("scope");
+	inline constexpr const TCHAR* ColumnGap = TEXT("column_gap");
+	inline constexpr const TCHAR* RowGap = TEXT("row_gap");
+	inline constexpr const TCHAR* StartX = TEXT("start_x");
+	inline constexpr const TCHAR* StartY = TEXT("start_y");
+	inline constexpr const TCHAR* PinNodeGuids = TEXT("pin_node_guids");
+	inline constexpr const TCHAR* RespectExistingOrder = TEXT("respect_existing_order");
+	inline constexpr const TCHAR* SnapToGrid = TEXT("snap_to_grid");
+	inline constexpr const TCHAR* Graphs = TEXT("graphs");
+	inline constexpr const TCHAR* GraphPath = TEXT("graph_path");
+	inline constexpr const TCHAR* NodeLayout = TEXT("node_layout");
+	inline constexpr const TCHAR* ProposedPosition = TEXT("proposed_position");
+	inline constexpr const TCHAR* Layer = TEXT("layer");
+	inline constexpr const TCHAR* Lane = TEXT("lane");
+	inline constexpr const TCHAR* Delta = TEXT("delta");
+	inline constexpr const TCHAR* Warnings = TEXT("warnings");
+	inline constexpr const TCHAR* Applied = TEXT("applied");
+}
