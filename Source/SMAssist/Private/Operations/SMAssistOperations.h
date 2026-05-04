@@ -51,4 +51,8 @@ namespace LD::Assist
 	FSMAssistOperationResult ClearScreenshots(const TSharedRef<FJsonObject>& InArgs);
 
 	FSMAssistOperationResult LayoutStates(const TSharedRef<FJsonObject>& InArgs);
+
+	FSMAssistOperationResult GetPropertyPins(const TSharedRef<FJsonObject>& InArgs);
+
+	FSMAssistOperationResult ResetNodeProperty(const TSharedRef<FJsonObject>& InArgs);
 }

@@ -28,6 +28,8 @@ namespace LD::Assist::Ops
 	inline constexpr const TCHAR* CaptureGraphView = TEXT("sm.capture_graph_view");
 	inline constexpr const TCHAR* ClearScreenshots = TEXT("sm.clear_screenshots");
 	inline constexpr const TCHAR* LayoutStates = TEXT("sm.layout_states");
+	inline constexpr const TCHAR* GetPropertyPins = TEXT("sm.get_property_pins");
+	inline constexpr const TCHAR* ResetNodeProperty = TEXT("sm.reset_node_property");
 }
 
 namespace LD::Assist::Args
@@ -138,4 +140,6 @@ namespace LD::Assist::Args
 	inline constexpr const TCHAR* Delta = TEXT("delta");
 	inline constexpr const TCHAR* Warnings = TEXT("warnings");
 	inline constexpr const TCHAR* Applied = TEXT("applied");
+
+	inline constexpr const TCHAR* VariableName = TEXT("variable_name");
 }
