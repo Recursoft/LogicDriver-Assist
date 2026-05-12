@@ -3,7 +3,6 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Math/NumericLimits.h"
 #include "ToolsetRegistry/ToolsetDefinition.h"
 
 #include "LogicDriverToolset.generated.h"
@@ -20,9 +19,16 @@ class USMBlueprint;
  *
  * Convention note: every param is required at the MCP schema layer (UE 5.8's dispatcher rejects
  * omitted fields regardless of C++ defaults). C++ default values document the "use SMAssist
- * default" sentinel (empty string for FString, -1 for int32, max-double for "auto-layout"
- * positions/gaps); the marshal helper skips these sentinels when building the JSON, so SMAssist
- * sees the same omit-vs-pass semantics it sees from Monolith.
+ * default" sentinel (empty string for FString, -1 for int32, -1.0 for "auto-layout"
+ * positions/gaps and other double fields); the marshal helper skips these sentinels when
+ * building the JSON, so SMAssist sees the same omit-vs-pass semantics it sees from Monolith.
+ *
+ * Authoring guidance for AI clients: prefer LayoutStates(apply=true) over manual position_x/y
+ * for greenfield graphs. State nodes are roughly 130 to 150 px wide at 1:1 zoom and the editor
+ * renders an Entry-pointer marker about 200 px to the left of the entry state, so entry states
+ * placed near X=0 are visually eclipsed by the marker even though GetAsset reports them present.
+ * GetAsset returns logical coordinates only; for visual verification use CaptureGraphView (see
+ * its docstring for cost guidance on when to call).
  */
 UCLASS(MinimalAPI)
 class ULogicDriverToolset : public UToolsetDefinition
@@ -70,7 +76,7 @@ public:
 	 * @param Blueprint The blueprint to modify. Required.
 	 * @param StateName Display name for the new state. Empty = SMAssist auto-names ("State", "State_1", ...).
 	 * @param bIsEntry Whether this state becomes the graph's entry. Default false.
-	 * @param PositionX Canvas X coordinate. Negative sentinel (e.g., -1.0) = SMAssist auto-positions.
+	 * @param PositionX Canvas X coordinate. Negative sentinel (e.g., -1.0) = SMAssist auto-positions. Prefer the sentinel or a LayoutStates pass over manual placement; coordinates near (0, 0) collide with the editor's Entry-pointer marker and produce a visually broken graph for entry states.
 	 * @param PositionY Canvas Y coordinate. Negative sentinel (e.g., -1.0) = SMAssist auto-positions.
 	 * @param StateClass Full path of a USMStateInstance_Base subclass. Empty = base USMStateInstance.
 	 * @return JSON: { state_guid, state_name }
@@ -89,7 +95,7 @@ public:
 	 * @param Blueprint The blueprint to modify. Required.
 	 * @param StateName Display name for the new conduit. Empty = auto-name.
 	 * @param bIsEntry Whether this conduit becomes the graph's entry. Default false.
-	 * @param PositionX Canvas X coordinate. Negative sentinel (e.g., -1.0) = auto-position.
+	 * @param PositionX Canvas X coordinate. Negative sentinel (e.g., -1.0) = auto-position. Prefer the sentinel or a LayoutStates pass over manual placement; coordinates near (0, 0) collide with the editor's Entry-pointer marker and produce a visually broken graph for entry states.
 	 * @param PositionY Canvas Y coordinate. Negative sentinel (e.g., -1.0) = auto-position.
 	 * @param StateClass Full path of a USMConduitInstance subclass. Empty = base conduit.
 	 * @param bEvalWithTransitions Whether the conduit evaluates inline with outgoing transitions. Default true.
@@ -109,7 +115,7 @@ public:
 	 * Adds an AnyState node to a blueprint's root state machine graph.
 	 * @param Blueprint The blueprint to modify. Required.
 	 * @param StateName Display name for the AnyState. Empty = auto-name.
-	 * @param PositionX Canvas X coordinate. Negative sentinel (e.g., -1.0) = auto-position.
+	 * @param PositionX Canvas X coordinate. Negative sentinel (e.g., -1.0) = auto-position. Prefer the sentinel or a LayoutStates pass over manual placement; coordinates near (0, 0) collide with the editor's Entry-pointer marker and produce a visually broken graph for entry states.
 	 * @param PositionY Canvas Y coordinate. Negative sentinel (e.g., -1.0) = auto-position.
 	 * @return JSON: { state_guid, state_name }
 	 */
@@ -124,7 +130,7 @@ public:
 	 * Adds a LinkState node pointing at an existing state by name.
 	 * @param Blueprint The blueprint to modify. Required.
 	 * @param LinkToStateName Display name of the target state to link to. Required.
-	 * @param PositionX Canvas X coordinate. Negative sentinel (e.g., -1.0) = auto-position.
+	 * @param PositionX Canvas X coordinate. Negative sentinel (e.g., -1.0) = auto-position. Prefer the sentinel or a LayoutStates pass over manual placement; coordinates near (0, 0) collide with the editor's Entry-pointer marker and produce a visually broken graph for entry states.
 	 * @param PositionY Canvas Y coordinate. Negative sentinel (e.g., -1.0) = auto-position.
 	 * @return JSON: { state_guid, state_name, linked_state_guid?, link_to_state_name? }
 	 */
@@ -141,7 +147,7 @@ public:
 	 * @param ReferenceBlueprint The blueprint to reference (rendered as a sub-state-machine). Required.
 	 * @param StateName Display name for the reference node. Empty = auto-name.
 	 * @param bIsEntry Whether this reference becomes the graph's entry. Default false.
-	 * @param PositionX Canvas X coordinate. Negative sentinel (e.g., -1.0) = auto-position.
+	 * @param PositionX Canvas X coordinate. Negative sentinel (e.g., -1.0) = auto-position. Prefer the sentinel or a LayoutStates pass over manual placement; coordinates near (0, 0) collide with the editor's Entry-pointer marker and produce a visually broken graph for entry states.
 	 * @param PositionY Canvas Y coordinate. Negative sentinel (e.g., -1.0) = auto-position.
 	 * @return JSON: { state_guid, state_name, reference_asset_path }
 	 */
@@ -328,7 +334,11 @@ public:
 		bool bIncludePins = false);
 
 	/**
-	 * Captures a screenshot of a state machine graph (whole graph or a single node).
+	 * Captures a screenshot of a state machine graph (whole graph or a single node), saved as PNG
+	 * under the configured Saved/ subdirectory. The PNG is non-trivial in image tokens, so
+	 * call only when the visual layout is in question: after manual position_x/y placement,
+	 * after a LayoutStates pass the user wants to verify, or when the user explicitly asks how
+	 * the graph looks. Don't call reflexively after every authoring step.
 	 * @param Blueprint The blueprint to capture. Required.
 	 * @param bClipToPanel Clip the capture to the editor's graph-panel widget. Default true.
 	 * @param bFitToContent Auto-fit the view to the graph contents before capture. Default true.
@@ -360,7 +370,12 @@ public:
 		bool bDryRun = false);
 
 	/**
-	 * Computes (and optionally applies) an automatic layout for a state machine graph.
+	 * Computes (and optionally applies) an automatic layout for a state machine graph. Recommended
+	 * default after authoring a graph from scratch: greenfield Add* calls can leave nodes at
+	 * positions that collide with the editor's Entry-pointer marker or overlap each other.
+	 * Calling this with bApply=true after the last node is added produces a clean left-to-right
+	 * layout. Use manual position_x/y on the Add* ops only when reproducing an existing layout
+	 * the user already approved.
 	 * @param Blueprint The blueprint to lay out. Required.
 	 * @param Strategy Layout algorithm key (e.g., "topological"). Empty = SMAssist default.
 	 * @param bApply Apply the computed layout to the asset (true) or return as proposal only (false). Default false.

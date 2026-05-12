@@ -1,5 +1,11 @@
 // Copyright Recursoft LLC. All Rights Reserved.
 
+#if WITH_DEV_AUTOMATION_TESTS
+
+#if PLATFORM_DESKTOP
+
+#if WITH_TOOLSET_REGISTRY
+
 #include "LogicDriverToolset.h"
 #include "Operations/SMAssistOperationInfo.h"
 #include "Operations/SMAssistOperationResult.h"
@@ -11,10 +17,6 @@
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "UObject/Class.h"
-
-#if WITH_DEV_AUTOMATION_TESTS
-
-#if PLATFORM_DESKTOP
 
 BEGIN_DEFINE_SPEC(FSMAssistToolsetSpec, "LogicDriver.Assist.Toolset",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
@@ -134,6 +136,8 @@ void FSMAssistToolsetSpec::Define()
 		TestTrue(TEXT("Errored op returns empty FString"), ResultJson.IsEmpty());
 	});
 }
+
+#endif // WITH_TOOLSET_REGISTRY
 
 #endif // PLATFORM_DESKTOP
 

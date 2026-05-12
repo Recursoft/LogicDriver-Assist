@@ -7,7 +7,6 @@
 #include "Dom/JsonValue.h"
 #include "Editor.h"
 #include "Kismet/KismetSystemLibrary.h"
-#include "Math/NumericLimits.h"
 #include "Policies/CondensedJsonPrintPolicy.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
@@ -47,7 +46,7 @@ namespace LD::Assist::Toolset::Marshal
 
 	/**
 	 * Adds a double field when the value is non-negative. Negative sentinel (e.g., -1.0) =
-	 * "use SMAssist default". Used for positions, gaps, and durations — none of which take
+	 * "use SMAssist default". Used for positions, gaps, and durations; none of these take
 	 * meaningful negative values in SMAssist.
 	 */
 	inline void AddIfNonNegative(FJsonObject& Json, FStringView Field, double Value)
@@ -67,7 +66,7 @@ namespace LD::Assist::Toolset::Marshal
 	/**
 	 * Adds a variant-typed field whose value is JSON-encoded text. Parses `JsonText`
 	 * and emits the resulting JSON value (scalar / array / object) under `Field`.
-	 * Empty `JsonText` = sentinel for "use SMAssist default" — no field emitted.
+	 * Empty `JsonText` is the sentinel for "use SMAssist default"; no field is emitted.
 	 * Malformed JSON produces a script error and the field is skipped.
 	 */
 	inline void AddJsonValue(FJsonObject& Json, FStringView Field, const FString& JsonText)
@@ -104,7 +103,7 @@ namespace LD::Assist::Toolset::Marshal
 	 * Dispatches an SMAssist operation by name. On success, returns the operation's payload
 	 * serialized as a JSON string. On error, raises a script error (surfaced as a tool-level
 	 * MCP error) and returns an empty string. On missing subsystem (no editor context),
-	 * same — raises and returns empty.
+	 * same behavior: raises and returns empty.
 	 */
 	inline FString Execute(FName OperationName, const TSharedRef<FJsonObject>& Args)
 	{

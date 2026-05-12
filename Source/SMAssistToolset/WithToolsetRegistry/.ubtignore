@@ -1,0 +1,5 @@
+# Stops UBT's default recursive walk into `Inner/` so the UCLASS-bearing source
+# isn't scanned on engines without the ToolsetRegistry plugin. Re-enabled from
+# SMAssistToolset.Build.cs via ConditionalAddModuleDirectory when the engine
+# ships ToolsetRegistry (UE 5.8+). Without this marker the UCLASS subclasses
+# UToolsetDefinition unconditionally and the build fails on older engines.
