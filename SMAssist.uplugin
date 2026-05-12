@@ -10,7 +10,6 @@
   "DocsURL": "https://recursoft.net/logicdriver",
   "MarketplaceURL": "",
   "SupportURL": "https://recursoft.net/logicdriver",
-  "EngineVersion": "5.7.0",
   "CanContainContent": false,
   "IsBetaVersion": true,
   "Installed": false,
@@ -27,6 +26,17 @@
     },
     {
       "Name": "SMAssistMonolithBridge",
+      "Type": "Editor",
+      "LoadingPhase": "PostEngineInit",
+      "Optional": true,
+      "PlatformAllowList": [
+        "Win64",
+        "Mac",
+        "Linux"
+      ]
+    },
+    {
+      "Name": "SMAssistToolset",
       "Type": "Editor",
       "LoadingPhase": "PostEngineInit",
       "Optional": true,
@@ -54,6 +64,16 @@
     },
     {
       "Name": "Monolith",
+      "Enabled": true,
+      "Optional": true
+    },
+    {
+      "Name": "ToolsetRegistry",
+      "Enabled": true,
+      "Optional": true
+    },
+    {
+      "Name": "ModelContextProtocol",
       "Enabled": true,
       "Optional": true
     }
