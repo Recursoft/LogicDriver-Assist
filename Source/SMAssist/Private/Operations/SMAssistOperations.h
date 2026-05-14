@@ -55,4 +55,12 @@ namespace LD::Assist
 	FSMAssistOperationResult GetPropertyPins(const TSharedRef<FJsonObject>& InArgs);
 
 	FSMAssistOperationResult ResetNodeProperty(const TSharedRef<FJsonObject>& InArgs);
+
+	FSMAssistOperationResult AddSMVariable(const TSharedRef<FJsonObject>& InArgs);
+
+	FSMAssistOperationResult ConfigureSMComponentOnActor(const TSharedRef<FJsonObject>& InArgs);
+
+	FSMAssistOperationResult SpawnLocalGraphReadNode(const TSharedRef<FJsonObject>& InArgs);
+
+	FSMAssistOperationResult ConfigureReference(const TSharedRef<FJsonObject>& InArgs);
 }

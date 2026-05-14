@@ -33,6 +33,7 @@ public class SMAssist : ModuleRules
 				"EditorSubsystem",
 				"Json",
 				"AssetRegistry",
+				"BlueprintGraph",
 				"GraphEditor",
 				"Kismet",
 				"Slate",

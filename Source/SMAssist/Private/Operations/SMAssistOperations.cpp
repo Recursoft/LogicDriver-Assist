@@ -31,6 +31,7 @@
 #include "Properties/SMGraphProperty_Base.h"
 #include "SMConduitInstance.h"
 #include "SMStateInstance.h"
+#include "SMStateMachineComponent.h"
 #include "SMStateMachineInstance.h"
 #include "SMTransitionInstance.h"
 #include "Utilities/SMBlueprintEditorUtils.h"
@@ -44,22 +45,25 @@
 #include "EdGraphNode_Comment.h"
 #include "EdGraph/EdGraphPin.h"
 #include "EdGraph/EdGraphSchema.h"
+#include "EdGraphSchema_K2.h"
 #include "Editor.h"
+#include "Engine/SCS_Node.h"
+#include "Engine/SimpleConstructionScript.h"
 #include "ScopedTransaction.h"
 #include "Framework/Application/SlateApplication.h"
 #include "GraphEditor.h"
 #include "ImageUtils.h"
+#include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
-#include "Layout/ArrangedChildren.h"
-#include "Layout/Children.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Modules/ModuleManager.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
 #include "SGraphNode.h"
 #include "SGraphPanel.h"
 #include "SNodePanel.h"
 #include "Subsystems/AssetEditorSubsystem.h"
-#include "UObject/SoftObjectPath.h"
 #include "UObject/UnrealType.h"
 #include "Widgets/SWindow.h"
 
@@ -1404,12 +1408,6 @@ FSMAssistOperationResult LD::Assist::AddReference(const TSharedRef<FJsonObject>&
 		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'asset_path'."));
 	}
 
-	FString ReferencedPath;
-	if (!InArgs->TryGetStringField(Args::ReferenceAssetPath, ReferencedPath) || ReferencedPath.IsEmpty())
-	{
-		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'reference_asset_path'."));
-	}
-
 	FString LoadError;
 	USMBlueprint* Blueprint = LD::Assist::Utils::LoadStateMachineBlueprint(AssetPath, LoadError);
 	if (!Blueprint)
@@ -1417,18 +1415,23 @@ FSMAssistOperationResult LD::Assist::AddReference(const TSharedRef<FJsonObject>&
 		return FSMAssistOperationResult::MakeError(LoadError);
 	}
 
-	FString ReferencedLoadError;
-	USMBlueprint* ReferencedBlueprint = LD::Assist::Utils::LoadStateMachineBlueprint(ReferencedPath, ReferencedLoadError);
-	if (!ReferencedBlueprint)
+	// Reference target is optional. Omitting it creates a state-machine state with no reference yet;
+	// the caller can set the target later via sm.configure_reference.
+	USMBlueprint* ReferencedBlueprint = nullptr;
+	FString ReferencedPath;
+	if (InArgs->TryGetStringField(Args::ReferenceAssetPath, ReferencedPath) && !ReferencedPath.IsEmpty())
 	{
-		return FSMAssistOperationResult::MakeError(
-			FString::Printf(TEXT("Could not load 'reference_asset_path': %s"), *ReferencedLoadError));
-	}
-
-	if (ReferencedBlueprint == Blueprint)
-	{
-		return FSMAssistOperationResult::MakeError(
-			TEXT("A state machine blueprint cannot reference itself."));
+		FString ReferencedLoadError;
+		ReferencedBlueprint = LD::Assist::Utils::LoadStateMachineBlueprint(ReferencedPath, ReferencedLoadError);
+		if (!ReferencedBlueprint)
+		{
+			return FSMAssistOperationResult::MakeError(
+				FString::Printf(TEXT("Could not load 'reference_asset_path': %s"), *ReferencedLoadError));
+		}
+		if (ReferencedBlueprint == Blueprint)
+		{
+			return FSMAssistOperationResult::MakeError(TEXT("A state machine blueprint cannot reference itself."));
+		}
 	}
 
 	FString GraphGenError;
@@ -1440,7 +1443,10 @@ FSMAssistOperationResult LD::Assist::AddReference(const TSharedRef<FJsonObject>&
 
 	ISMGraphGeneration::FCreateStateNodeArgs CreateArgs;
 	CreateArgs.StateInstanceClass = USMStateMachineInstance::StaticClass();
-	CreateArgs.ReferencedBlueprint = ReferencedBlueprint;
+	if (ReferencedBlueprint)
+	{
+		CreateArgs.StateMachineReferenceConfig.ReferencedBlueprint = ReferencedBlueprint;
+	}
 
 	FString StateName;
 	if (InArgs->TryGetStringField(Args::StateName, StateName))
@@ -1463,6 +1469,12 @@ FSMAssistOperationResult LD::Assist::AddReference(const TSharedRef<FJsonObject>&
 		CreateArgs.NodePosition = FVector2D(PosX, PosY);
 	}
 
+	bool bUseIntermediateGraph = false;
+	if (InArgs->TryGetBoolField(Args::UseIntermediateGraph, bUseIntermediateGraph))
+	{
+		CreateArgs.StateMachineReferenceConfig.bUseIntermediateGraph = bUseIntermediateGraph;
+	}
+
 	USMGraphNode_StateNodeBase* StateNode = GraphGen->CreateStateNode(Blueprint, CreateArgs);
 	if (!StateNode)
 	{
@@ -1472,7 +1484,122 @@ FSMAssistOperationResult LD::Assist::AddReference(const TSharedRef<FJsonObject>&
 	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
 	Payload->SetStringField(Args::StateGuid, StateNode->NodeGuid.ToString());
 	Payload->SetStringField(Args::StateName, StateNode->GetStateName());
-	Payload->SetStringField(Args::ReferenceAssetPath, ReferencedBlueprint->GetPathName());
+	if (ReferencedBlueprint)
+	{
+		Payload->SetStringField(Args::ReferenceAssetPath, ReferencedBlueprint->GetPathName());
+	}
+	if (CreateArgs.StateMachineReferenceConfig.bUseIntermediateGraph.IsSet())
+	{
+		Payload->SetBoolField(Args::UseIntermediateGraph, CreateArgs.StateMachineReferenceConfig.bUseIntermediateGraph.GetValue());
+	}
+	return FSMAssistOperationResult::MakeSuccess(Payload);
+}
+
+FSMAssistOperationResult LD::Assist::ConfigureReference(const TSharedRef<FJsonObject>& InArgs)
+{
+	FString AssetPath;
+	if (!InArgs->TryGetStringField(Args::AssetPath, AssetPath) || AssetPath.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'asset_path'."));
+	}
+
+	FString NodeGuidStr;
+	if (!InArgs->TryGetStringField(Args::NodeGuid, NodeGuidStr) || NodeGuidStr.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'node_guid' (state-machine-reference state guid)."));
+	}
+
+	FGuid NodeGuid;
+	if (!FGuid::Parse(NodeGuidStr, NodeGuid))
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("Invalid 'node_guid' '%s'."), *NodeGuidStr));
+	}
+
+	FString LoadError;
+	USMBlueprint* Blueprint = LD::Assist::Utils::LoadStateMachineBlueprint(AssetPath, LoadError);
+	if (!Blueprint)
+	{
+		return FSMAssistOperationResult::MakeError(LoadError);
+	}
+
+	USMGraphNode_Base* Node = LD::Assist::Utils::FindNodeByGuid(Blueprint, NodeGuid);
+	if (!Node)
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("No node with guid '%s' on '%s'."), *NodeGuidStr, *AssetPath));
+	}
+
+	USMGraphNode_StateMachineStateNode* RefNode = Cast<USMGraphNode_StateMachineStateNode>(Node);
+	if (!RefNode)
+	{
+		return FSMAssistOperationResult::MakeError(
+			FString::Printf(TEXT("Node '%s' is not a state-machine-reference state. configure_reference only operates on USMGraphNode_StateMachineStateNode instances."), *NodeGuidStr));
+	}
+
+	ISMGraphGeneration::FConfigureStateMachineReferenceArgs ConfigureArgs;
+	TArray<FString> AppliedFields;
+
+	FString ReferencedAssetPath;
+	if (InArgs->TryGetStringField(Args::ReferenceAssetPath, ReferencedAssetPath))
+	{
+		if (ReferencedAssetPath.IsEmpty())
+		{
+			ConfigureArgs.ReferencedBlueprint = nullptr;
+			AppliedFields.Add(Args::ReferenceAssetPath);
+		}
+		else
+		{
+			FString ReferencedLoadError;
+			USMBlueprint* ReferencedBlueprint = LD::Assist::Utils::LoadStateMachineBlueprint(ReferencedAssetPath, ReferencedLoadError);
+			if (!ReferencedBlueprint)
+			{
+				return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("Could not load 'reference_asset_path': %s"), *ReferencedLoadError));
+			}
+			if (ReferencedBlueprint == Blueprint)
+			{
+				return FSMAssistOperationResult::MakeError(TEXT("A state machine blueprint cannot reference itself."));
+			}
+			ConfigureArgs.ReferencedBlueprint = ReferencedBlueprint;
+			AppliedFields.Add(Args::ReferenceAssetPath);
+		}
+	}
+
+	bool bUseIntermediateGraph = false;
+	if (InArgs->TryGetBoolField(Args::UseIntermediateGraph, bUseIntermediateGraph))
+	{
+		ConfigureArgs.bUseIntermediateGraph = bUseIntermediateGraph;
+		AppliedFields.Add(Args::UseIntermediateGraph);
+	}
+
+	if (AppliedFields.Num() == 0)
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("configure_reference requires at least one of 'reference_asset_path' or 'use_intermediate_graph'."));
+	}
+
+	FString GraphGenError;
+	ISMGraphGeneration* GraphGen = LD::Assist::Private::GetGraphGeneration(GraphGenError);
+	if (!GraphGen)
+	{
+		return FSMAssistOperationResult::MakeError(GraphGenError);
+	}
+
+	if (!GraphGen->ConfigureStateMachineReference(RefNode, ConfigureArgs))
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("ConfigureStateMachineReference returned false on node '%s'."), *NodeGuidStr));
+	}
+
+	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
+	Payload->SetStringField(Args::StateGuid, RefNode->NodeGuid.ToString());
+	if (USMBlueprint* CurrentRef = RefNode->GetStateMachineReference())
+	{
+		Payload->SetStringField(Args::ReferenceAssetPath, CurrentRef->GetPathName());
+	}
+	Payload->SetBoolField(Args::UseIntermediateGraph, RefNode->ShouldUseIntermediateGraph());
+	TArray<TSharedPtr<FJsonValue>> AppliedJson;
+	for (const FString& Field : AppliedFields)
+	{
+		AppliedJson.Add(MakeShared<FJsonValueString>(Field));
+	}
+	Payload->SetArrayField(Args::Applied, AppliedJson);
 	return FSMAssistOperationResult::MakeSuccess(Payload);
 }
 
@@ -3041,5 +3168,523 @@ FSMAssistOperationResult LD::Assist::ResetNodeProperty(const TSharedRef<FJsonObj
 	{
 		Payload->SetNumberField(Args::ArrayIndex, ArrayIndex);
 	}
+	return FSMAssistOperationResult::MakeSuccess(Payload);
+}
+
+namespace LD::Assist::Private
+{
+	static bool ResolveVariablePinType(const FString& InTypeStr, FEdGraphPinType& OutPinType)
+	{
+		const FString TypeStr = InTypeStr.ToLower();
+
+		if (TypeStr == TEXT("bool") || TypeStr == TEXT("boolean"))
+		{
+			OutPinType = FEdGraphPinType(UEdGraphSchema_K2::PC_Boolean, NAME_None, nullptr, EPinContainerType::None, false, FEdGraphTerminalType());
+			return true;
+		}
+		if (TypeStr == TEXT("byte") || TypeStr == TEXT("uint8"))
+		{
+			OutPinType = FEdGraphPinType(UEdGraphSchema_K2::PC_Byte, NAME_None, nullptr, EPinContainerType::None, false, FEdGraphTerminalType());
+			return true;
+		}
+		if (TypeStr == TEXT("int") || TypeStr == TEXT("int32") || TypeStr == TEXT("integer"))
+		{
+			OutPinType = FEdGraphPinType(UEdGraphSchema_K2::PC_Int, NAME_None, nullptr, EPinContainerType::None, false, FEdGraphTerminalType());
+			return true;
+		}
+		if (TypeStr == TEXT("int64") || TypeStr == TEXT("long"))
+		{
+			OutPinType = FEdGraphPinType(UEdGraphSchema_K2::PC_Int64, NAME_None, nullptr, EPinContainerType::None, false, FEdGraphTerminalType());
+			return true;
+		}
+		// BP UI's "Float" maps to PC_Real + PC_Double in UE 5.x.
+		if (TypeStr == TEXT("float") || TypeStr == TEXT("real") || TypeStr == TEXT("double"))
+		{
+			OutPinType = FEdGraphPinType(UEdGraphSchema_K2::PC_Real, UEdGraphSchema_K2::PC_Double, nullptr, EPinContainerType::None, false, FEdGraphTerminalType());
+			return true;
+		}
+		if (TypeStr == TEXT("single") || TypeStr == TEXT("single_precision_float"))
+		{
+			OutPinType = FEdGraphPinType(UEdGraphSchema_K2::PC_Real, UEdGraphSchema_K2::PC_Float, nullptr, EPinContainerType::None, false, FEdGraphTerminalType());
+			return true;
+		}
+		if (TypeStr == TEXT("string") || TypeStr == TEXT("fstring"))
+		{
+			OutPinType = FEdGraphPinType(UEdGraphSchema_K2::PC_String, NAME_None, nullptr, EPinContainerType::None, false, FEdGraphTerminalType());
+			return true;
+		}
+		if (TypeStr == TEXT("name") || TypeStr == TEXT("fname"))
+		{
+			OutPinType = FEdGraphPinType(UEdGraphSchema_K2::PC_Name, NAME_None, nullptr, EPinContainerType::None, false, FEdGraphTerminalType());
+			return true;
+		}
+		if (TypeStr == TEXT("text") || TypeStr == TEXT("ftext"))
+		{
+			OutPinType = FEdGraphPinType(UEdGraphSchema_K2::PC_Text, NAME_None, nullptr, EPinContainerType::None, false, FEdGraphTerminalType());
+			return true;
+		}
+
+		UScriptStruct* StructType = nullptr;
+		if (TypeStr == TEXT("vector") || TypeStr == TEXT("fvector"))
+		{
+			StructType = TBaseStructure<FVector>::Get();
+		}
+		else if (TypeStr == TEXT("vector2d") || TypeStr == TEXT("fvector2d"))
+		{
+			StructType = TBaseStructure<FVector2D>::Get();
+		}
+		else if (TypeStr == TEXT("rotator") || TypeStr == TEXT("frotator"))
+		{
+			StructType = TBaseStructure<FRotator>::Get();
+		}
+		else if (TypeStr == TEXT("transform") || TypeStr == TEXT("ftransform"))
+		{
+			StructType = TBaseStructure<FTransform>::Get();
+		}
+		else if (TypeStr == TEXT("linearcolor") || TypeStr == TEXT("flinearcolor"))
+		{
+			StructType = TBaseStructure<FLinearColor>::Get();
+		}
+		else if (TypeStr == TEXT("color") || TypeStr == TEXT("fcolor"))
+		{
+			StructType = TBaseStructure<FColor>::Get();
+		}
+		else if (TypeStr == TEXT("guid") || TypeStr == TEXT("fguid"))
+		{
+			StructType = TBaseStructure<FGuid>::Get();
+		}
+		if (StructType)
+		{
+			OutPinType = FEdGraphPinType(UEdGraphSchema_K2::PC_Struct, NAME_None, StructType, EPinContainerType::None, false, FEdGraphTerminalType());
+			return true;
+		}
+
+		if (InTypeStr.Contains(TEXT(".")) || InTypeStr.StartsWith(TEXT("/")))
+		{
+			if (UClass* ObjectClass = LoadClass<UObject>(nullptr, *InTypeStr))
+			{
+				OutPinType = FEdGraphPinType(UEdGraphSchema_K2::PC_Object, NAME_None, ObjectClass, EPinContainerType::None, false, FEdGraphTerminalType());
+				return true;
+			}
+			if (UScriptStruct* ArbitraryStruct = LoadObject<UScriptStruct>(nullptr, *InTypeStr))
+			{
+				OutPinType = FEdGraphPinType(UEdGraphSchema_K2::PC_Struct, NAME_None, ArbitraryStruct, EPinContainerType::None, false, FEdGraphTerminalType());
+				return true;
+			}
+		}
+
+		return false;
+	}
+}
+
+FSMAssistOperationResult LD::Assist::AddSMVariable(const TSharedRef<FJsonObject>& InArgs)
+{
+	FString AssetPath;
+	if (!InArgs->TryGetStringField(Args::AssetPath, AssetPath) || AssetPath.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'asset_path'."));
+	}
+
+	FString VarName;
+	if (!InArgs->TryGetStringField(Args::VariableName, VarName) || VarName.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'variable_name'."));
+	}
+
+	FString VarType;
+	if (!InArgs->TryGetStringField(Args::VarType, VarType) || VarType.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'var_type'."));
+	}
+
+	FString LoadError;
+	USMBlueprint* Blueprint = LD::Assist::Utils::LoadStateMachineBlueprint(AssetPath, LoadError);
+	if (!Blueprint)
+	{
+		return FSMAssistOperationResult::MakeError(LoadError);
+	}
+
+	FEdGraphPinType PinType;
+	if (!LD::Assist::Private::ResolveVariablePinType(VarType, PinType))
+	{
+		return FSMAssistOperationResult::MakeError(
+			FString::Printf(TEXT("Unrecognized 'var_type' '%s'. Accepted values: bool, int, int64, byte, float, single, string, name, text, vector, vector2d, rotator, transform, linearcolor, color, guid, or a class/struct path (e.g. /Script/Engine.Actor)."), *VarType));
+	}
+
+	FString DefaultValue;
+	InArgs->TryGetStringField(Args::DefaultValue, DefaultValue);
+
+	const FName VarFName(*VarName);
+	const bool bAdded = FBlueprintEditorUtils::AddMemberVariable(Blueprint, VarFName, PinType, DefaultValue);
+	if (!bAdded)
+	{
+		return FSMAssistOperationResult::MakeError(
+			FString::Printf(TEXT("AddMemberVariable failed for '%s' (likely duplicate name or unsupported type)."), *VarName));
+	}
+
+	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
+	Payload->SetStringField(Args::AssetPath, Blueprint->GetPathName());
+	Payload->SetStringField(Args::VariableName, VarName);
+	Payload->SetStringField(Args::VarType, VarType);
+	if (!DefaultValue.IsEmpty())
+	{
+		Payload->SetStringField(Args::DefaultValue, DefaultValue);
+	}
+	return FSMAssistOperationResult::MakeSuccess(Payload);
+}
+
+namespace LD::Assist::Private
+{
+	static USCS_Node* FindSCSNodeByName(const UBlueprint* InBlueprint, const FName& InComponentName)
+	{
+		if (!InBlueprint || !InBlueprint->SimpleConstructionScript)
+		{
+			return nullptr;
+		}
+		for (USCS_Node* Node : InBlueprint->SimpleConstructionScript->GetAllNodes())
+		{
+			if (Node && Node->GetVariableName() == InComponentName)
+			{
+				return Node;
+			}
+		}
+		return nullptr;
+	}
+
+	static bool ResolveNetworkConfigType(const FString& InValue, ESMNetworkConfigurationType& OutType)
+	{
+		if (InValue.Equals(TEXT("Client"), ESearchCase::IgnoreCase)
+			|| InValue.Equals(TEXT("SM_Client"), ESearchCase::IgnoreCase))
+		{
+			OutType = SM_Client;
+			return true;
+		}
+		if (InValue.Equals(TEXT("Server"), ESearchCase::IgnoreCase)
+			|| InValue.Equals(TEXT("SM_Server"), ESearchCase::IgnoreCase))
+		{
+			OutType = SM_Server;
+			return true;
+		}
+		if (InValue.Equals(TEXT("ClientAndServer"), ESearchCase::IgnoreCase)
+			|| InValue.Equals(TEXT("SM_ClientAndServer"), ESearchCase::IgnoreCase))
+		{
+			OutType = SM_ClientAndServer;
+			return true;
+		}
+		return false;
+	}
+}
+
+FSMAssistOperationResult LD::Assist::ConfigureSMComponentOnActor(const TSharedRef<FJsonObject>& InArgs)
+{
+	FString ActorBPPath;
+	if (!InArgs->TryGetStringField(Args::ActorBlueprint, ActorBPPath) || ActorBPPath.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'actor_blueprint'."));
+	}
+
+	FString ComponentName;
+	if (!InArgs->TryGetStringField(Args::ComponentName, ComponentName) || ComponentName.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'component_name'."));
+	}
+
+	UBlueprint* ActorBP = LoadObject<UBlueprint>(nullptr, *ActorBPPath);
+	if (!ActorBP)
+	{
+		return FSMAssistOperationResult::MakeError(
+			FString::Printf(TEXT("Could not load 'actor_blueprint' '%s'."), *ActorBPPath));
+	}
+	if (!ActorBP->SimpleConstructionScript)
+	{
+		return FSMAssistOperationResult::MakeError(
+			FString::Printf(TEXT("Actor blueprint '%s' has no SimpleConstructionScript (not an AActor subclass)."), *ActorBPPath));
+	}
+
+	USCS_Node* TargetNode = LD::Assist::Private::FindSCSNodeByName(ActorBP, FName(*ComponentName));
+	if (!TargetNode)
+	{
+		return FSMAssistOperationResult::MakeError(
+			FString::Printf(TEXT("No SCS component named '%s' on '%s'."), *ComponentName, *ActorBPPath));
+	}
+
+	USMStateMachineComponent* Template = Cast<USMStateMachineComponent>(TargetNode->ComponentTemplate);
+	if (!Template)
+	{
+		return FSMAssistOperationResult::MakeError(
+			FString::Printf(TEXT("Component '%s' is not a USMStateMachineComponent (template class '%s')."),
+				*ComponentName,
+				TargetNode->ComponentTemplate ? *TargetNode->ComponentTemplate->GetClass()->GetName() : TEXT("null")));
+	}
+
+	ActorBP->Modify();
+	Template->Modify();
+
+	TArray<FString> Applied;
+	TArray<FString> UnknownKeys;
+
+	FString SMClassPath;
+	if (InArgs->TryGetStringField(Args::StateMachineClass, SMClassPath) && !SMClassPath.IsEmpty())
+	{
+		FString LoadError;
+		USMBlueprint* SMBP = LD::Assist::Utils::LoadStateMachineBlueprint(SMClassPath, LoadError);
+		if (!SMBP)
+		{
+			return FSMAssistOperationResult::MakeError(LoadError);
+		}
+		Template->StateMachineClass = SMBP->GeneratedClass;
+		Applied.Add(TEXT("StateMachineClass"));
+	}
+
+	auto ApplyBool = [&](const TCHAR* JsonKey, auto Setter, const TCHAR* PropName)
+	{
+		bool Value;
+		if (InArgs->TryGetBoolField(JsonKey, Value))
+		{
+			Setter(Value);
+			Applied.Add(PropName);
+		}
+	};
+
+	ApplyBool(Args::StartOnBeginPlay, [&](bool V) { Template->bStartOnBeginPlay = V; }, TEXT("bStartOnBeginPlay"));
+	ApplyBool(Args::InitializeOnBeginPlay, [&](bool V) { Template->bInitializeOnBeginPlay = V; }, TEXT("bInitializeOnBeginPlay"));
+	ApplyBool(Args::StopOnEndPlay, [&](bool V) { Template->bStopOnEndPlay = V; }, TEXT("bStopOnEndPlay"));
+	ApplyBool(Args::ReuseInstanceAfterShutdown, [&](bool V) { Template->bReuseInstanceAfterShutdown = V; }, TEXT("bReuseInstanceAfterShutdown"));
+	ApplyBool(Args::Replicates, [&](bool V) { Template->SetIsReplicated(V); }, TEXT("bReplicates"));
+	ApplyBool(Args::IncludeSimulatedProxies, [&](bool V) { Template->bIncludeSimulatedProxies = V; }, TEXT("bIncludeSimulatedProxies"));
+	ApplyBool(Args::WaitForTransactionsFromServer, [&](bool V) { Template->bWaitForTransactionsFromServer = V; }, TEXT("bWaitForTransactionsFromServer"));
+	ApplyBool(Args::HandleControllerChange, [&](bool V) { Template->bHandleControllerChange = V; }, TEXT("bHandleControllerChange"));
+
+	auto ApplyEnum = [&](const TCHAR* JsonKey, TEnumAsByte<ESMNetworkConfigurationType>& Target, const TCHAR* PropName)
+	{
+		FString In;
+		if (!InArgs->TryGetStringField(JsonKey, In) || In.IsEmpty())
+		{
+			return;
+		}
+		ESMNetworkConfigurationType Resolved;
+		if (LD::Assist::Private::ResolveNetworkConfigType(In, Resolved))
+		{
+			Target = Resolved;
+			Applied.Add(PropName);
+		}
+		else
+		{
+			UnknownKeys.Add(FString::Printf(TEXT("%s=%s"), PropName, *In));
+		}
+	};
+
+	ApplyEnum(Args::StateChangeAuthority, Template->StateChangeAuthority, TEXT("StateChangeAuthority"));
+	ApplyEnum(Args::NetworkTickConfiguration, Template->NetworkTickConfiguration, TEXT("NetworkTickConfiguration"));
+	ApplyEnum(Args::NetworkStateExecution, Template->NetworkStateExecution, TEXT("NetworkStateExecution"));
+	ApplyEnum(Args::NetworkTransitionEnteredConfiguration, Template->NetworkTransitionEnteredConfiguration, TEXT("NetworkTransitionEnteredConfiguration"));
+
+	FString ExtraConfigJsonStr;
+	if (InArgs->TryGetStringField(Args::ExtraConfigJson, ExtraConfigJsonStr) && !ExtraConfigJsonStr.IsEmpty())
+	{
+		TSharedPtr<FJsonObject> ExtraObj;
+		TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(ExtraConfigJsonStr);
+		if (!FJsonSerializer::Deserialize(Reader, ExtraObj) || !ExtraObj.IsValid())
+		{
+			return FSMAssistOperationResult::MakeError(TEXT("'extra_config_json' is not valid JSON."));
+		}
+		UClass* TemplateClass = Template->GetClass();
+		for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : ExtraObj->Values)
+		{
+			FProperty* Property = TemplateClass->FindPropertyByName(FName(*Pair.Key));
+			if (!Property)
+			{
+				UnknownKeys.Add(Pair.Key);
+				continue;
+			}
+			const FString ValueAsText = Pair.Value->AsString();
+			void* PropAddr = Property->ContainerPtrToValuePtr<void>(Template);
+			const TCHAR* Imported = Property->ImportText_Direct(*ValueAsText, PropAddr, Template, PPF_None, nullptr);
+			if (Imported != nullptr)
+			{
+				Applied.Add(Pair.Key);
+			}
+			else
+			{
+				UnknownKeys.Add(FString::Printf(TEXT("%s (import failed for value '%s')"), *Pair.Key, *ValueAsText));
+			}
+		}
+	}
+
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(ActorBP);
+
+	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
+	Payload->SetStringField(Args::ActorBlueprint, ActorBP->GetPathName());
+	Payload->SetStringField(Args::ComponentName, ComponentName);
+	if (Template->StateMachineClass)
+	{
+		Payload->SetStringField(Args::StateMachineClass, Template->StateMachineClass->GetPathName());
+	}
+	TArray<TSharedPtr<FJsonValue>> AppliedJson;
+	for (const FString& AppliedField : Applied)
+	{
+		AppliedJson.Add(MakeShared<FJsonValueString>(AppliedField));
+	}
+	Payload->SetArrayField(Args::Applied, AppliedJson);
+	TArray<TSharedPtr<FJsonValue>> UnknownJson;
+	for (const FString& UnknownKey : UnknownKeys)
+	{
+		UnknownJson.Add(MakeShared<FJsonValueString>(UnknownKey));
+	}
+	Payload->SetArrayField(Args::UnknownKeys, UnknownJson);
+	return FSMAssistOperationResult::MakeSuccess(Payload);
+}
+
+namespace LD::Assist::Private
+{
+	static bool ResolveLocalGraphReadType(const FString& InValue, ISMGraphGeneration::ELocalGraphReadNodeType& OutType)
+	{
+		const FString Lower = InValue.ToLower();
+		if (Lower == TEXT("timeinstate") || Lower == TEXT("time_in_state"))
+		{
+			OutType = ISMGraphGeneration::ELocalGraphReadNodeType::TimeInState;
+			return true;
+		}
+		if (Lower == TEXT("hasstateupdated") || Lower == TEXT("has_state_updated"))
+		{
+			OutType = ISMGraphGeneration::ELocalGraphReadNodeType::HasStateUpdated;
+			return true;
+		}
+		if (Lower == TEXT("canevaluate") || Lower == TEXT("can_evaluate"))
+		{
+			OutType = ISMGraphGeneration::ELocalGraphReadNodeType::CanEvaluate;
+			return true;
+		}
+		if (Lower == TEXT("canevaluatefromevent") || Lower == TEXT("can_evaluate_from_event"))
+		{
+			OutType = ISMGraphGeneration::ELocalGraphReadNodeType::CanEvaluateFromEvent;
+			return true;
+		}
+		if (Lower == TEXT("getstateinformation") || Lower == TEXT("get_state_information"))
+		{
+			OutType = ISMGraphGeneration::ELocalGraphReadNodeType::GetStateInformation;
+			return true;
+		}
+		if (Lower == TEXT("gettransitioninformation") || Lower == TEXT("get_transition_information"))
+		{
+			OutType = ISMGraphGeneration::ELocalGraphReadNodeType::GetTransitionInformation;
+			return true;
+		}
+		if (Lower == TEXT("getstatemachinereference") || Lower == TEXT("get_state_machine_reference"))
+		{
+			OutType = ISMGraphGeneration::ELocalGraphReadNodeType::GetStateMachineReference;
+			return true;
+		}
+		if (Lower == TEXT("getnodeinstance") || Lower == TEXT("get_node_instance"))
+		{
+			OutType = ISMGraphGeneration::ELocalGraphReadNodeType::GetNodeInstance;
+			return true;
+		}
+		if (Lower == TEXT("inendstate") || Lower == TEXT("in_end_state"))
+		{
+			OutType = ISMGraphGeneration::ELocalGraphReadNodeType::InEndState;
+			return true;
+		}
+		return false;
+	}
+}
+
+FSMAssistOperationResult LD::Assist::SpawnLocalGraphReadNode(const TSharedRef<FJsonObject>& InArgs)
+{
+	FString AssetPath;
+	if (!InArgs->TryGetStringField(Args::AssetPath, AssetPath) || AssetPath.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'asset_path'."));
+	}
+
+	FString NodeGuidStr;
+	if (!InArgs->TryGetStringField(Args::NodeGuid, NodeGuidStr) || NodeGuidStr.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'node_guid' (state or transition guid whose local graph receives the read node)."));
+	}
+
+	FGuid NodeGuid;
+	if (!FGuid::Parse(NodeGuidStr, NodeGuid))
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("Invalid 'node_guid' '%s'."), *NodeGuidStr));
+	}
+
+	FString NodeTypeStr;
+	if (!InArgs->TryGetStringField(Args::Type, NodeTypeStr) || NodeTypeStr.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'type'."));
+	}
+
+	ISMGraphGeneration::ELocalGraphReadNodeType NodeType;
+	if (!LD::Assist::Private::ResolveLocalGraphReadType(NodeTypeStr, NodeType))
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(
+			TEXT("Unrecognized 'type' '%s'. Accepted: TimeInState, HasStateUpdated, CanEvaluate, CanEvaluateFromEvent, GetStateInformation, GetTransitionInformation, GetStateMachineReference, InEndState, GetNodeInstance."),
+			*NodeTypeStr));
+	}
+
+	FString LoadError;
+	USMBlueprint* Blueprint = LD::Assist::Utils::LoadStateMachineBlueprint(AssetPath, LoadError);
+	if (!Blueprint)
+	{
+		return FSMAssistOperationResult::MakeError(LoadError);
+	}
+
+	USMGraphNode_Base* OwnerNode = LD::Assist::Utils::FindNodeByGuid(Blueprint, NodeGuid);
+	if (!OwnerNode)
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("No state or transition node with guid '%s' on '%s'."), *NodeGuidStr, *AssetPath));
+	}
+
+	UEdGraph* TargetGraph = OwnerNode->GetBoundGraph();
+	if (!TargetGraph)
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("Owner node '%s' has no bound graph."), *OwnerNode->GetName()));
+	}
+
+	FString GraphGenError;
+	ISMGraphGeneration* GraphGen = LD::Assist::Private::GetGraphGeneration(GraphGenError);
+	if (!GraphGen)
+	{
+		return FSMAssistOperationResult::MakeError(GraphGenError);
+	}
+
+	ISMGraphGeneration::FCreateLocalGraphReadNodeArgs CreateArgs;
+	CreateArgs.NodeType = NodeType;
+	CreateArgs.TargetGraph = TargetGraph;
+
+	double PosX = 0.0;
+	double PosY = 0.0;
+	InArgs->TryGetNumberField(Args::PositionX, PosX);
+	InArgs->TryGetNumberField(Args::PositionY, PosY);
+	CreateArgs.NodePosition = FVector2D(PosX, PosY);
+
+	FString NodeInstanceGuidStr;
+	if (InArgs->TryGetStringField(Args::NodeInstanceGuid, NodeInstanceGuidStr) && !NodeInstanceGuidStr.IsEmpty())
+	{
+		if (!FGuid::Parse(NodeInstanceGuidStr, CreateArgs.NodeInstanceGuid))
+		{
+			return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("Invalid 'node_instance_guid' '%s'."), *NodeInstanceGuidStr));
+		}
+	}
+
+	int32 NodeInstanceIndex = INDEX_NONE;
+	if (InArgs->TryGetNumberField(Args::NodeInstanceIndex, NodeInstanceIndex))
+	{
+		CreateArgs.NodeInstanceIndex = NodeInstanceIndex;
+	}
+
+	UEdGraphNode* NewNode = GraphGen->CreateLocalGraphReadNode(Blueprint, CreateArgs);
+	if (!NewNode)
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(
+			TEXT("CreateLocalGraphReadNode failed for type '%s' on graph '%s' (likely the type is not compatible with the target graph context)."),
+			*NodeTypeStr, *TargetGraph->GetName()));
+	}
+
+	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
+	Payload->SetStringField(Args::NodeGuid, NewNode->NodeGuid.ToString());
+	Payload->SetStringField(Args::Type, NodeTypeStr);
+	Payload->SetStringField(Args::TargetGraphPath, TargetGraph->GetPathName());
 	return FSMAssistOperationResult::MakeSuccess(Payload);
 }

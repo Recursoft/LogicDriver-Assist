@@ -7,7 +7,76 @@
 
 #include "LogicDriverToolset.generated.h"
 
+class UBlueprint;
 class USMBlueprint;
+
+/**
+ * Configuration bag for ConfigureSMComponentOnActor. Booleans are TOptional<bool>: pass true or
+ * false to set; omit (unset) to leave the component template's existing value alone. Enum
+ * strings use empty as "leave untouched"; accepted values are "Client", "Server",
+ * "ClientAndServer". ExtraConfigJson is a long-tail valve for UPROPERTY names not promoted
+ * to first-class fields; keys not on USMStateMachineComponent are returned in 'unknown_keys'.
+ *
+ * Note: bStartOnBeginPlay defaults to true rather than unset. AI-authored slices nearly always
+ * want the SM to run on placement; pass false explicitly for manual Start() control.
+ */
+USTRUCT(BlueprintType)
+struct FSMComponentConfig
+{
+	GENERATED_BODY()
+
+	/** Unset resolves to true (the only field in this struct that doesn't pass through unchanged). The flipped default exists because USMStateMachineComponent::bStartOnBeginPlay is false at the runtime level: a configured-but-not-started SM constructs and inspects fine but never ticks, so the entry state's OnStateBegin never fires. Pass false explicitly for manual Start() control. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LogicDriver")
+	TOptional<bool> bStartOnBeginPlay = true;
+
+	/** Unset = leave the component template's value alone. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LogicDriver")
+	TOptional<bool> bInitializeOnBeginPlay;
+
+	/** Unset = leave the component template's value alone. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LogicDriver")
+	TOptional<bool> bStopOnEndPlay;
+
+	/** Unset = leave the component template's value alone. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LogicDriver")
+	TOptional<bool> bReuseInstanceAfterShutdown;
+
+	/** Toggles AActorComponent::bReplicates on the component. Unset = leave alone. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LogicDriver|Replication")
+	TOptional<bool> bReplicates;
+
+	/** Unset = leave the component template's value alone. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LogicDriver|Replication")
+	TOptional<bool> bIncludeSimulatedProxies;
+
+	/** Unset = leave the component template's value alone. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LogicDriver|Replication")
+	TOptional<bool> bWaitForTransactionsFromServer;
+
+	/** Unset = leave the component template's value alone. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LogicDriver|Replication")
+	TOptional<bool> bHandleControllerChange;
+
+	/** Display-name string for ESMNetworkConfigurationType: "Client" | "Server" | "ClientAndServer". Empty = unset. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LogicDriver|Replication")
+	FString StateChangeAuthority;
+
+	/** Display-name string for ESMNetworkConfigurationType. Empty = unset. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LogicDriver|Replication")
+	FString NetworkTickConfiguration;
+
+	/** Display-name string for ESMNetworkConfigurationType. Empty = unset. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LogicDriver|Replication")
+	FString NetworkStateExecution;
+
+	/** Display-name string for ESMNetworkConfigurationType. Empty = unset. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LogicDriver|Replication")
+	FString NetworkTransitionEnteredConfiguration;
+
+	/** JSON object of UPROPERTY name to value for fields not promoted above. Keys not found on USMStateMachineComponent are returned in 'unknown_keys'. Empty = no extras. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LogicDriver")
+	FString ExtraConfigJson;
+};
 
 /**
  * Logic Driver state-machine inspection and authoring tools, exposed to AI assistants via the
@@ -29,6 +98,23 @@ class USMBlueprint;
  * placed near X=0 are visually eclipsed by the marker even though GetAsset reports them present.
  * GetAsset returns logical coordinates only; for visual verification use CaptureGraphView (see
  * its docstring for cost guidance on when to call).
+ *
+ * K2 self-binding inside nested state and transition graphs: when authoring K2 nodes in a
+ * state's OnStateBegin / OnStateUpdate / OnStateEnd graph or a transition's CanEnterTransition
+ * graph, the implicit K2 self resolves to the FSM's USMInstance, not a USMNodeInstance. Calls
+ * into UFUNCTIONs on USMNodeInstance fail to compile with "(self) is not a SMNodeInstance". Use
+ * the USMStateMachineInstances function library (StateMachineInstances::GetContext and friends),
+ * which binds self to the SM instance automatically, or wire an explicit Target pin from a
+ * node-instance retrieval node.
+ *
+ * LD K2 specials such as TimeInState, HasStateUpdated, and CanEvaluate are spawned by the editor
+ * based on the local state or transition scope and are not reachable through the engine's
+ * generic create_node action-menu surface. Toolset endpoints that wrap LD's own node spawners
+ * are the intended path; engine-side BlueprintTools.create_node cannot place these.
+ *
+ * USMStateMachineComponent::bStartOnBeginPlay defaults to false; the component runs only after
+ * StateMachineComponent->Start() is called. AI-authored slices that want the SM to run on
+ * placement should set bStartOnBeginPlay=true via ConfigureSMComponentOnActor.
  */
 UCLASS(MinimalAPI)
 class ULogicDriverToolset : public UToolsetDefinition
@@ -149,7 +235,8 @@ public:
 	 * @param bIsEntry Whether this reference becomes the graph's entry. Default false.
 	 * @param PositionX Canvas X coordinate. Negative sentinel (e.g., -1.0) = auto-position. Prefer the sentinel or a LayoutStates pass over manual placement; coordinates near (0, 0) collide with the editor's Entry-pointer marker and produce a visually broken graph for entry states.
 	 * @param PositionY Canvas Y coordinate. Negative sentinel (e.g., -1.0) = auto-position.
-	 * @return JSON: { state_guid, state_name, reference_asset_path }
+	 * @param bUseIntermediateGraph Enable the intermediate K2 graph on the new reference state. Default false (matches the LD runtime default). Required true so SpawnLocalGraphReadNode kinds (GetStateMachineReference, InEndState) are visible/editable inside the reference state; without it, double-clicking the reference state enters the sub-SM directly. Toggle after creation via ConfigureReference.
+	 * @return JSON: { state_guid, state_name, reference_asset_path, use_intermediate_graph? }
 	 */
 	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
 	static FString AddReference(
@@ -158,7 +245,32 @@ public:
 		const FString& StateName = TEXT(""),
 		bool bIsEntry = false,
 		double PositionX = -1.0,
-		double PositionY = -1.0);
+		double PositionY = -1.0,
+		bool bUseIntermediateGraph = false);
+
+	/**
+	 * Reconfigures an existing state-machine-reference state after creation. Mirrors Details-panel
+	 * operations on a USMGraphNode_StateMachineStateNode: swap the referenced SMBlueprint and/or
+	 * toggle intermediate-graph use. At least one of ReferenceBlueprint or bUseIntermediateGraph
+	 * must be supplied; sentinel values leave the existing state alone.
+	 *
+	 * Use this when the reference target needs to change, or when enabling the intermediate graph
+	 * after the fact so GetStateMachineReference / InEndState reads become visible in the editor.
+	 *
+	 * @param Blueprint The state-machine blueprint that owns the reference state. Required.
+	 * @param NodeGuid GUID of the state-machine-reference state to reconfigure. Required.
+	 * @param ReferenceBlueprint Optional new referenced SMBlueprint. Null = leave the current reference alone.
+	 * @param bUpdateIntermediateGraph When true, apply bUseIntermediateGraph; when false, leave the existing toggle alone.
+	 * @param bUseIntermediateGraph Target value when bUpdateIntermediateGraph is true. Routes through SetUseIntermediateGraph so the bound graph is created or swapped to match.
+	 * @return JSON: { state_guid, reference_asset_path?, use_intermediate_graph, applied:[...] }
+	 */
+	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
+	static FString ConfigureReference(
+		USMBlueprint* Blueprint,
+		const FString& NodeGuid,
+		USMBlueprint* ReferenceBlueprint = nullptr,
+		bool bUpdateIntermediateGraph = false,
+		bool bUseIntermediateGraph = false);
 
 	/**
 	 * Connects two existing states with a transition.
@@ -402,4 +514,92 @@ public:
 		const FString& PinNodeGuidsJson = TEXT(""),
 		bool bRespectExistingOrder = false,
 		bool bSnapToGrid = false);
+
+	/**
+	 * Adds a member variable to a state-machine blueprint. Mirrors the editor's My-Blueprint
+	 * Variables flow. Reserved namespace; a future AddNodeVariable endpoint will cover
+	 * USMStateInstance-subclass variables (node-class authoring).
+	 * @param Blueprint The state-machine blueprint to modify. Required.
+	 * @param VarName Variable name (no spaces; FName-style). Required.
+	 * @param VarType Type token. Accepted short names: bool, int, int64, byte, float, single,
+	 *                string, name, text, vector, vector2d, rotator, transform, linearcolor,
+	 *                color, guid. Or a class/struct object path such as /Script/Engine.Actor
+	 *                or /Game/MyBP.MyBP_C. Required.
+	 * @param DefaultValue Default value as a string in UE property-text format. Empty = engine
+	 *                     default for the type. Examples: "true" for bool, "1.25" for float,
+	 *                     "(R=1.0,G=0.0,B=0.0,A=1.0)" for FLinearColor.
+	 * @return JSON: { asset_path, variable_name, var_type, default_value? }
+	 */
+	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
+	static FString AddSMVariable(
+		USMBlueprint* Blueprint,
+		const FString& VarName,
+		const FString& VarType,
+		const FString& DefaultValue = TEXT(""));
+
+	/**
+	 * Configures the USMStateMachineComponent template living on an actor blueprint's SCS. Operates
+	 * on the BP-class component (not a placed-instance component) so config persists into every
+	 * placed actor. Defaults bStartOnBeginPlay to 1 (on) because AI-authored slices nearly always
+	 * want the SM to run on placement; pass FSMComponentConfig::bStartOnBeginPlay=false explicitly
+	 * for manual Start() control.
+	 * @param ActorBlueprint The actor blueprint hosting the component. Required.
+	 * @param StateMachineBlueprint The FSM blueprint whose generated class becomes the
+	 *        component template's StateMachineClass. Null/unset = leave StateMachineClass alone.
+	 * @param ComponentName SCS variable name of the USMStateMachineComponent on the actor BP.
+	 *        Required (no convention default; the AI client supplies it).
+	 * @param Config Configuration bag. See FSMComponentConfig for field semantics and sentinels.
+	 * @return JSON: { actor_blueprint, component_name, state_machine_class?, applied:[...], unknown_keys:[...] }
+	 */
+	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
+	static FString ConfigureSMComponentOnActor(
+		UBlueprint* ActorBlueprint,
+		USMBlueprint* StateMachineBlueprint,
+		const FString& ComponentName,
+		const FSMComponentConfig& Config);
+
+	/**
+	 * Spawns a Logic Driver local-graph-read K2 node into a state's local graph or a transition's
+	 * CanEnterTransition graph. The engine's create_node action menu does not expose these
+	 * (they are spawned by LD based on the local state/transition scope); this endpoint
+	 * routes through the LD core spawner so they are reachable to MCP authoring.
+	 *
+	 * Compatibility, by kind:
+	 *  - TimeInState, HasStateUpdated, GetNodeInstance: state graphs and transition graphs.
+	 *  - CanEvaluate, CanEvaluateFromEvent, GetTransitionInformation: transition graphs only.
+	 *  - GetStateInformation: state graphs only.
+	 *  - GetStateMachineReference: the bound graph of a state-machine-reference state
+	 *    (USMGraphNode_StateMachineStateNode) — i.e. the intermediate graph inside the sub-SM
+	 *    state. Pass that state's guid as NodeGuid.
+	 *  - InEndState: a transition graph whose source state is a state-machine-reference state —
+	 *    i.e. a transition leaving the sub-SM state. Pass that transition's guid as NodeGuid.
+	 *
+	 * Both intermediate-only kinds (GetStateMachineReference and InEndState) require an
+	 * authored state-machine-reference state in the SM. If you haven't added one yet, call
+	 * AddReference first, then pass either that state's guid (GetStateMachineReference) or the
+	 * guid of a transition out of that state (InEndState). Spawning into the wrong graph kind is
+	 * rejected with the standard "is not compatible with graph" envelope from LD core.
+	 *
+	 * @param Blueprint The state-machine blueprint. Required.
+	 * @param NodeGuid Guid of the state or transition whose bound graph receives the node.
+	 *        Required.
+	 * @param NodeType Local-graph-read type. Accepts PascalCase ("TimeInState") or snake_case
+	 *        ("time_in_state"). Full list: TimeInState, HasStateUpdated, CanEvaluate,
+	 *        CanEvaluateFromEvent, GetStateInformation, GetTransitionInformation,
+	 *        GetStateMachineReference, GetNodeInstance, InEndState. Required.
+	 * @param PositionX Local-graph X. Defaults to 0.
+	 * @param PositionY Local-graph Y. Defaults to 0.
+	 * @param NodeInstanceGuid Only used by GetNodeInstance for stack lookups. Empty = primary.
+	 * @param NodeInstanceIndex Only used by GetNodeInstance for stack lookups. -1 = primary.
+	 * @return JSON: { node_guid, type, target_graph_path }
+	 */
+	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
+	static FString SpawnLocalGraphReadNode(
+		USMBlueprint* Blueprint,
+		const FString& NodeGuid,
+		const FString& NodeType,
+		double PositionX = 0.0,
+		double PositionY = 0.0,
+		const FString& NodeInstanceGuid = TEXT(""),
+		int32 NodeInstanceIndex = -1);
 };

@@ -30,6 +30,10 @@ namespace LD::Assist::Ops
 	inline constexpr const TCHAR* LayoutStates = TEXT("sm.layout_states");
 	inline constexpr const TCHAR* GetPropertyPins = TEXT("sm.get_property_pins");
 	inline constexpr const TCHAR* ResetNodeProperty = TEXT("sm.reset_node_property");
+	inline constexpr const TCHAR* AddSMVariable = TEXT("sm.add_sm_variable");
+	inline constexpr const TCHAR* ConfigureSMComponentOnActor = TEXT("sm.configure_sm_component_on_actor");
+	inline constexpr const TCHAR* SpawnLocalGraphReadNode = TEXT("sm.spawn_local_graph_read_node");
+	inline constexpr const TCHAR* ConfigureReference = TEXT("sm.configure_reference");
 }
 
 namespace LD::Assist::Args
@@ -75,6 +79,7 @@ namespace LD::Assist::Args
 	inline constexpr const TCHAR* Status = TEXT("status");
 
 	inline constexpr const TCHAR* ReferenceAssetPath = TEXT("reference_asset_path");
+	inline constexpr const TCHAR* UseIntermediateGraph = TEXT("use_intermediate_graph");
 	inline constexpr const TCHAR* EvalWithTransitions = TEXT("eval_with_transitions");
 	inline constexpr const TCHAR* Properties = TEXT("properties");
 	inline constexpr const TCHAR* Type = TEXT("type");
@@ -142,4 +147,28 @@ namespace LD::Assist::Args
 	inline constexpr const TCHAR* Applied = TEXT("applied");
 
 	inline constexpr const TCHAR* VariableName = TEXT("variable_name");
+	inline constexpr const TCHAR* VarType = TEXT("var_type");
+	inline constexpr const TCHAR* DefaultValue = TEXT("default_value");
+
+	inline constexpr const TCHAR* ActorBlueprint = TEXT("actor_blueprint");
+	inline constexpr const TCHAR* StateMachineClass = TEXT("state_machine_class");
+	inline constexpr const TCHAR* ComponentName = TEXT("component_name");
+	inline constexpr const TCHAR* StartOnBeginPlay = TEXT("b_start_on_begin_play");
+	inline constexpr const TCHAR* InitializeOnBeginPlay = TEXT("b_initialize_on_begin_play");
+	inline constexpr const TCHAR* StopOnEndPlay = TEXT("b_stop_on_end_play");
+	inline constexpr const TCHAR* ReuseInstanceAfterShutdown = TEXT("b_reuse_instance_after_shutdown");
+	inline constexpr const TCHAR* Replicates = TEXT("b_replicates");
+	inline constexpr const TCHAR* IncludeSimulatedProxies = TEXT("b_include_simulated_proxies");
+	inline constexpr const TCHAR* WaitForTransactionsFromServer = TEXT("b_wait_for_transactions_from_server");
+	inline constexpr const TCHAR* HandleControllerChange = TEXT("b_handle_controller_change");
+	inline constexpr const TCHAR* StateChangeAuthority = TEXT("state_change_authority");
+	inline constexpr const TCHAR* NetworkTickConfiguration = TEXT("network_tick_configuration");
+	inline constexpr const TCHAR* NetworkStateExecution = TEXT("network_state_execution");
+	inline constexpr const TCHAR* NetworkTransitionEnteredConfiguration = TEXT("network_transition_entered_configuration");
+	inline constexpr const TCHAR* ExtraConfigJson = TEXT("extra_config_json");
+	inline constexpr const TCHAR* UnknownKeys = TEXT("unknown_keys");
+
+	inline constexpr const TCHAR* NodeInstanceGuid = TEXT("node_instance_guid");
+	inline constexpr const TCHAR* NodeInstanceIndex = TEXT("node_instance_index");
+	inline constexpr const TCHAR* TargetGraphPath = TEXT("target_graph_path");
 }

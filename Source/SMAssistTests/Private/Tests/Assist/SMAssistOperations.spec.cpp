@@ -1651,7 +1651,7 @@ void FAssistOperationsSpec::Define()
 
 	Describe("sm.add_reference", [this]()
 	{
-		It("Fails when 'reference_asset_path' is missing", [this]()
+		It("Adds a reference state with no target when 'reference_asset_path' is omitted", [this]()
 		{
 			const FString AssetPath = CreateTransientBlueprint();
 			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
@@ -1667,9 +1667,14 @@ void FAssistOperationsSpec::Define()
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
 				FName(TEXT("sm.add_reference")), Args);
 
-			TestFalse("Result is failure", Result.bSuccess);
-			TestTrue("Error mentions 'reference_asset_path'",
-				Result.ErrorMessage.Contains(TEXT("reference_asset_path")));
+			TestTrue("Result is success", Result.bSuccess);
+			if (TestTrue("Payload present", Result.Payload.IsValid()))
+			{
+				FString StateGuid;
+				TestTrue("Payload has state_guid", Result.Payload->TryGetStringField(TEXT("state_guid"), StateGuid));
+				TestFalse("Payload omits reference_asset_path when target is unset",
+					Result.Payload->HasField(TEXT("reference_asset_path")));
+			}
 		});
 
 		It("Adds a reference node pointing at another SMBlueprint", [this]()

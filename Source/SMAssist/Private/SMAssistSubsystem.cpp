@@ -344,18 +344,35 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::AddReference;
-		Info.Description = TEXT("Add a state machine reference node to an existing state machine blueprint's root graph. Points at another SMBlueprint. Positioning follows the same row-based convention as states: Entry at (0, 0), positive X, match the Y of its row. A reference node must be wired into the flow in the same authoring step: add at least one inbound transition (and typically an outbound one) so the reference participates in the main flow. Orphan reference nodes are a layout failure.");
+		Info.Description = TEXT("Add a state machine reference node to an existing state machine blueprint's root graph. Positioning follows the same row-based convention as states: Entry at (0, 0), positive X, match the Y of its row. A reference node must be wired into the flow in the same authoring step: add at least one inbound transition (and typically an outbound one) so the reference participates in the main flow. Orphan reference nodes are a layout failure. The referenced SMBlueprint is optional — omit reference_asset_path to create a structural state-machine state with no target yet, then set it later via sm.configure_reference. Pass use_intermediate_graph=true to enable the intermediate K2 graph at creation time so SpawnLocalGraphReadNode kinds (GetStateMachineReference, InEndState) are visible/editable inside the reference state; omit (default false) to keep the reference behaving as a plain sub-state-machine.");
 		Info.InputSchema = MakeSchema(
 			{
 				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the target SMBlueprint.")) },
-				{ Args::ReferenceAssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the SMBlueprint to reference.")) },
+				{ Args::ReferenceAssetPath, MakePropertyObject(TEXT("string"), TEXT("Optional. Object path to the SMBlueprint to reference. Omit to create the reference state without a target (assign later via sm.configure_reference).")) },
 				{ Args::StateName, MakePropertyObject(TEXT("string"), TEXT("Optional node name.")) },
 				{ Args::IsEntry, MakePropertyObject(TEXT("boolean"), TEXT("Mark the new reference as the entry state.")) },
 				{ Args::PositionX, MakePropertyObject(TEXT("number"), TEXT("Graph X coordinate. Entry is at x=0, so prefer positive values (~200+) to place the reference to the right of Entry.")) },
-				{ Args::PositionY, MakePropertyObject(TEXT("number"), TEXT("Graph Y coordinate. 0 aligns horizontally with Entry; use non-zero only for deliberate vertical layout.")) }
+				{ Args::PositionY, MakePropertyObject(TEXT("number"), TEXT("Graph Y coordinate. 0 aligns horizontally with Entry; use non-zero only for deliberate vertical layout.")) },
+				{ Args::UseIntermediateGraph, MakePropertyObject(TEXT("boolean"), TEXT("Enable the intermediate K2 graph on the new reference state. Required for GetStateMachineReference / InEndState reads to be visible/editable in the editor. Default false. Routes through USMGraphNode_StateMachineStateNode::SetUseIntermediateGraph.")) }
 			},
-			{ Args::AssetPath, Args::ReferenceAssetPath });
+			{ Args::AssetPath });
 		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::AddReference);
+		RegisterOperation(MoveTemp(Info));
+	}
+
+	{
+		FSMAssistOperationInfo Info;
+		Info.Name = Ops::ConfigureReference;
+		Info.Description = TEXT("Reconfigure an existing state-machine-reference state after creation. Mirrors the Details panel operations on a USMGraphNode_StateMachineStateNode: swap the referenced SMBlueprint and/or toggle intermediate-graph use. At least one of 'reference_asset_path' or 'use_intermediate_graph' must be supplied; unset fields leave the existing state alone. Use this when the reference target needs to change, or when enabling the intermediate graph so GetStateMachineReference / InEndState reads become visible in the editor.");
+		Info.InputSchema = MakeSchema(
+			{
+				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the SMBlueprint that owns the reference state.")) },
+				{ Args::NodeGuid, MakePropertyObject(TEXT("string"), TEXT("Guid of the state-machine-reference state to reconfigure.")) },
+				{ Args::ReferenceAssetPath, MakePropertyObject(TEXT("string"), TEXT("Optional. New referenced SMBlueprint object path. Empty string clears the reference. Omit to leave the existing reference alone.")) },
+				{ Args::UseIntermediateGraph, MakePropertyObject(TEXT("boolean"), TEXT("Optional. Toggle the intermediate K2 graph. Routes through USMGraphNode_StateMachineStateNode::SetUseIntermediateGraph which creates or swaps the bound graph to match.")) }
+			},
+			{ Args::AssetPath, Args::NodeGuid });
+		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::ConfigureReference);
 		RegisterOperation(MoveTemp(Info));
 	}
 
@@ -521,6 +538,69 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 			},
 			{ Args::AssetPath, Args::NodeGuid, Args::PropertyName });
 		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::ResetNodeProperty);
+		RegisterOperation(MoveTemp(Info));
+	}
+
+	{
+		FSMAssistOperationInfo Info;
+		Info.Name = Ops::AddSMVariable;
+		Info.Description = TEXT("Add a member variable to a state-machine blueprint (USMBlueprint). Mirrors the editor's My Blueprint -> +Variable flow via FBlueprintEditorUtils::AddMemberVariable. Use this for FSM-blueprint-scoped variables; node-instance variables on a USMStateInstance subclass require a future sm.add_node_variable op.");
+		Info.InputSchema = MakeSchema(
+			{
+				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the target SMBlueprint.")) },
+				{ Args::VariableName, MakePropertyObject(TEXT("string"), TEXT("Variable name (FName-style; no spaces).")) },
+				{ Args::VarType, MakePropertyObject(TEXT("string"), TEXT("Type token. Accepted: bool, int, int64, byte, float, single, string, name, text, vector, vector2d, rotator, transform, linearcolor, color, guid; or a class/struct path such as /Script/Engine.Actor.")) },
+				{ Args::DefaultValue, MakePropertyObject(TEXT("string"), TEXT("Optional. Default value as a string in UE property-text format (e.g. 'true', '1.25', '(R=1.0,G=0.0,B=0.0,A=1.0)'). Empty = engine default for the type.")) }
+			},
+			{ Args::AssetPath, Args::VariableName, Args::VarType });
+		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::AddSMVariable);
+		RegisterOperation(MoveTemp(Info));
+	}
+
+	{
+		FSMAssistOperationInfo Info;
+		Info.Name = Ops::SpawnLocalGraphReadNode;
+		Info.Description = TEXT("Spawn a Logic Driver local-graph-read K2 node into a state's local graph (OnStateBegin/Update/End share one bound graph per state) or a transition's CanEnterTransition graph. Compatibility by type: TimeInState / HasStateUpdated / GetNodeInstance work in state graphs and transition graphs; GetStateInformation is state-only; CanEvaluate / CanEvaluateFromEvent / GetTransitionInformation are transition-only; GetStateMachineReference is the intermediate graph of a state-machine-reference state (USMGraphNode_StateMachineStateNode); InEndState is a transition graph whose source state is a state-machine-reference state. The two sub-SM-only kinds reject plain state and transition graphs with 'is not compatible with graph' — call sm.add_reference first, then pass that state's guid (GetStateMachineReference) or the guid of a transition out of it (InEndState). Engine create_node does not expose these nodes, which is why this op exists.");
+		Info.InputSchema = MakeSchema(
+			{
+				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the target SMBlueprint.")) },
+				{ Args::NodeGuid, MakePropertyObject(TEXT("string"), TEXT("Guid of the state or transition node whose bound graph receives the read node.")) },
+				{ Args::Type, MakePropertyObject(TEXT("string"), TEXT("Local-graph-read node type. Accepted: TimeInState, HasStateUpdated, CanEvaluate, CanEvaluateFromEvent, GetStateInformation, GetTransitionInformation, GetStateMachineReference, GetNodeInstance, InEndState. Snake_case variants accepted too.")) },
+				{ Args::PositionX, MakePropertyObject(TEXT("number"), TEXT("Local-graph X coordinate. Defaults to 0.")) },
+				{ Args::PositionY, MakePropertyObject(TEXT("number"), TEXT("Local-graph Y coordinate. Defaults to 0.")) },
+				{ Args::NodeInstanceGuid, MakePropertyObject(TEXT("string"), TEXT("Only used by GetNodeInstance when targeting a specific stack instance. Empty/invalid = primary node template.")) },
+				{ Args::NodeInstanceIndex, MakePropertyObject(TEXT("number"), TEXT("Only used by GetNodeInstance for stack lookups. -1 = primary node template.")) }
+			},
+			{ Args::AssetPath, Args::NodeGuid, Args::Type });
+		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::SpawnLocalGraphReadNode);
+		RegisterOperation(MoveTemp(Info));
+	}
+
+	{
+		FSMAssistOperationInfo Info;
+		Info.Name = Ops::ConfigureSMComponentOnActor;
+		Info.Description = TEXT("Configure the USMStateMachineComponent template on an actor blueprint's SCS. Operates on the BP-class component (not a placed-instance component) so configuration persists into every placed actor. Sets StateMachineClass on the template when state_machine_class is supplied. Boolean fields use true/false; pass only the keys you want to change (others stay at their current template value). Enum fields accept display names: 'Client' | 'Server' | 'ClientAndServer'. The extra_config_json valve takes a JSON object of UPROPERTY name -> value for fields not promoted above; unrecognized keys are returned in 'unknown_keys' rather than failing the op.");
+		Info.InputSchema = MakeSchema(
+			{
+				{ Args::ActorBlueprint, MakePropertyObject(TEXT("string"), TEXT("Object path to the actor blueprint hosting the component (any UBlueprint with an SCS).")) },
+				{ Args::StateMachineClass, MakePropertyObject(TEXT("string"), TEXT("Optional. Object path to a USMBlueprint whose generated class becomes the template's StateMachineClass. Empty = leave StateMachineClass alone.")) },
+				{ Args::ComponentName, MakePropertyObject(TEXT("string"), TEXT("SCS variable name of the USMStateMachineComponent on the actor BP.")) },
+				{ Args::StartOnBeginPlay, MakePropertyObject(TEXT("boolean"), TEXT("Automatically start the state machine on BeginPlay. Defaults to false on USMStateMachineComponent (manual Start() control); AI-authored slices that want the SM to run on placement should pass true.")) },
+				{ Args::InitializeOnBeginPlay, MakePropertyObject(TEXT("boolean"), TEXT("Automatically initialize the state machine on InitializeComponent and BeginPlay.")) },
+				{ Args::StopOnEndPlay, MakePropertyObject(TEXT("boolean"), TEXT("Automatically stop the state machine on EndPlay.")) },
+				{ Args::ReuseInstanceAfterShutdown, MakePropertyObject(TEXT("boolean"), TEXT("Retain the runtime instance after Shutdown so the next Initialize reuses it.")) },
+				{ Args::Replicates, MakePropertyObject(TEXT("boolean"), TEXT("Mark the component itself replicated (AActorComponent::SetIsReplicated).")) },
+				{ Args::IncludeSimulatedProxies, MakePropertyObject(TEXT("boolean"), TEXT("Broadcast changes to simulated proxies, not just autonomous proxies.")) },
+				{ Args::WaitForTransactionsFromServer, MakePropertyObject(TEXT("boolean"), TEXT("Client waits for server confirmation before applying state changes.")) },
+				{ Args::HandleControllerChange, MakePropertyObject(TEXT("boolean"), TEXT("Handle pawn possession/unpossession by refreshing replication state.")) },
+				{ Args::StateChangeAuthority, MakePropertyObject(TEXT("string"), TEXT("ESMNetworkConfigurationType display name: 'Client' | 'Server' | 'ClientAndServer'.")) },
+				{ Args::NetworkTickConfiguration, MakePropertyObject(TEXT("string"), TEXT("ESMNetworkConfigurationType display name.")) },
+				{ Args::NetworkStateExecution, MakePropertyObject(TEXT("string"), TEXT("ESMNetworkConfigurationType display name.")) },
+				{ Args::NetworkTransitionEnteredConfiguration, MakePropertyObject(TEXT("string"), TEXT("ESMNetworkConfigurationType display name.")) },
+				{ Args::ExtraConfigJson, MakePropertyObject(TEXT("string"), TEXT("JSON object of UPROPERTY name -> value for fields not promoted above. Values are applied via FProperty::ImportText_Direct. Unrecognized keys are reported in 'unknown_keys'.")) }
+			},
+			{ Args::ActorBlueprint, Args::ComponentName });
+		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::ConfigureSMComponentOnActor);
 		RegisterOperation(MoveTemp(Info));
 	}
 }

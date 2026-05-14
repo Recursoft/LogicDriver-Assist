@@ -111,16 +111,42 @@ FString ULogicDriverToolset::AddReference(
 	const FString& StateName,
 	bool bIsEntry,
 	double PositionX,
-	double PositionY)
+	double PositionY,
+	bool bUseIntermediateGraph)
 {
 	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
 	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
-	LDA::AddObjectPath(*Args, TEXT("reference_asset_path"), ReferenceBlueprint);
+	if (ReferenceBlueprint)
+	{
+		LDA::AddObjectPath(*Args, TEXT("reference_asset_path"), ReferenceBlueprint);
+	}
 	LDA::AddIfNonEmpty(*Args, TEXT("state_name"), StateName);
 	LDA::AddBool(*Args, TEXT("is_entry"), bIsEntry);
 	LDA::AddIfNonNegative(*Args, TEXT("position_x"), PositionX);
 	LDA::AddIfNonNegative(*Args, TEXT("position_y"), PositionY);
+	LDA::AddBool(*Args, TEXT("use_intermediate_graph"), bUseIntermediateGraph);
 	return LDA::Execute(TEXT("sm.add_reference"), Args);
+}
+
+FString ULogicDriverToolset::ConfigureReference(
+	USMBlueprint* Blueprint,
+	const FString& NodeGuid,
+	USMBlueprint* ReferenceBlueprint,
+	bool bUpdateIntermediateGraph,
+	bool bUseIntermediateGraph)
+{
+	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
+	Args->SetStringField(TEXT("node_guid"), NodeGuid);
+	if (ReferenceBlueprint)
+	{
+		LDA::AddObjectPath(*Args, TEXT("reference_asset_path"), ReferenceBlueprint);
+	}
+	if (bUpdateIntermediateGraph)
+	{
+		LDA::AddBool(*Args, TEXT("use_intermediate_graph"), bUseIntermediateGraph);
+	}
+	return LDA::Execute(TEXT("sm.configure_reference"), Args);
 }
 
 FString ULogicDriverToolset::AddTransition(
@@ -335,4 +361,76 @@ FString ULogicDriverToolset::LayoutStates(
 	LDA::AddBool(*Args, TEXT("respect_existing_order"), bRespectExistingOrder);
 	LDA::AddBool(*Args, TEXT("snap_to_grid"), bSnapToGrid);
 	return LDA::Execute(TEXT("sm.layout_states"), Args);
+}
+
+FString ULogicDriverToolset::AddSMVariable(
+	USMBlueprint* Blueprint,
+	const FString& VarName,
+	const FString& VarType,
+	const FString& DefaultValue)
+{
+	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
+	Args->SetStringField(TEXT("variable_name"), VarName);
+	Args->SetStringField(TEXT("var_type"), VarType);
+	LDA::AddIfNonEmpty(*Args, TEXT("default_value"), DefaultValue);
+	return LDA::Execute(TEXT("sm.add_sm_variable"), Args);
+}
+
+FString ULogicDriverToolset::ConfigureSMComponentOnActor(
+	UBlueprint* ActorBlueprint,
+	USMBlueprint* StateMachineBlueprint,
+	const FString& ComponentName,
+	const FSMComponentConfig& Config)
+{
+	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+	LDA::AddObjectPath(*Args, TEXT("actor_blueprint"), ActorBlueprint);
+	LDA::AddObjectPath(*Args, TEXT("state_machine_class"), StateMachineBlueprint);
+	Args->SetStringField(TEXT("component_name"), ComponentName);
+
+	auto AddOptionalBool = [&](const TCHAR* Field, const TOptional<bool>& Value)
+	{
+		if (Value.IsSet())
+		{
+			Args->SetBoolField(Field, Value.GetValue());
+		}
+	};
+
+	AddOptionalBool(TEXT("b_start_on_begin_play"), Config.bStartOnBeginPlay);
+	AddOptionalBool(TEXT("b_initialize_on_begin_play"), Config.bInitializeOnBeginPlay);
+	AddOptionalBool(TEXT("b_stop_on_end_play"), Config.bStopOnEndPlay);
+	AddOptionalBool(TEXT("b_reuse_instance_after_shutdown"), Config.bReuseInstanceAfterShutdown);
+	AddOptionalBool(TEXT("b_replicates"), Config.bReplicates);
+	AddOptionalBool(TEXT("b_include_simulated_proxies"), Config.bIncludeSimulatedProxies);
+	AddOptionalBool(TEXT("b_wait_for_transactions_from_server"), Config.bWaitForTransactionsFromServer);
+	AddOptionalBool(TEXT("b_handle_controller_change"), Config.bHandleControllerChange);
+
+	LDA::AddIfNonEmpty(*Args, TEXT("state_change_authority"), Config.StateChangeAuthority);
+	LDA::AddIfNonEmpty(*Args, TEXT("network_tick_configuration"), Config.NetworkTickConfiguration);
+	LDA::AddIfNonEmpty(*Args, TEXT("network_state_execution"), Config.NetworkStateExecution);
+	LDA::AddIfNonEmpty(*Args, TEXT("network_transition_entered_configuration"), Config.NetworkTransitionEnteredConfiguration);
+
+	LDA::AddIfNonEmpty(*Args, TEXT("extra_config_json"), Config.ExtraConfigJson);
+
+	return LDA::Execute(TEXT("sm.configure_sm_component_on_actor"), Args);
+}
+
+FString ULogicDriverToolset::SpawnLocalGraphReadNode(
+	USMBlueprint* Blueprint,
+	const FString& NodeGuid,
+	const FString& NodeType,
+	double PositionX,
+	double PositionY,
+	const FString& NodeInstanceGuid,
+	int32 NodeInstanceIndex)
+{
+	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
+	Args->SetStringField(TEXT("node_guid"), NodeGuid);
+	Args->SetStringField(TEXT("type"), NodeType);
+	Args->SetNumberField(TEXT("position_x"), PositionX);
+	Args->SetNumberField(TEXT("position_y"), PositionY);
+	LDA::AddIfNonEmpty(*Args, TEXT("node_instance_guid"), NodeInstanceGuid);
+	LDA::AddIfNotIndexNone(*Args, TEXT("node_instance_index"), NodeInstanceIndex);
+	return LDA::Execute(TEXT("sm.spawn_local_graph_read_node"), Args);
 }
