@@ -288,6 +288,32 @@ public:
 		const FString& TransitionClass = TEXT(""));
 
 	/**
+	 * Adds a transition reroute node. Reroutes are cosmetic graph nodes that let a transition
+	 * curve bend around obstructions; they have no runtime effect and the primary transition
+	 * retains all configuration.
+	 *
+	 * Two modes:
+	 *  - Inline-insert: supply TransitionGuid to splice the reroute into that transition's
+	 *    outgoing pin chain. Useful for V-shaping a long back-edge in a cyclic FSM so its curve
+	 *    bows around the state row.
+	 *  - Standalone: leave TransitionGuid empty. The reroute is placed on the root state machine
+	 *    graph at PositionX/PositionY. Connect transitions to/from it later via AddTransition
+	 *    (reroute GUIDs are valid from/to endpoints).
+	 *
+	 * @param Blueprint The blueprint to modify. Required.
+	 * @param TransitionGuid Optional. Empty = standalone reroute.
+	 * @param PositionX Graph X coordinate for the reroute. Defaults to 0.
+	 * @param PositionY Graph Y coordinate for the reroute. Defaults to 0. To V-shape a back-edge below a row of states, set positive Y (state row sits around y=-43).
+	 * @return JSON: { reroute_guid, transition_guid? }
+	 */
+	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
+	static FString AddTransitionReroute(
+		USMBlueprint* Blueprint,
+		const FString& TransitionGuid = TEXT(""),
+		double PositionX = 0.0,
+		double PositionY = 0.0);
+
+	/**
 	 * Stacks an additional state-instance class onto an existing state node.
 	 * @param Blueprint The blueprint to modify. Required.
 	 * @param StateGuid GUID of the state to extend. Required.

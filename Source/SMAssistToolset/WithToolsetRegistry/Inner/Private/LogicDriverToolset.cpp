@@ -163,6 +163,20 @@ FString ULogicDriverToolset::AddTransition(
 	return LDA::Execute(TEXT("sm.add_transition"), Args);
 }
 
+FString ULogicDriverToolset::AddTransitionReroute(
+	USMBlueprint* Blueprint,
+	const FString& TransitionGuid,
+	double PositionX,
+	double PositionY)
+{
+	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
+	LDA::AddIfNonEmpty(*Args, TEXT("transition_guid"), TransitionGuid);
+	Args->SetNumberField(TEXT("position_x"), PositionX);
+	Args->SetNumberField(TEXT("position_y"), PositionY);
+	return LDA::Execute(TEXT("sm.add_transition_reroute"), Args);
+}
+
 FString ULogicDriverToolset::AddStateStack(
 	USMBlueprint* Blueprint,
 	const FString& StateGuid,

@@ -283,6 +283,74 @@ FSMAssistOperationResult LD::Assist::AddTransition(const TSharedRef<FJsonObject>
 	return FSMAssistOperationResult::MakeSuccess(Payload);
 }
 
+FSMAssistOperationResult LD::Assist::AddTransitionReroute(const TSharedRef<FJsonObject>& InArgs)
+{
+	FString AssetPath;
+	if (!InArgs->TryGetStringField(Args::AssetPath, AssetPath) || AssetPath.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'asset_path'."));
+	}
+
+	FString LoadError;
+	USMBlueprint* Blueprint = LD::Assist::Utils::LoadStateMachineBlueprint(AssetPath, LoadError);
+	if (!Blueprint)
+	{
+		return FSMAssistOperationResult::MakeError(LoadError);
+	}
+
+	ISMGraphGeneration::FCreateTransitionRerouteArgs RerouteArgs;
+
+	// Optional inline-insert target: when transition_guid is supplied, the reroute is spliced
+	// into that transition's outgoing pin chain. When omitted, the reroute is created standalone.
+	FString TransitionGuidStr;
+	if (InArgs->TryGetStringField(Args::TransitionGuid, TransitionGuidStr) && !TransitionGuidStr.IsEmpty())
+	{
+		FGuid TransitionGuid;
+		if (!FGuid::Parse(TransitionGuidStr, TransitionGuid))
+		{
+			return FSMAssistOperationResult::MakeError(
+				FString::Printf(TEXT("Invalid 'transition_guid' '%s'."), *TransitionGuidStr));
+		}
+
+		USMGraphNode_Base* Node = LD::Assist::Utils::FindNodeByGuid(Blueprint, TransitionGuid);
+		USMGraphNode_TransitionEdge* TransitionEdge = Cast<USMGraphNode_TransitionEdge>(Node);
+		if (!TransitionEdge)
+		{
+			return FSMAssistOperationResult::MakeError(
+				FString::Printf(TEXT("Node '%s' is not a transition edge."), *TransitionGuidStr));
+		}
+
+		RerouteArgs.TransitionEdge = TransitionEdge;
+	}
+
+	double PositionX = 0.0;
+	double PositionY = 0.0;
+	InArgs->TryGetNumberField(Args::PositionX, PositionX);
+	InArgs->TryGetNumberField(Args::PositionY, PositionY);
+	RerouteArgs.NodePosition = FVector2D(PositionX, PositionY);
+
+	FString GraphGenError;
+	ISMGraphGeneration* GraphGen = LD::Assist::Private::GetGraphGeneration(GraphGenError);
+	if (!GraphGen)
+	{
+		return FSMAssistOperationResult::MakeError(GraphGenError);
+	}
+
+	USMGraphNode_RerouteNode* Reroute = GraphGen->CreateTransitionReroute(Blueprint, RerouteArgs);
+	if (!Reroute)
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Failed to create transition reroute."));
+	}
+
+	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
+	Payload->SetStringField(Args::RerouteGuid, Reroute->NodeGuid.ToString());
+	if (RerouteArgs.TransitionEdge)
+	{
+		Payload->SetStringField(Args::TransitionGuid, RerouteArgs.TransitionEdge->NodeGuid.ToString());
+	}
+	return FSMAssistOperationResult::MakeSuccess(Payload);
+}
+
 FSMAssistOperationResult LD::Assist::ListAssets(const TSharedRef<FJsonObject>& InArgs)
 {
 	FString PathPrefix;

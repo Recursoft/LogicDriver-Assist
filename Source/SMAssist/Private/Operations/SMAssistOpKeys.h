@@ -9,6 +9,7 @@ namespace LD::Assist::Ops
 	inline constexpr const TCHAR* CreateBlueprint = TEXT("sm.create_blueprint");
 	inline constexpr const TCHAR* AddState = TEXT("sm.add_state");
 	inline constexpr const TCHAR* AddTransition = TEXT("sm.add_transition");
+	inline constexpr const TCHAR* AddTransitionReroute = TEXT("sm.add_transition_reroute");
 	inline constexpr const TCHAR* ListAssets = TEXT("sm.list_assets");
 	inline constexpr const TCHAR* GetAsset = TEXT("sm.get_asset");
 	inline constexpr const TCHAR* RemoveNode = TEXT("sm.remove_node");
@@ -59,6 +60,7 @@ namespace LD::Assist::Args
 	inline constexpr const TCHAR* ToStateGuid = TEXT("to_state_guid");
 	inline constexpr const TCHAR* TransitionGuid = TEXT("transition_guid");
 	inline constexpr const TCHAR* TransitionClass = TEXT("transition_class");
+	inline constexpr const TCHAR* RerouteGuid = TEXT("reroute_guid");
 
 	inline constexpr const TCHAR* NodeGuid = TEXT("node_guid");
 	inline constexpr const TCHAR* PropertyName = TEXT("property_name");

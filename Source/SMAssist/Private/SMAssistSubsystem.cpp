@@ -190,6 +190,22 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 
 	{
 		FSMAssistOperationInfo Info;
+		Info.Name = Ops::AddTransitionReroute;
+		Info.Description = TEXT("Add a transition reroute node. Reroute nodes are cosmetic graph nodes that let a transition curve bend around obstructions (e.g., back-edges in cyclic state machines). They have no runtime effect; the primary transition retains all configuration and the reroute chain compiles to the same runtime transition. Two modes, gated by transition_guid: when supplied, the reroute is spliced into that transition's outgoing pin chain (inline-insert); when omitted, the reroute is created standalone on the graph and the caller connects transitions to/from it later via sm.add_transition (reroute GUIDs are valid from/to endpoints).");
+		Info.InputSchema = MakeSchema(
+			{
+				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the target SMBlueprint.")) },
+				{ Args::TransitionGuid, MakePropertyObject(TEXT("string"), TEXT("Optional. When supplied, the reroute is inserted into this transition's outgoing pin chain. When omitted, the reroute is created standalone on the root state machine graph.")) },
+				{ Args::PositionX, MakePropertyObject(TEXT("number"), TEXT("Graph X coordinate for the reroute. Defaults to 0.")) },
+				{ Args::PositionY, MakePropertyObject(TEXT("number"), TEXT("Graph Y coordinate for the reroute. Defaults to 0. To V-shape a back-edge below a row of states, set positive Y (state row sits around y=-43).")) }
+			},
+			{ Args::AssetPath });
+		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::AddTransitionReroute);
+		RegisterOperation(MoveTemp(Info));
+	}
+
+	{
+		FSMAssistOperationInfo Info;
 		Info.Name = Ops::ListAssets;
 		Info.Description = TEXT("List state machine blueprint assets, optionally filtered by content path prefix.");
 		Info.InputSchema = MakeSchema(

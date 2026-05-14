@@ -14,6 +14,8 @@ namespace LD::Assist
 
 	FSMAssistOperationResult AddTransition(const TSharedRef<FJsonObject>& InArgs);
 
+	FSMAssistOperationResult AddTransitionReroute(const TSharedRef<FJsonObject>& InArgs);
+
 	FSMAssistOperationResult ListAssets(const TSharedRef<FJsonObject>& InArgs);
 
 	FSMAssistOperationResult GetAsset(const TSharedRef<FJsonObject>& InArgs);
