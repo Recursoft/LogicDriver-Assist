@@ -11,7 +11,8 @@
   "MarketplaceURL": "",
   "SupportURL": "https://recursoft.net/logicdriver",
   "CanContainContent": false,
-  "IsBetaVersion": true,
+  "IsBetaVersion": false,
+  "IsExperimentalVersion": true,
   "Installed": false,
   "Modules": [
     {
