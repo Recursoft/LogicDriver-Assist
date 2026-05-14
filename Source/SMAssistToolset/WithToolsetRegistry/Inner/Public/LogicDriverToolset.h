@@ -371,7 +371,7 @@ public:
 	 * @param Blueprint The blueprint to modify. Required.
 	 * @param NodeGuid GUID of the node containing the property. Required.
 	 * @param PropertyName Name of the property to set. Required.
-	 * @param Value JSON-encoded value text (scalar, array, or object). Empty = no value (e.g., for clear).
+	 * @param Value JSON-encoded value text. Scalars (string, number, bool, null) and arrays of scalars are accepted. Struct properties (FLinearColor, FVector, ...) take UE struct-text wrapped as a JSON string, e.g. `"(R=1.0,G=0.0,B=0.0,A=1.0)"` for FLinearColor, not a JSON object. Empty = no value (e.g., for clear).
 	 * @param ArrayIndex Index into an array-typed property. -1 = not an array op.
 	 * @param TargetIndex Destination index for ArrayAction=move. -1 = not a move op.
 	 * @param ArrayAction One of "add" / "insert" / "duplicate" / "move" / "remove" / "clear". Empty = scalar set.

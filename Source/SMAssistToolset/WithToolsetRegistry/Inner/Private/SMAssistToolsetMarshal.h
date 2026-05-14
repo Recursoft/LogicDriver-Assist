@@ -75,9 +75,21 @@ namespace LD::Assist::Toolset::Marshal
 		{
 			return;
 		}
-		TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(JsonText);
-		TSharedPtr<FJsonValue> Parsed;
-		if (!FJsonSerializer::Deserialize(Reader, Parsed) || !Parsed.IsValid())
+		// UE's top-level JSON reader only accepts objects and arrays, so a bare scalar
+		// ("1.5", "\"red\"", "true") would round-trip as malformed even though it is
+		// valid JSON. Wrap in a synthetic object and pull the value back out so every
+		// JSON type the schema advertises (string, number, boolean, null, array, object)
+		// reaches the handler. The single-key check rejects trailing-garbage payloads
+		// like `1,"x":2` that would otherwise smuggle extra fields into the wrapper.
+		const FString Wrapped = FString::Printf(TEXT("{\"v\":%s}"), *JsonText);
+		TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Wrapped);
+		TSharedPtr<FJsonObject> ParsedObject;
+		const bool bParsed =
+			FJsonSerializer::Deserialize(Reader, ParsedObject)
+			&& ParsedObject.IsValid()
+			&& ParsedObject->Values.Num() == 1;
+		const TSharedPtr<FJsonValue> Parsed = bParsed ? ParsedObject->TryGetField(TEXT("v")) : nullptr;
+		if (!Parsed.IsValid())
 		{
 			UKismetSystemLibrary::RaiseScriptError(FString::Printf(
 				TEXT("Field '%.*s': malformed JSON value."), Field.Len(), Field.GetData()));
