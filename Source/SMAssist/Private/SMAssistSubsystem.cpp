@@ -603,4 +603,56 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::ConfigureSMComponentOnActor);
 		RegisterOperation(MoveTemp(Info));
 	}
+
+	{
+		FSMAssistOperationInfo Info;
+		Info.Name = Ops::SpawnLocalGraphWriteNode;
+		Info.Description = TEXT("Spawn a Logic Driver local-graph-write K2 node into a transition's CanEnterTransition graph or a conduit's bound graph. Compatibility by type: CanEvaluate works in transition and conduit graphs and disables/enables evaluation of the enclosing edge; CanEvaluateFromEvent is transition-only and disables/enables event-driven evaluation specifically. Both expose a single boolean input pin (seedable via 'default_value' or wireable to upstream K2 logic via blueprint connect_pins). TransitionEventReturn is intentionally NOT spawnable here: it is auto-placed as a side effect of binding a transition delegate; use sm.configure_transition_event instead. Engine create_node does not expose these nodes, which is why this op exists.");
+		Info.InputSchema = MakeSchema(
+			{
+				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the target SMBlueprint.")) },
+				{ Args::NodeGuid, MakePropertyObject(TEXT("string"), TEXT("Guid of the transition or conduit node whose bound graph receives the write node.")) },
+				{ Args::Type, MakePropertyObject(TEXT("string"), TEXT("Local-graph-write node type. Accepted: CanEvaluate, CanEvaluateFromEvent. Snake_case variants accepted too.")) },
+				{ Args::PositionX, MakePropertyObject(TEXT("number"), TEXT("Local-graph X coordinate. Defaults to 0.")) },
+				{ Args::PositionY, MakePropertyObject(TEXT("number"), TEXT("Local-graph Y coordinate. Defaults to 0.")) },
+				{ Args::DefaultValue, MakePropertyObject(TEXT("boolean"), TEXT("Optional. Seed the boolean input pin's literal default. Ignored if the pin ends up wired to an upstream node.")) }
+			},
+			{ Args::AssetPath, Args::NodeGuid, Args::Type });
+		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::SpawnLocalGraphWriteNode);
+		RegisterOperation(MoveTemp(Info));
+	}
+
+	{
+		FSMAssistOperationInfo Info;
+		Info.Name = Ops::ConfigureTransitionEvent;
+		Info.Description = TEXT("Bind, rebind, or clear the auto-bound event on a transition edge, and/or update its trigger flags. Mirrors a user edit in the transition's Details panel exactly: applies each set field via PreEditChange/PostEditChangeProperty, so cascading resets (e.g. changing 'delegate_owner_instance' clears 'delegate_property_name' and 'delegate_owner_class' before later writes restore them) match the Details panel and any open panel auto-refreshes. Set 'delegate_property_name' to an empty string to clear the binding: this removes the auto-spawned event entry node from the transition's bound graph but PRESERVES any TransitionEventReturn the user wired downstream logic into (same behavior as a Details panel clear, so unbind/rebind cycles don't lose work). At least one field must be supplied. TransitionEventReturn is auto-placed on first bind. Never call sm.spawn_local_graph_write_node to create it.");
+		Info.InputSchema = MakeSchema(
+			{
+				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the SMBlueprint owning the transition.")) },
+				{ Args::TransitionGuid, MakePropertyObject(TEXT("string"), TEXT("Guid of the transition edge to reconfigure.")) },
+				{ Args::DelegateOwnerInstance, MakePropertyObject(TEXT("string"), TEXT("Optional. Where the delegate lives. Accepted: 'This' (SM instance), 'Context', 'PreviousState'. Changing this resets delegate_owner_class and delegate_property_name as a side effect, so supply them together if you want to switch both.")) },
+				{ Args::DelegateOwnerClass, MakePropertyObject(TEXT("string"), TEXT("Optional. Object path to the class owning the delegate property. Required when delegate_owner_instance is 'Context'. Empty string clears it. Changing this resets delegate_property_name.")) },
+				{ Args::DelegatePropertyName, MakePropertyObject(TEXT("string"), TEXT("Optional. Name of the multicast delegate property to bind. Empty string clears the binding (removes the auto-spawned event entry node from the transition's bound graph but preserves any TransitionEventReturn node the user wired logic into).")) },
+				{ Args::EventTriggersTargetedUpdate, MakePropertyObject(TEXT("boolean"), TEXT("Optional. Trigger a targeted SM update limited to this transition and destination state when the event fires. Propagates to existing TransitionEventReturn nodes that have bUseOwningTransitionSettings = true.")) },
+				{ Args::EventTriggersFullUpdate, MakePropertyObject(TEXT("boolean"), TEXT("Optional. Trigger a full SM update when the event fires (legacy behavior; applied after targeted update). Propagates to existing TransitionEventReturn nodes with bUseOwningTransitionSettings = true.")) }
+			},
+			{ Args::AssetPath, Args::TransitionGuid });
+		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::ConfigureTransitionEvent);
+		RegisterOperation(MoveTemp(Info));
+	}
+
+	{
+		FSMAssistOperationInfo Info;
+		Info.Name = Ops::FindNodeTypes;
+		Info.Description = TEXT("Enumerate Logic Driver K2 read/write kinds that are spawnable into a target state/transition/conduit bound graph. The Logic Driver companion to BlueprintTools.find_node_types: the engine action menu does not list LD K2 nodes (they're filtered out and spawned through dedicated sm.spawn_local_graph_*_node ops), so even a fully-fixed upstream find_node_types would never include them. Returns per-kind metadata: which spawn op to call, the spawn_type string to pass. Does NOT enumerate engine K2 nodes. For those, note that UE 5.8's BlueprintTools.find_node_types rejects SM transition/conduit bound graphs with 'Cannot cast type ... to Blueprint'; workaround is to query find_node_types against any non-SM UBlueprint's EventGraph (type_ids are universal across graphs).");
+		Info.InputSchema = MakeSchema(
+			{
+				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the target SMBlueprint.")) },
+				{ Args::NodeGuid, MakePropertyObject(TEXT("string"), TEXT("Guid of the state, transition, or conduit node whose bound graph drives the compatibility check.")) },
+				{ Args::TypeIdFilter, MakePropertyObject(TEXT("string"), TEXT("Optional case-insensitive substring match against the LD kind name (e.g. 'evaluate' matches CanEvaluate and CanEvaluateFromEvent). Empty = return every compatible kind.")) }
+			},
+			{ Args::AssetPath, Args::NodeGuid });
+		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::FindNodeTypes);
+		RegisterOperation(MoveTemp(Info));
+	}
 }

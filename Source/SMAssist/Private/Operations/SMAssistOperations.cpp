@@ -2,6 +2,7 @@
 
 #include "Operations/SMAssistOperations.h"
 
+#include "Operations/SMAssistLocalGraphNodeDiscovery.h"
 #include "Operations/SMAssistOpKeys.h"
 #include "Layout/SMAssistLayout.h"
 #include "SMAssistLog.h"
@@ -3686,5 +3687,373 @@ FSMAssistOperationResult LD::Assist::SpawnLocalGraphReadNode(const TSharedRef<FJ
 	Payload->SetStringField(Args::NodeGuid, NewNode->NodeGuid.ToString());
 	Payload->SetStringField(Args::Type, NodeTypeStr);
 	Payload->SetStringField(Args::TargetGraphPath, TargetGraph->GetPathName());
+	return FSMAssistOperationResult::MakeSuccess(Payload);
+}
+
+namespace LD::Assist::Private
+{
+	static bool ResolveLocalGraphWriteType(const FString& InValue, ISMGraphGeneration::ELocalGraphWriteNodeType& OutType)
+	{
+		const FString Lower = InValue.ToLower();
+		if (Lower == TEXT("canevaluate") || Lower == TEXT("can_evaluate"))
+		{
+			OutType = ISMGraphGeneration::ELocalGraphWriteNodeType::CanEvaluate;
+			return true;
+		}
+		if (Lower == TEXT("canevaluatefromevent") || Lower == TEXT("can_evaluate_from_event"))
+		{
+			OutType = ISMGraphGeneration::ELocalGraphWriteNodeType::CanEvaluateFromEvent;
+			return true;
+		}
+		return false;
+	}
+
+	static bool ResolveDelegateOwnerInstance(const FString& InValue, ESMDelegateOwner& OutOwner)
+	{
+		const FString Lower = InValue.ToLower();
+		if (Lower == TEXT("this") || Lower == TEXT("smdo_this"))
+		{
+			OutOwner = SMDO_This;
+			return true;
+		}
+		if (Lower == TEXT("context") || Lower == TEXT("smdo_context"))
+		{
+			OutOwner = SMDO_Context;
+			return true;
+		}
+		if (Lower == TEXT("previous") || Lower == TEXT("previous_state") || Lower == TEXT("previousstate") || Lower == TEXT("smdo_previousstate"))
+		{
+			OutOwner = SMDO_PreviousState;
+			return true;
+		}
+		return false;
+	}
+}
+
+FSMAssistOperationResult LD::Assist::SpawnLocalGraphWriteNode(const TSharedRef<FJsonObject>& InArgs)
+{
+	FString AssetPath;
+	if (!InArgs->TryGetStringField(Args::AssetPath, AssetPath) || AssetPath.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'asset_path'."));
+	}
+
+	FString NodeGuidStr;
+	if (!InArgs->TryGetStringField(Args::NodeGuid, NodeGuidStr) || NodeGuidStr.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'node_guid' (transition or conduit guid whose local graph receives the write node)."));
+	}
+
+	FGuid NodeGuid;
+	if (!FGuid::Parse(NodeGuidStr, NodeGuid))
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("Invalid 'node_guid' '%s'."), *NodeGuidStr));
+	}
+
+	FString NodeTypeStr;
+	if (!InArgs->TryGetStringField(Args::Type, NodeTypeStr) || NodeTypeStr.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'type'."));
+	}
+
+	ISMGraphGeneration::ELocalGraphWriteNodeType NodeType;
+	if (!LD::Assist::Private::ResolveLocalGraphWriteType(NodeTypeStr, NodeType))
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(
+			TEXT("Unrecognized 'type' '%s'. Accepted: CanEvaluate, CanEvaluateFromEvent."),
+			*NodeTypeStr));
+	}
+
+	FString LoadError;
+	USMBlueprint* Blueprint = LD::Assist::Utils::LoadStateMachineBlueprint(AssetPath, LoadError);
+	if (!Blueprint)
+	{
+		return FSMAssistOperationResult::MakeError(LoadError);
+	}
+
+	USMGraphNode_Base* OwnerNode = LD::Assist::Utils::FindNodeByGuid(Blueprint, NodeGuid);
+	if (!OwnerNode)
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("No transition or conduit node with guid '%s' on '%s'."), *NodeGuidStr, *AssetPath));
+	}
+
+	UEdGraph* TargetGraph = OwnerNode->GetBoundGraph();
+	if (!TargetGraph)
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("Owner node '%s' has no bound graph."), *OwnerNode->GetName()));
+	}
+
+	FString GraphGenError;
+	ISMGraphGeneration* GraphGen = LD::Assist::Private::GetGraphGeneration(GraphGenError);
+	if (!GraphGen)
+	{
+		return FSMAssistOperationResult::MakeError(GraphGenError);
+	}
+
+	ISMGraphGeneration::FCreateLocalGraphWriteNodeArgs CreateArgs;
+	CreateArgs.NodeType = NodeType;
+	CreateArgs.TargetGraph = TargetGraph;
+
+	double PosX = 0.0;
+	double PosY = 0.0;
+	InArgs->TryGetNumberField(Args::PositionX, PosX);
+	InArgs->TryGetNumberField(Args::PositionY, PosY);
+	CreateArgs.NodePosition = FVector2D(PosX, PosY);
+
+	bool bDefaultValue = false;
+	if (InArgs->TryGetBoolField(Args::DefaultValue, bDefaultValue))
+	{
+		CreateArgs.bDefaultValue = bDefaultValue;
+	}
+
+	UEdGraphNode* NewNode = GraphGen->CreateLocalGraphWriteNode(Blueprint, CreateArgs);
+	if (!NewNode)
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(
+			TEXT("CreateLocalGraphWriteNode failed for type '%s' on graph '%s' (likely the type is not compatible with the target graph context: CanEvaluate is transition+conduit, CanEvaluateFromEvent is transition only)."),
+			*NodeTypeStr, *TargetGraph->GetName()));
+	}
+
+	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
+	Payload->SetStringField(Args::NodeGuid, NewNode->NodeGuid.ToString());
+	Payload->SetStringField(Args::Type, NodeTypeStr);
+	Payload->SetStringField(Args::TargetGraphPath, TargetGraph->GetPathName());
+	return FSMAssistOperationResult::MakeSuccess(Payload);
+}
+
+FSMAssistOperationResult LD::Assist::ConfigureTransitionEvent(const TSharedRef<FJsonObject>& InArgs)
+{
+	FString AssetPath;
+	if (!InArgs->TryGetStringField(Args::AssetPath, AssetPath) || AssetPath.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'asset_path'."));
+	}
+
+	FString TransitionGuidStr;
+	if (!InArgs->TryGetStringField(Args::TransitionGuid, TransitionGuidStr) || TransitionGuidStr.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'transition_guid'."));
+	}
+
+	FGuid TransitionGuid;
+	if (!FGuid::Parse(TransitionGuidStr, TransitionGuid))
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("Invalid 'transition_guid' '%s'."), *TransitionGuidStr));
+	}
+
+	FString LoadError;
+	USMBlueprint* Blueprint = LD::Assist::Utils::LoadStateMachineBlueprint(AssetPath, LoadError);
+	if (!Blueprint)
+	{
+		return FSMAssistOperationResult::MakeError(LoadError);
+	}
+
+	USMGraphNode_Base* Node = LD::Assist::Utils::FindNodeByGuid(Blueprint, TransitionGuid);
+	if (!Node)
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("No node with guid '%s' on '%s'."), *TransitionGuidStr, *AssetPath));
+	}
+
+	USMGraphNode_TransitionEdge* TransitionEdge = Cast<USMGraphNode_TransitionEdge>(Node);
+	if (!TransitionEdge)
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(
+			TEXT("Node '%s' is not a transition edge. configure_transition_event only operates on USMGraphNode_TransitionEdge instances."),
+			*TransitionGuidStr));
+	}
+
+	ISMGraphGeneration::FConfigureTransitionEventArgs ConfigureArgs;
+	TArray<FString> AppliedFields;
+
+	FString OwnerInstanceStr;
+	if (InArgs->TryGetStringField(Args::DelegateOwnerInstance, OwnerInstanceStr))
+	{
+		ESMDelegateOwner OwnerInstance;
+		if (!LD::Assist::Private::ResolveDelegateOwnerInstance(OwnerInstanceStr, OwnerInstance))
+		{
+			return FSMAssistOperationResult::MakeError(FString::Printf(
+				TEXT("Unrecognized 'delegate_owner_instance' '%s'. Accepted: This, Context, PreviousState."),
+				*OwnerInstanceStr));
+		}
+		ConfigureArgs.DelegateOwnerInstance = OwnerInstance;
+		AppliedFields.Add(Args::DelegateOwnerInstance);
+	}
+
+	FString OwnerClassPath;
+	if (InArgs->TryGetStringField(Args::DelegateOwnerClass, OwnerClassPath))
+	{
+		if (OwnerClassPath.IsEmpty())
+		{
+			ConfigureArgs.DelegateOwnerClass = TSubclassOf<UObject>(nullptr);
+			AppliedFields.Add(Args::DelegateOwnerClass);
+		}
+		else
+		{
+			UClass* OwnerClass = LoadClass<UObject>(nullptr, *OwnerClassPath);
+			if (!OwnerClass)
+			{
+				return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("Could not load 'delegate_owner_class' '%s'."), *OwnerClassPath));
+			}
+			ConfigureArgs.DelegateOwnerClass = TSubclassOf<UObject>(OwnerClass);
+			AppliedFields.Add(Args::DelegateOwnerClass);
+		}
+	}
+
+	FString DelegateName;
+	if (InArgs->TryGetStringField(Args::DelegatePropertyName, DelegateName))
+	{
+		ConfigureArgs.DelegatePropertyName = DelegateName.IsEmpty() ? FName(NAME_None) : FName(*DelegateName);
+		AppliedFields.Add(Args::DelegatePropertyName);
+	}
+
+	bool bTargetedUpdate = false;
+	if (InArgs->TryGetBoolField(Args::EventTriggersTargetedUpdate, bTargetedUpdate))
+	{
+		ConfigureArgs.bEventTriggersTargetedUpdate = bTargetedUpdate;
+		AppliedFields.Add(Args::EventTriggersTargetedUpdate);
+	}
+
+	bool bFullUpdate = false;
+	if (InArgs->TryGetBoolField(Args::EventTriggersFullUpdate, bFullUpdate))
+	{
+		ConfigureArgs.bEventTriggersFullUpdate = bFullUpdate;
+		AppliedFields.Add(Args::EventTriggersFullUpdate);
+	}
+
+	if (AppliedFields.Num() == 0)
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("configure_transition_event requires at least one of 'delegate_owner_instance', 'delegate_owner_class', 'delegate_property_name', 'event_triggers_targeted_update', 'event_triggers_full_update'."));
+	}
+
+	FString GraphGenError;
+	ISMGraphGeneration* GraphGen = LD::Assist::Private::GetGraphGeneration(GraphGenError);
+	if (!GraphGen)
+	{
+		return FSMAssistOperationResult::MakeError(GraphGenError);
+	}
+
+	const bool bApplied = GraphGen->ConfigureTransitionEvent(TransitionEdge, ConfigureArgs);
+
+	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
+	Payload->SetStringField(Args::TransitionGuid, TransitionEdge->NodeGuid.ToString());
+	Payload->SetBoolField(Args::Applied, bApplied);
+	{
+		TArray<TSharedPtr<FJsonValue>> AppliedJson;
+		for (const FString& Field : AppliedFields)
+		{
+			AppliedJson.Add(MakeShared<FJsonValueString>(Field));
+		}
+		Payload->SetArrayField(Args::AppliedFields, AppliedJson);
+	}
+	return FSMAssistOperationResult::MakeSuccess(Payload);
+}
+
+namespace LD::Assist::Private
+{
+	static FString GetReadKindName(ISMGraphGeneration::ELocalGraphReadNodeType Kind)
+	{
+		switch (Kind)
+		{
+			case ISMGraphGeneration::ELocalGraphReadNodeType::TimeInState: return TEXT("TimeInState");
+			case ISMGraphGeneration::ELocalGraphReadNodeType::HasStateUpdated: return TEXT("HasStateUpdated");
+			case ISMGraphGeneration::ELocalGraphReadNodeType::CanEvaluate: return TEXT("CanEvaluate");
+			case ISMGraphGeneration::ELocalGraphReadNodeType::CanEvaluateFromEvent: return TEXT("CanEvaluateFromEvent");
+			case ISMGraphGeneration::ELocalGraphReadNodeType::GetStateInformation: return TEXT("GetStateInformation");
+			case ISMGraphGeneration::ELocalGraphReadNodeType::GetTransitionInformation: return TEXT("GetTransitionInformation");
+			case ISMGraphGeneration::ELocalGraphReadNodeType::GetStateMachineReference: return TEXT("GetStateMachineReference");
+			case ISMGraphGeneration::ELocalGraphReadNodeType::GetNodeInstance: return TEXT("GetNodeInstance");
+			case ISMGraphGeneration::ELocalGraphReadNodeType::InEndState: return TEXT("InEndState");
+		}
+		return TEXT("Unknown");
+	}
+
+	static FString GetWriteKindName(ISMGraphGeneration::ELocalGraphWriteNodeType Kind)
+	{
+		switch (Kind)
+		{
+			case ISMGraphGeneration::ELocalGraphWriteNodeType::CanEvaluate: return TEXT("CanEvaluate");
+			case ISMGraphGeneration::ELocalGraphWriteNodeType::CanEvaluateFromEvent: return TEXT("CanEvaluateFromEvent");
+		}
+		return TEXT("Unknown");
+	}
+}
+
+FSMAssistOperationResult LD::Assist::FindNodeTypes(const TSharedRef<FJsonObject>& InArgs)
+{
+	FString AssetPath;
+	if (!InArgs->TryGetStringField(Args::AssetPath, AssetPath) || AssetPath.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'asset_path'."));
+	}
+
+	FString NodeGuidStr;
+	if (!InArgs->TryGetStringField(Args::NodeGuid, NodeGuidStr) || NodeGuidStr.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'node_guid' (state, transition, or conduit guid whose bound graph receives the discovery query)."));
+	}
+
+	FGuid NodeGuid;
+	if (!FGuid::Parse(NodeGuidStr, NodeGuid))
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("Invalid 'node_guid' '%s'."), *NodeGuidStr));
+	}
+
+	FString TypeIdFilter;
+	InArgs->TryGetStringField(Args::TypeIdFilter, TypeIdFilter);
+
+	FString LoadError;
+	USMBlueprint* Blueprint = LD::Assist::Utils::LoadStateMachineBlueprint(AssetPath, LoadError);
+	if (!Blueprint)
+	{
+		return FSMAssistOperationResult::MakeError(LoadError);
+	}
+
+	USMGraphNode_Base* OwnerNode = LD::Assist::Utils::FindNodeByGuid(Blueprint, NodeGuid);
+	if (!OwnerNode)
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("No state, transition, or conduit node with guid '%s' on '%s'."), *NodeGuidStr, *AssetPath));
+	}
+
+	UEdGraph* TargetGraph = OwnerNode->GetBoundGraph();
+	if (!TargetGraph)
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("Owner node '%s' has no bound graph."), *OwnerNode->GetName()));
+	}
+
+	LD::Assist::FFindLocalGraphNodeTypesArgs FindArgs;
+	FindArgs.TargetGraph = TargetGraph;
+	FindArgs.TypeIdFilter = TypeIdFilter;
+
+	const LD::Assist::FFindLocalGraphNodeTypesResult Result = LD::Assist::FindLocalGraphNodeTypes(Blueprint, FindArgs);
+
+	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
+	Payload->SetStringField(Args::AssetPath, Blueprint->GetPathName());
+	Payload->SetStringField(Args::TargetGraphPath, TargetGraph->GetPathName());
+
+	TArray<TSharedPtr<FJsonValue>> ReadKindsJson;
+	for (ISMGraphGeneration::ELocalGraphReadNodeType Kind : Result.ReadKinds)
+	{
+		const TSharedRef<FJsonObject> KindObj = MakeShared<FJsonObject>();
+		KindObj->SetStringField(Args::Kind, Private::GetReadKindName(Kind));
+		KindObj->SetStringField(Args::SpawnOp, Ops::SpawnLocalGraphReadNode);
+		KindObj->SetStringField(Args::SpawnType, Private::GetReadKindName(Kind));
+		ReadKindsJson.Add(MakeShared<FJsonValueObject>(KindObj));
+	}
+	Payload->SetArrayField(Args::ReadKinds, ReadKindsJson);
+
+	TArray<TSharedPtr<FJsonValue>> WriteKindsJson;
+	for (ISMGraphGeneration::ELocalGraphWriteNodeType Kind : Result.WriteKinds)
+	{
+		const TSharedRef<FJsonObject> KindObj = MakeShared<FJsonObject>();
+		KindObj->SetStringField(Args::Kind, Private::GetWriteKindName(Kind));
+		KindObj->SetStringField(Args::SpawnOp, Ops::SpawnLocalGraphWriteNode);
+		KindObj->SetStringField(Args::SpawnType, Private::GetWriteKindName(Kind));
+		WriteKindsJson.Add(MakeShared<FJsonValueObject>(KindObj));
+	}
+	Payload->SetArrayField(Args::WriteKinds, WriteKindsJson);
+
+	Payload->SetStringField(Args::EngineNodesHint,
+		TEXT("Engine K2 nodes (math, function calls, etc.) are not enumerated here. As of UE 5.8, BlueprintTools.find_node_types rejects SM transition/conduit bound graphs with 'Cannot cast type ... to Blueprint'. Workaround: query find_node_types against any non-SM UBlueprint's EventGraph using the same type_id_filter; type_ids are universal across graphs, so the returned strings work in BlueprintTools.create_node when targeting an SM nested graph."));
+
 	return FSMAssistOperationResult::MakeSuccess(Payload);
 }

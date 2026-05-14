@@ -602,4 +602,128 @@ public:
 		double PositionY = 0.0,
 		const FString& NodeInstanceGuid = TEXT(""),
 		int32 NodeInstanceIndex = -1);
+
+	/**
+	 * Spawns a Logic Driver local-graph-write K2 node into a transition's CanEnterTransition graph
+	 * or a conduit's bound graph. The engine's create_node action menu does not expose these
+	 * (they are spawned by LD based on the local transition/conduit scope); this endpoint routes
+	 * through the LD core spawner so they are reachable to MCP authoring.
+	 *
+	 * Compatibility, by kind:
+	 *  - CanEvaluate: transition graphs and conduit graphs. Sets bCanEvaluate on the enclosing edge.
+	 *  - CanEvaluateFromEvent: transition graphs only. Sets bCanEvaluateFromEvent on the transition.
+	 *
+	 * Both kinds expose a single boolean input pin. Seed the pin's literal default via DefaultValue +
+	 * bHasDefaultValue, or wire it to upstream K2 logic with BlueprintTools.connect_pins after spawn.
+	 *
+	 * TransitionEventReturn is intentionally NOT spawnable here. It is auto-placed as a side effect
+	 * of binding a transition delegate. Use ConfigureTransitionEvent to bind, rebind, or clear that
+	 * node.
+	 *
+	 * @param Blueprint The state-machine blueprint. Required.
+	 * @param NodeGuid Guid of the transition or conduit whose bound graph receives the node.
+	 *        Required.
+	 * @param NodeType Local-graph-write type. Accepts PascalCase ("CanEvaluate") or snake_case
+	 *        ("can_evaluate"). Full list: CanEvaluate, CanEvaluateFromEvent. Required.
+	 * @param PositionX Local-graph X. Defaults to 0.
+	 * @param PositionY Local-graph Y. Defaults to 0.
+	 * @param bHasDefaultValue When true, send bDefaultValue through to the op so the boolean input
+	 *        pin's literal default is seeded. When false, the pin keeps its declared default (false).
+	 * @param bDefaultValue Boolean literal to seed when bHasDefaultValue is true.
+	 * @return JSON: { node_guid, type, target_graph_path }
+	 */
+	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
+	static FString SpawnLocalGraphWriteNode(
+		USMBlueprint* Blueprint,
+		const FString& NodeGuid,
+		const FString& NodeType,
+		double PositionX = 0.0,
+		double PositionY = 0.0,
+		bool bHasDefaultValue = false,
+		bool bDefaultValue = false);
+
+	/**
+	 * Binds, rebinds, or clears the auto-bound event on a transition edge, and/or updates its
+	 * trigger flags. Mirrors a user edit in the transition's Details panel exactly: each set field
+	 * is applied via PreEditChange/PostEditChangeProperty so cascading resets and downstream
+	 * listeners (including an open Details panel auto-refresh) behave identically.
+	 *
+	 * Clear semantics: pass bUpdateDelegateName = true with DelegatePropertyName = "" to clear the
+	 * binding. The auto-spawned event entry node is removed from the transition's bound graph; any
+	 * TransitionEventReturn node the user wired downstream logic into is PRESERVED (matches the
+	 * Details panel clear behavior so unbind/rebind cycles don't lose work).
+	 *
+	 * Sentinel disambiguation: empty string + null are natural "leave alone" defaults for
+	 * DelegateOwnerInstance and DelegateOwnerClass. For DelegatePropertyName and the trigger flags,
+	 * the matching bUpdate* boolean gates whether the value reaches the op. At least one field
+	 * (after gating) must be supplied or the op fails.
+	 *
+	 * @param Blueprint The state-machine blueprint. Required.
+	 * @param TransitionGuid Guid of the transition edge to reconfigure. Required.
+	 * @param DelegateOwnerInstance Optional. Where the delegate lives: "This", "Context",
+	 *        "PreviousState". Empty = leave alone. Changing this resets DelegateOwnerClass and
+	 *        DelegatePropertyName as a side effect, so supply them together if you want to switch
+	 *        both.
+	 * @param DelegateOwnerClass Optional. Class owning the delegate property (required when
+	 *        DelegateOwnerInstance is Context). Null = leave alone. This adapter cannot clear the
+	 *        class; for that, call sm.configure_transition_event directly with
+	 *        delegate_owner_class="".
+	 * @param bUpdateDelegateName Gate for DelegatePropertyName. Must be true for the name field to
+	 *        reach the op.
+	 * @param DelegatePropertyName The multicast delegate property name to bind. Empty + gate=true
+	 *        clears the binding.
+	 * @param bUpdateTargetedUpdate Gate for bEventTriggersTargetedUpdate.
+	 * @param bEventTriggersTargetedUpdate Trigger a targeted update of the SM limited to this
+	 *        transition and destination state when the event fires. Propagates to TransitionEventReturn
+	 *        nodes configured to follow their owning transition's settings.
+	 * @param bUpdateFullUpdate Gate for bEventTriggersFullUpdate.
+	 * @param bEventTriggersFullUpdate Trigger a full SM update when the event fires (legacy
+	 *        behavior; applied after targeted update). Propagates to TransitionEventReturn nodes
+	 *        configured to follow their owning transition's settings.
+	 * @return JSON: { transition_guid, applied, applied_fields:[...] }
+	 */
+	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
+	static FString ConfigureTransitionEvent(
+		USMBlueprint* Blueprint,
+		const FString& TransitionGuid,
+		const FString& DelegateOwnerInstance = TEXT(""),
+		UClass* DelegateOwnerClass = nullptr,
+		bool bUpdateDelegateName = false,
+		const FString& DelegatePropertyName = TEXT(""),
+		bool bUpdateTargetedUpdate = false,
+		bool bEventTriggersTargetedUpdate = false,
+		bool bUpdateFullUpdate = false,
+		bool bEventTriggersFullUpdate = false);
+
+	/**
+	 * Enumerates Logic Driver K2 read/write kinds spawnable into a target state/transition/conduit's
+	 * bound graph. The Logic Driver companion to BlueprintTools.find_node_types; engine K2 nodes
+	 * are NOT included here.
+	 *
+	 * Why this exists: the engine action menu filters LD K2 nodes out (USMGraphK2Node_*::IsActionFilteredOut
+	 * rejects non-SM contexts), and LD spawns them through dedicated SMAssist ops, so even a
+	 * fully-fixed upstream find_node_types would return zero LD kinds. This endpoint surfaces them
+	 * in one call, with the matching spawn op and spawn-type string per entry.
+	 *
+	 * As of UE 5.8, BlueprintTools.find_node_types itself fails on SM transition/conduit bound
+	 * graphs with "Cannot cast type ... to Blueprint" (the upstream code does a direct cast of
+	 * Graph->GetOuter() to UBlueprint, which works for top-level BP graphs but not SM nested ones).
+	 * The workaround is to query find_node_types against any non-SM UBlueprint's EventGraph and
+	 * reuse the resulting type_id strings inside an SM nested graph via BlueprintTools.create_node;
+	 * type_ids are universal across graphs.
+	 *
+	 * @param Blueprint The state-machine blueprint. Required.
+	 * @param NodeGuid Guid of the state, transition, or conduit whose bound graph drives the
+	 *        compatibility check. Required.
+	 * @param TypeIdFilter Optional case-insensitive substring match against the LD kind name
+	 *        (e.g. "evaluate" matches CanEvaluate and CanEvaluateFromEvent). Empty = return every
+	 *        compatible kind.
+	 * @return JSON: { asset_path, target_graph_path, read_kinds:[{kind, spawn_op, spawn_type}…],
+	 *         write_kinds:[…], engine_nodes_hint }
+	 */
+	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
+	static FString FindNodeTypes(
+		USMBlueprint* Blueprint,
+		const FString& NodeGuid,
+		const FString& TypeIdFilter = TEXT(""));
 };

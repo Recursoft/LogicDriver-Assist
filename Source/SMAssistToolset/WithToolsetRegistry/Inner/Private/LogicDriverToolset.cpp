@@ -434,3 +434,72 @@ FString ULogicDriverToolset::SpawnLocalGraphReadNode(
 	LDA::AddIfNotIndexNone(*Args, TEXT("node_instance_index"), NodeInstanceIndex);
 	return LDA::Execute(TEXT("sm.spawn_local_graph_read_node"), Args);
 }
+
+FString ULogicDriverToolset::SpawnLocalGraphWriteNode(
+	USMBlueprint* Blueprint,
+	const FString& NodeGuid,
+	const FString& NodeType,
+	double PositionX,
+	double PositionY,
+	bool bHasDefaultValue,
+	bool bDefaultValue)
+{
+	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
+	Args->SetStringField(TEXT("node_guid"), NodeGuid);
+	Args->SetStringField(TEXT("type"), NodeType);
+	Args->SetNumberField(TEXT("position_x"), PositionX);
+	Args->SetNumberField(TEXT("position_y"), PositionY);
+	if (bHasDefaultValue)
+	{
+		LDA::AddBool(*Args, TEXT("default_value"), bDefaultValue);
+	}
+	return LDA::Execute(TEXT("sm.spawn_local_graph_write_node"), Args);
+}
+
+FString ULogicDriverToolset::ConfigureTransitionEvent(
+	USMBlueprint* Blueprint,
+	const FString& TransitionGuid,
+	const FString& DelegateOwnerInstance,
+	UClass* DelegateOwnerClass,
+	bool bUpdateDelegateName,
+	const FString& DelegatePropertyName,
+	bool bUpdateTargetedUpdate,
+	bool bEventTriggersTargetedUpdate,
+	bool bUpdateFullUpdate,
+	bool bEventTriggersFullUpdate)
+{
+	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
+	Args->SetStringField(TEXT("transition_guid"), TransitionGuid);
+	LDA::AddIfNonEmpty(*Args, TEXT("delegate_owner_instance"), DelegateOwnerInstance);
+	if (DelegateOwnerClass)
+	{
+		LDA::AddObjectPath(*Args, TEXT("delegate_owner_class"), DelegateOwnerClass);
+	}
+	if (bUpdateDelegateName)
+	{
+		Args->SetStringField(TEXT("delegate_property_name"), DelegatePropertyName);
+	}
+	if (bUpdateTargetedUpdate)
+	{
+		LDA::AddBool(*Args, TEXT("event_triggers_targeted_update"), bEventTriggersTargetedUpdate);
+	}
+	if (bUpdateFullUpdate)
+	{
+		LDA::AddBool(*Args, TEXT("event_triggers_full_update"), bEventTriggersFullUpdate);
+	}
+	return LDA::Execute(TEXT("sm.configure_transition_event"), Args);
+}
+
+FString ULogicDriverToolset::FindNodeTypes(
+	USMBlueprint* Blueprint,
+	const FString& NodeGuid,
+	const FString& TypeIdFilter)
+{
+	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
+	Args->SetStringField(TEXT("node_guid"), NodeGuid);
+	LDA::AddIfNonEmpty(*Args, TEXT("type_id_filter"), TypeIdFilter);
+	return LDA::Execute(TEXT("sm.find_node_types"), Args);
+}

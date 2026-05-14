@@ -34,6 +34,9 @@ namespace LD::Assist::Ops
 	inline constexpr const TCHAR* ConfigureSMComponentOnActor = TEXT("sm.configure_sm_component_on_actor");
 	inline constexpr const TCHAR* SpawnLocalGraphReadNode = TEXT("sm.spawn_local_graph_read_node");
 	inline constexpr const TCHAR* ConfigureReference = TEXT("sm.configure_reference");
+	inline constexpr const TCHAR* SpawnLocalGraphWriteNode = TEXT("sm.spawn_local_graph_write_node");
+	inline constexpr const TCHAR* ConfigureTransitionEvent = TEXT("sm.configure_transition_event");
+	inline constexpr const TCHAR* FindNodeTypes = TEXT("sm.find_node_types");
 }
 
 namespace LD::Assist::Args
@@ -171,4 +174,18 @@ namespace LD::Assist::Args
 	inline constexpr const TCHAR* NodeInstanceGuid = TEXT("node_instance_guid");
 	inline constexpr const TCHAR* NodeInstanceIndex = TEXT("node_instance_index");
 	inline constexpr const TCHAR* TargetGraphPath = TEXT("target_graph_path");
+
+	inline constexpr const TCHAR* DelegateOwnerInstance = TEXT("delegate_owner_instance");
+	inline constexpr const TCHAR* DelegateOwnerClass = TEXT("delegate_owner_class");
+	inline constexpr const TCHAR* DelegatePropertyName = TEXT("delegate_property_name");
+	inline constexpr const TCHAR* EventTriggersTargetedUpdate = TEXT("event_triggers_targeted_update");
+	inline constexpr const TCHAR* EventTriggersFullUpdate = TEXT("event_triggers_full_update");
+
+	inline constexpr const TCHAR* TypeIdFilter = TEXT("type_id_filter");
+	inline constexpr const TCHAR* AppliedFields = TEXT("applied_fields");
+	inline constexpr const TCHAR* ReadKinds = TEXT("read_kinds");
+	inline constexpr const TCHAR* WriteKinds = TEXT("write_kinds");
+	inline constexpr const TCHAR* EngineNodesHint = TEXT("engine_nodes_hint");
+	inline constexpr const TCHAR* SpawnOp = TEXT("spawn_op");
+	inline constexpr const TCHAR* SpawnType = TEXT("spawn_type");
 }
