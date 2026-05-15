@@ -517,3 +517,104 @@ FString ULogicDriverToolset::FindNodeTypes(
 	LDA::AddIfNonEmpty(*Args, TEXT("type_id_filter"), TypeIdFilter);
 	return LDA::Execute(TEXT("sm.find_node_types"), Args);
 }
+
+FString ULogicDriverToolset::AddNodeVariable(
+	UBlueprint* NodeClassBlueprint,
+	const FString& VarName,
+	const FString& VarType,
+	const FString& DefaultValue,
+	const FString& Direction,
+	bool bHidden,
+	bool bReadOnly)
+{
+	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+	LDA::AddObjectPath(*Args, TEXT("asset_path"), NodeClassBlueprint);
+	Args->SetStringField(TEXT("variable_name"), VarName);
+	Args->SetStringField(TEXT("var_type"), VarType);
+	LDA::AddIfNonEmpty(*Args, TEXT("default_value"), DefaultValue);
+	LDA::AddIfNonEmpty(*Args, TEXT("direction"), Direction);
+	if (bHidden)
+	{
+		LDA::AddBool(*Args, TEXT("b_hidden"), bHidden);
+	}
+	if (bReadOnly)
+	{
+		LDA::AddBool(*Args, TEXT("b_read_only"), bReadOnly);
+	}
+	return LDA::Execute(TEXT("sm.add_node_variable"), Args);
+}
+
+FString ULogicDriverToolset::ConfigureNodeVariable(
+	UBlueprint* NodeClassBlueprint,
+	const FString& VarName,
+	bool bUpdateDirection,
+	const FString& Direction,
+	bool bUpdateHidden,
+	bool bHidden,
+	bool bUpdateReadOnly,
+	bool bReadOnly)
+{
+	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+	LDA::AddObjectPath(*Args, TEXT("asset_path"), NodeClassBlueprint);
+	Args->SetStringField(TEXT("variable_name"), VarName);
+	if (bUpdateDirection)
+	{
+		LDA::AddBool(*Args, TEXT("b_update_direction"), true);
+		Args->SetStringField(TEXT("direction"), Direction);
+	}
+	if (bUpdateHidden)
+	{
+		LDA::AddBool(*Args, TEXT("b_update_hidden"), true);
+		LDA::AddBool(*Args, TEXT("b_hidden"), bHidden);
+	}
+	if (bUpdateReadOnly)
+	{
+		LDA::AddBool(*Args, TEXT("b_update_read_only"), true);
+		LDA::AddBool(*Args, TEXT("b_read_only"), bReadOnly);
+	}
+	return LDA::Execute(TEXT("sm.configure_node_variable"), Args);
+}
+
+FString ULogicDriverToolset::ConnectNodeVariableOutput(
+	USMBlueprint* Blueprint,
+	const FString& FromStateGuid,
+	int32 FromStackIndex,
+	const FString& FromVarName,
+	const FString& ToStateGuid,
+	int32 ToStackIndex,
+	const FString& ToVarName,
+	const FString& ToOwningBlueprintVariable)
+{
+	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
+	Args->SetStringField(TEXT("from_state_guid"), FromStateGuid);
+	LDA::AddIfNotIndexNone(*Args, TEXT("from_stack_index"), FromStackIndex);
+	Args->SetStringField(TEXT("from_variable_name"), FromVarName);
+	LDA::AddIfNonEmpty(*Args, TEXT("to_state_guid"), ToStateGuid);
+	LDA::AddIfNotIndexNone(*Args, TEXT("to_stack_index"), ToStackIndex);
+	LDA::AddIfNonEmpty(*Args, TEXT("to_variable_name"), ToVarName);
+	LDA::AddIfNonEmpty(*Args, TEXT("to_owning_blueprint_variable"), ToOwningBlueprintVariable);
+	return LDA::Execute(TEXT("sm.connect_node_variable_output"), Args);
+}
+
+FString ULogicDriverToolset::DisconnectNodeVariableOutput(
+	USMBlueprint* Blueprint,
+	const FString& FromStateGuid,
+	int32 FromStackIndex,
+	const FString& FromVarName,
+	const FString& ToStateGuid,
+	int32 ToStackIndex,
+	const FString& ToVarName,
+	const FString& ToOwningBlueprintVariable)
+{
+	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
+	Args->SetStringField(TEXT("from_state_guid"), FromStateGuid);
+	LDA::AddIfNotIndexNone(*Args, TEXT("from_stack_index"), FromStackIndex);
+	Args->SetStringField(TEXT("from_variable_name"), FromVarName);
+	LDA::AddIfNonEmpty(*Args, TEXT("to_state_guid"), ToStateGuid);
+	LDA::AddIfNotIndexNone(*Args, TEXT("to_stack_index"), ToStackIndex);
+	LDA::AddIfNonEmpty(*Args, TEXT("to_variable_name"), ToVarName);
+	LDA::AddIfNonEmpty(*Args, TEXT("to_owning_blueprint_variable"), ToOwningBlueprintVariable);
+	return LDA::Execute(TEXT("sm.disconnect_node_variable_output"), Args);
+}

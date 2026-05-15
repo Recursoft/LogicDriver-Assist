@@ -560,7 +560,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::AddSMVariable;
-		Info.Description = TEXT("Add a member variable to a state-machine blueprint (USMBlueprint). Mirrors the editor's My Blueprint -> +Variable flow via FBlueprintEditorUtils::AddMemberVariable. Use this for FSM-blueprint-scoped variables; node-instance variables on a USMStateInstance subclass require a future sm.add_node_variable op.");
+		Info.Description = TEXT("Add a member variable to a state-machine blueprint (USMBlueprint). Mirrors the editor's My Blueprint -> +Variable flow via FBlueprintEditorUtils::AddMemberVariable. Use this for FSM-blueprint-scoped variables; for node-instance variables on a USMStateInstance / USMConduitInstance / USMTransitionInstance subclass, use sm.add_node_variable instead. NOTE: this op does NOT compile the blueprint. The variable is added to the blueprint's NewVariables list but its FProperty is not materialized on the GeneratedClass until the next sm.compile. Downstream ops that look up the FProperty (notably sm.connect_node_variable_output with to_owning_blueprint_variable) will fail until you compile. Call sm.compile yourself when ready -- batch many adds before compiling for best performance.");
 		Info.InputSchema = MakeSchema(
 			{
 				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the target SMBlueprint.")) },
@@ -669,6 +669,85 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 			},
 			{ Args::AssetPath, Args::NodeGuid });
 		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::FindNodeTypes);
+		RegisterOperation(MoveTemp(Info));
+	}
+
+	{
+		FSMAssistOperationInfo Info;
+		Info.Name = Ops::AddNodeVariable;
+		Info.Description = TEXT("Add a Blueprint variable to a node-class Blueprint (a USMNodeInstance / USMStateInstance / USMConduitInstance / USMTransitionInstance subclass). Mirrors the editor's My Blueprint -> +Variable flow via FBlueprintEditorUtils::AddMemberVariable, and optionally stamps directional / hidden / read-only flags via the same path used by SMVariableCustomization. Transition-class blueprints accept plain variables but reject 'direction', 'b_hidden', 'b_read_only' (matches the editor's Variable Details panel filter). To author state/transition/conduit subclass variables in one call instead of post-add configure, set the directional flags here. COMPILE BEHAVIOR: when any of 'direction', 'b_hidden', 'b_read_only' is set, the blueprint is compiled in-call so the override can be stamped on the CDO; subsequent ops see the new FProperty immediately. When none of those fields are set (plain variable add), the blueprint is NOT compiled -- batch multiple adds and call sm.compile once at the end for best performance.");
+		Info.InputSchema = MakeSchema(
+			{
+				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the node-class blueprint (USMNodeInstance subclass, including state, conduit, transition).")) },
+				{ Args::VariableName, MakePropertyObject(TEXT("string"), TEXT("Variable name (FName-style; no spaces).")) },
+				{ Args::VarType, MakePropertyObject(TEXT("string"), TEXT("Type token. Accepted: bool, int, int64, byte, float, single, string, name, text, vector, vector2d, rotator, transform, linearcolor, color, guid; or a class/struct path such as /Script/Engine.Actor.")) },
+				{ Args::DefaultValue, MakePropertyObject(TEXT("string"), TEXT("Optional. Default value in UE property-text format (e.g. 'true', '1.25', '(R=1.0,G=0.0,B=0.0,A=1.0)'). Empty = engine default for the type.")) },
+				{ Args::Direction, MakePropertyObject(TEXT("string"), TEXT("Optional. 'Input', 'Output', or 'Both'. Empty = no graph-pin exposure (plain BP variable). Transition-class blueprints reject this.")) },
+				{ Args::Hidden, MakePropertyObject(TEXT("boolean"), TEXT("Optional. Hide the variable from on-node display. The property graph is still compiled and evaluated. Transition-class blueprints reject this.")) },
+				{ Args::ReadOnly, MakePropertyObject(TEXT("boolean"), TEXT("Optional. Display the variable as read-only on the placed node. Transition-class blueprints reject this.")) }
+			},
+			{ Args::AssetPath, Args::VariableName, Args::VarType });
+		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::AddNodeVariable);
+		RegisterOperation(MoveTemp(Info));
+	}
+
+	{
+		FSMAssistOperationInfo Info;
+		Info.Name = Ops::ConfigureNodeVariable;
+		Info.Description = TEXT("Reconfigure an existing variable on a node-class blueprint (USMNodeInstance / USMStateInstance / USMConduitInstance subclass). Mirrors the Direction combobox plus Hidden / ReadOnly toggles in SMVariableCustomization. Each field is gated by a paired 'b_update_*' flag so the AI can express 'leave alone' vs 'explicitly set' unambiguously. At least one of b_update_direction, b_update_hidden, b_update_read_only must be true. Transition-class blueprints are not supported (the function only sets directional / hidden / read-only state, which transition-class variables do not have).");
+		Info.InputSchema = MakeSchema(
+			{
+				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the node-class blueprint.")) },
+				{ Args::VariableName, MakePropertyObject(TEXT("string"), TEXT("Existing variable name on the blueprint.")) },
+				{ Args::UpdateDirection, MakePropertyObject(TEXT("boolean"), TEXT("Gate for 'direction'. Must be true for the field to apply.")) },
+				{ Args::Direction, MakePropertyObject(TEXT("string"), TEXT("New direction when gated. Accepted: Input, Output, Both.")) },
+				{ Args::UpdateHidden, MakePropertyObject(TEXT("boolean"), TEXT("Gate for 'b_hidden'.")) },
+				{ Args::Hidden, MakePropertyObject(TEXT("boolean"), TEXT("New hidden state when gated.")) },
+				{ Args::UpdateReadOnly, MakePropertyObject(TEXT("boolean"), TEXT("Gate for 'b_read_only'.")) },
+				{ Args::ReadOnly, MakePropertyObject(TEXT("boolean"), TEXT("New read-only state when gated.")) }
+			},
+			{ Args::AssetPath, Args::VariableName });
+		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::ConfigureNodeVariable);
+		RegisterOperation(MoveTemp(Info));
+	}
+
+	{
+		FSMAssistOperationInfo Info;
+		Info.Name = Ops::ConnectNodeVariableOutput;
+		Info.Description = TEXT("Wire a node-class output variable to either another node's input variable (within the same FSM) or to a variable on the owning FSM blueprint. Spawns the matching IO reader/writer K2 node inside the relevant property sub-graph and links pins, identical to what a user does by opening the property graph and dragging. Stack-aware: when the source or destination variable lives on a stacked instance, set 'from_stack_index' / 'to_stack_index' (same convention as set_node_property; omit or -1 = primary template). Targets are mutually exclusive: supply EITHER 'to_state_guid' + 'to_variable_name' for node->node wiring, OR 'to_owning_blueprint_variable' for node->owner wiring. Idempotent: if the wire already exists, returns success without spawning duplicate IO nodes. Preconditions: source variable must be Output (or Both); destination variable must be Input (or Both) for node->node; owning-BP variable must exist for node->owner; pin types must be compatible.");
+		Info.InputSchema = MakeSchema(
+			{
+				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the state-machine blueprint containing both endpoints.")) },
+				{ Args::FromStateGuid, MakePropertyObject(TEXT("string"), TEXT("Guid of the source state node (the output side).")) },
+				{ Args::FromStackIndex, MakePropertyObject(TEXT("number"), TEXT("Optional. Stack index on the source state. -1 or omitted = primary template.")) },
+				{ Args::FromVariableName, MakePropertyObject(TEXT("string"), TEXT("Output variable name on the source template. Must be configured Output (or Both).")) },
+				{ Args::ToStateGuid, MakePropertyObject(TEXT("string"), TEXT("Guid of the destination state node. Omit (or empty) when wiring to the owning blueprint.")) },
+				{ Args::ToStackIndex, MakePropertyObject(TEXT("number"), TEXT("Optional. Stack index on the destination state. -1 or omitted = primary template.")) },
+				{ Args::ToVariableName, MakePropertyObject(TEXT("string"), TEXT("Input variable name on the destination template. Required for node->node; omit when wiring to the owning blueprint.")) },
+				{ Args::ToOwningBlueprintVariable, MakePropertyObject(TEXT("string"), TEXT("Variable name on the owning FSM blueprint to write into. Mutually exclusive with to_state_guid/to_variable_name.")) }
+			},
+			{ Args::AssetPath, Args::FromStateGuid, Args::FromVariableName });
+		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::ConnectNodeVariableOutput);
+		RegisterOperation(MoveTemp(Info));
+	}
+
+	{
+		FSMAssistOperationInfo Info;
+		Info.Name = Ops::DisconnectNodeVariableOutput;
+		Info.Description = TEXT("Break a previously-established node-output wire. Argument shape mirrors connect_node_variable_output exactly. Returns 'applied' = true when a matching wire was found and broken; false when no matching wire was present (idempotent).");
+		Info.InputSchema = MakeSchema(
+			{
+				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the state-machine blueprint.")) },
+				{ Args::FromStateGuid, MakePropertyObject(TEXT("string"), TEXT("Guid of the source state node.")) },
+				{ Args::FromStackIndex, MakePropertyObject(TEXT("number"), TEXT("Optional. Stack index on the source state. -1 or omitted = primary template.")) },
+				{ Args::FromVariableName, MakePropertyObject(TEXT("string"), TEXT("Output variable name on the source template.")) },
+				{ Args::ToStateGuid, MakePropertyObject(TEXT("string"), TEXT("Guid of the destination state node. Omit when disconnecting from the owning blueprint.")) },
+				{ Args::ToStackIndex, MakePropertyObject(TEXT("number"), TEXT("Optional. Stack index on the destination state.")) },
+				{ Args::ToVariableName, MakePropertyObject(TEXT("string"), TEXT("Input variable name on the destination template.")) },
+				{ Args::ToOwningBlueprintVariable, MakePropertyObject(TEXT("string"), TEXT("Variable name on the owning blueprint. Mutually exclusive with to_state_guid/to_variable_name.")) }
+			},
+			{ Args::AssetPath, Args::FromStateGuid, Args::FromVariableName });
+		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::DisconnectNodeVariableOutput);
 		RegisterOperation(MoveTemp(Info));
 	}
 }

@@ -38,6 +38,10 @@ namespace LD::Assist::Ops
 	inline constexpr const TCHAR* SpawnLocalGraphWriteNode = TEXT("sm.spawn_local_graph_write_node");
 	inline constexpr const TCHAR* ConfigureTransitionEvent = TEXT("sm.configure_transition_event");
 	inline constexpr const TCHAR* FindNodeTypes = TEXT("sm.find_node_types");
+	inline constexpr const TCHAR* AddNodeVariable = TEXT("sm.add_node_variable");
+	inline constexpr const TCHAR* ConfigureNodeVariable = TEXT("sm.configure_node_variable");
+	inline constexpr const TCHAR* ConnectNodeVariableOutput = TEXT("sm.connect_node_variable_output");
+	inline constexpr const TCHAR* DisconnectNodeVariableOutput = TEXT("sm.disconnect_node_variable_output");
 }
 
 namespace LD::Assist::Args
@@ -190,4 +194,17 @@ namespace LD::Assist::Args
 	inline constexpr const TCHAR* EngineNodesHint = TEXT("engine_nodes_hint");
 	inline constexpr const TCHAR* SpawnOp = TEXT("spawn_op");
 	inline constexpr const TCHAR* SpawnType = TEXT("spawn_type");
+
+	inline constexpr const TCHAR* Direction = TEXT("direction");
+	inline constexpr const TCHAR* Hidden = TEXT("b_hidden");
+	inline constexpr const TCHAR* ReadOnly = TEXT("b_read_only");
+	inline constexpr const TCHAR* UpdateDirection = TEXT("b_update_direction");
+	inline constexpr const TCHAR* UpdateHidden = TEXT("b_update_hidden");
+	inline constexpr const TCHAR* UpdateReadOnly = TEXT("b_update_read_only");
+
+	inline constexpr const TCHAR* FromStackIndex = TEXT("from_stack_index");
+	inline constexpr const TCHAR* FromVariableName = TEXT("from_variable_name");
+	inline constexpr const TCHAR* ToStackIndex = TEXT("to_stack_index");
+	inline constexpr const TCHAR* ToVariableName = TEXT("to_variable_name");
+	inline constexpr const TCHAR* ToOwningBlueprintVariable = TEXT("to_owning_blueprint_variable");
 }

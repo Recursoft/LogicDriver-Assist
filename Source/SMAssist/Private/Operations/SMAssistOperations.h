@@ -71,4 +71,12 @@ namespace LD::Assist
 	FSMAssistOperationResult ConfigureTransitionEvent(const TSharedRef<FJsonObject>& InArgs);
 
 	FSMAssistOperationResult FindNodeTypes(const TSharedRef<FJsonObject>& InArgs);
+
+	FSMAssistOperationResult AddNodeVariable(const TSharedRef<FJsonObject>& InArgs);
+
+	FSMAssistOperationResult ConfigureNodeVariable(const TSharedRef<FJsonObject>& InArgs);
+
+	FSMAssistOperationResult ConnectNodeVariableOutput(const TSharedRef<FJsonObject>& InArgs);
+
+	FSMAssistOperationResult DisconnectNodeVariableOutput(const TSharedRef<FJsonObject>& InArgs);
 }

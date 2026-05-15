@@ -4125,3 +4125,495 @@ FSMAssistOperationResult LD::Assist::FindNodeTypes(const TSharedRef<FJsonObject>
 
 	return FSMAssistOperationResult::MakeSuccess(Payload);
 }
+
+namespace LD::Assist::Private
+{
+	static bool ResolveDirection(const FString& InValue, ESMGraphPropertyDirection& OutDirection)
+	{
+		if (InValue.Equals(TEXT("Input"), ESearchCase::IgnoreCase))
+		{
+			OutDirection = ESMGraphPropertyDirection::Input;
+			return true;
+		}
+		if (InValue.Equals(TEXT("Output"), ESearchCase::IgnoreCase))
+		{
+			OutDirection = ESMGraphPropertyDirection::Output;
+			return true;
+		}
+		if (InValue.Equals(TEXT("Both"), ESearchCase::IgnoreCase))
+		{
+			OutDirection = ESMGraphPropertyDirection::Both;
+			return true;
+		}
+		return false;
+	}
+
+	static const TCHAR* DirectionToString(ESMGraphPropertyDirection InDirection)
+	{
+		switch (InDirection)
+		{
+		case ESMGraphPropertyDirection::Input:
+			return TEXT("Input");
+		case ESMGraphPropertyDirection::Output:
+			return TEXT("Output");
+		case ESMGraphPropertyDirection::Both:
+			return TEXT("Both");
+		}
+		return TEXT("");
+	}
+
+	static UBlueprint* LoadNodeClassBlueprint(const FString& InAssetPath, FString& OutError)
+	{
+		UBlueprint* BP = LoadObject<UBlueprint>(nullptr, *InAssetPath);
+		if (!BP)
+		{
+			OutError = FString::Printf(TEXT("Could not load 'asset_path' '%s'."), *InAssetPath);
+			return nullptr;
+		}
+		if (!BP->ParentClass || !BP->ParentClass->IsChildOf(USMNodeInstance::StaticClass()))
+		{
+			OutError = FString::Printf(TEXT("Blueprint '%s' is not a USMNodeInstance subclass."), *InAssetPath);
+			return nullptr;
+		}
+		return BP;
+	}
+
+	static bool IsTransitionClassBlueprint(const UBlueprint* InBP)
+	{
+		return InBP && InBP->ParentClass && InBP->ParentClass->IsChildOf(USMTransitionInstance::StaticClass());
+	}
+}
+
+FSMAssistOperationResult LD::Assist::AddNodeVariable(const TSharedRef<FJsonObject>& InArgs)
+{
+	FString AssetPath;
+	if (!InArgs->TryGetStringField(Args::AssetPath, AssetPath) || AssetPath.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'asset_path'."));
+	}
+
+	FString VarName;
+	if (!InArgs->TryGetStringField(Args::VariableName, VarName) || VarName.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'variable_name'."));
+	}
+
+	FString VarType;
+	if (!InArgs->TryGetStringField(Args::VarType, VarType) || VarType.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'var_type'."));
+	}
+
+	FString LoadError;
+	UBlueprint* Blueprint = LD::Assist::Private::LoadNodeClassBlueprint(AssetPath, LoadError);
+	if (!Blueprint)
+	{
+		return FSMAssistOperationResult::MakeError(LoadError);
+	}
+
+	FEdGraphPinType PinType;
+	if (!LD::Assist::Private::ResolveVariablePinType(VarType, PinType))
+	{
+		return FSMAssistOperationResult::MakeError(
+			FString::Printf(TEXT("Unrecognized 'var_type' '%s'. Accepted values: bool, int, int64, byte, float, single, string, name, text, vector, vector2d, rotator, transform, linearcolor, color, guid, or a class/struct path (e.g. /Script/Engine.Actor)."), *VarType));
+	}
+
+	ISMGraphGeneration::FCreateNodeClassVariableArgs CreateArgs;
+	CreateArgs.VariableName = FName(*VarName);
+	CreateArgs.VariableType = PinType;
+	InArgs->TryGetStringField(Args::DefaultValue, CreateArgs.DefaultValue);
+
+	FString DirectionStr;
+	if (InArgs->TryGetStringField(Args::Direction, DirectionStr) && !DirectionStr.IsEmpty())
+	{
+		ESMGraphPropertyDirection Direction;
+		if (!LD::Assist::Private::ResolveDirection(DirectionStr, Direction))
+		{
+			return FSMAssistOperationResult::MakeError(
+				FString::Printf(TEXT("Unrecognized 'direction' '%s'. Accepted: Input, Output, Both."), *DirectionStr));
+		}
+		CreateArgs.Direction = Direction;
+	}
+
+	bool BoolValue = false;
+	if (InArgs->TryGetBoolField(Args::Hidden, BoolValue))
+	{
+		CreateArgs.bHidden = BoolValue;
+	}
+	if (InArgs->TryGetBoolField(Args::ReadOnly, BoolValue))
+	{
+		CreateArgs.bReadOnly = BoolValue;
+	}
+
+	const bool bWantsSMConfig = CreateArgs.Direction.IsSet() || CreateArgs.bHidden.IsSet() || CreateArgs.bReadOnly.IsSet();
+	if (bWantsSMConfig && LD::Assist::Private::IsTransitionClassBlueprint(Blueprint))
+	{
+		return FSMAssistOperationResult::MakeError(
+			FString::Printf(TEXT("Blueprint '%s' is a USMTransitionInstance subclass. Transition-class variables do not support directional / hidden / read-only configuration (matches editor filter). Omit 'direction', 'b_hidden', 'b_read_only' to add a plain variable."), *AssetPath));
+	}
+
+	FString GraphGenError;
+	ISMGraphGeneration* GraphGen = LD::Assist::Private::GetGraphGeneration(GraphGenError);
+	if (!GraphGen)
+	{
+		return FSMAssistOperationResult::MakeError(GraphGenError);
+	}
+
+	if (!GraphGen->CreateNodeClassVariable(Blueprint, CreateArgs))
+	{
+		return FSMAssistOperationResult::MakeError(
+			FString::Printf(TEXT("CreateNodeClassVariable failed for '%s' on '%s'."), *VarName, *AssetPath));
+	}
+
+	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
+	Payload->SetStringField(Args::AssetPath, Blueprint->GetPathName());
+	Payload->SetStringField(Args::VariableName, VarName);
+	Payload->SetStringField(Args::VarType, VarType);
+	if (!CreateArgs.DefaultValue.IsEmpty())
+	{
+		Payload->SetStringField(Args::DefaultValue, CreateArgs.DefaultValue);
+	}
+	if (CreateArgs.Direction.IsSet())
+	{
+		Payload->SetStringField(Args::Direction, LD::Assist::Private::DirectionToString(CreateArgs.Direction.GetValue()));
+	}
+	if (CreateArgs.bHidden.IsSet())
+	{
+		Payload->SetBoolField(Args::Hidden, CreateArgs.bHidden.GetValue());
+	}
+	if (CreateArgs.bReadOnly.IsSet())
+	{
+		Payload->SetBoolField(Args::ReadOnly, CreateArgs.bReadOnly.GetValue());
+	}
+	return FSMAssistOperationResult::MakeSuccess(Payload);
+}
+
+FSMAssistOperationResult LD::Assist::ConfigureNodeVariable(const TSharedRef<FJsonObject>& InArgs)
+{
+	FString AssetPath;
+	if (!InArgs->TryGetStringField(Args::AssetPath, AssetPath) || AssetPath.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'asset_path'."));
+	}
+
+	FString VarName;
+	if (!InArgs->TryGetStringField(Args::VariableName, VarName) || VarName.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'variable_name'."));
+	}
+
+	FString LoadError;
+	UBlueprint* Blueprint = LD::Assist::Private::LoadNodeClassBlueprint(AssetPath, LoadError);
+	if (!Blueprint)
+	{
+		return FSMAssistOperationResult::MakeError(LoadError);
+	}
+	if (LD::Assist::Private::IsTransitionClassBlueprint(Blueprint))
+	{
+		return FSMAssistOperationResult::MakeError(
+			FString::Printf(TEXT("Blueprint '%s' is a USMTransitionInstance subclass. configure_node_variable sets directional / hidden / read-only state, which transition-class variables do not support."), *AssetPath));
+	}
+
+	ISMGraphGeneration::FConfigureNodeClassVariableArgs ConfigureArgs;
+	ConfigureArgs.VariableName = FName(*VarName);
+	TArray<FString> Applied;
+
+	bool bUpdateDirection = false;
+	if (InArgs->TryGetBoolField(Args::UpdateDirection, bUpdateDirection) && bUpdateDirection)
+	{
+		FString DirectionStr;
+		InArgs->TryGetStringField(Args::Direction, DirectionStr);
+		ESMGraphPropertyDirection Direction;
+		if (!LD::Assist::Private::ResolveDirection(DirectionStr, Direction))
+		{
+			return FSMAssistOperationResult::MakeError(
+				FString::Printf(TEXT("Unrecognized 'direction' '%s'. Accepted: Input, Output, Both."), *DirectionStr));
+		}
+		ConfigureArgs.Direction = Direction;
+		Applied.Add(Args::Direction);
+	}
+
+	bool bUpdateHidden = false;
+	if (InArgs->TryGetBoolField(Args::UpdateHidden, bUpdateHidden) && bUpdateHidden)
+	{
+		bool HiddenValue = false;
+		InArgs->TryGetBoolField(Args::Hidden, HiddenValue);
+		ConfigureArgs.bHidden = HiddenValue;
+		Applied.Add(Args::Hidden);
+	}
+
+	bool bUpdateReadOnly = false;
+	if (InArgs->TryGetBoolField(Args::UpdateReadOnly, bUpdateReadOnly) && bUpdateReadOnly)
+	{
+		bool ReadOnlyValue = false;
+		InArgs->TryGetBoolField(Args::ReadOnly, ReadOnlyValue);
+		ConfigureArgs.bReadOnly = ReadOnlyValue;
+		Applied.Add(Args::ReadOnly);
+	}
+
+	if (Applied.Num() == 0)
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("configure_node_variable requires at least one of 'b_update_direction', 'b_update_hidden', 'b_update_read_only' set to true."));
+	}
+
+	FString GraphGenError;
+	ISMGraphGeneration* GraphGen = LD::Assist::Private::GetGraphGeneration(GraphGenError);
+	if (!GraphGen)
+	{
+		return FSMAssistOperationResult::MakeError(GraphGenError);
+	}
+
+	const bool bApplied = GraphGen->ConfigureNodeClassVariable(Blueprint, ConfigureArgs);
+	if (!bApplied)
+	{
+		return FSMAssistOperationResult::MakeError(
+			FString::Printf(TEXT("ConfigureNodeClassVariable failed for '%s' on '%s' (variable may not exist)."), *VarName, *AssetPath));
+	}
+
+	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
+	Payload->SetStringField(Args::AssetPath, Blueprint->GetPathName());
+	Payload->SetStringField(Args::VariableName, VarName);
+	{
+		TArray<TSharedPtr<FJsonValue>> AppliedJson;
+		for (const FString& Field : Applied)
+		{
+			AppliedJson.Add(MakeShared<FJsonValueString>(Field));
+		}
+		Payload->SetArrayField(Args::Applied, AppliedJson);
+	}
+	if (ConfigureArgs.Direction.IsSet())
+	{
+		Payload->SetStringField(Args::Direction, LD::Assist::Private::DirectionToString(ConfigureArgs.Direction.GetValue()));
+	}
+	if (ConfigureArgs.bHidden.IsSet())
+	{
+		Payload->SetBoolField(Args::Hidden, ConfigureArgs.bHidden.GetValue());
+	}
+	if (ConfigureArgs.bReadOnly.IsSet())
+	{
+		Payload->SetBoolField(Args::ReadOnly, ConfigureArgs.bReadOnly.GetValue());
+	}
+	return FSMAssistOperationResult::MakeSuccess(Payload);
+}
+
+namespace LD::Assist::Private
+{
+	static bool BuildNodeVariableEndpoint(USMBlueprint* InBlueprint,
+		const FString& InStateGuidStr,
+		const FString& InStackKey,
+		const FString& InVarName,
+		const TSharedRef<FJsonObject>& InArgs,
+		ISMGraphGeneration::FNodeVariableEndpoint& OutEndpoint,
+		FString& OutError)
+	{
+		FGuid StateGuid;
+		if (!FGuid::Parse(InStateGuidStr, StateGuid))
+		{
+			OutError = FString::Printf(TEXT("Invalid state guid '%s'."), *InStateGuidStr);
+			return false;
+		}
+		USMGraphNode_Base* Node = LD::Assist::Utils::FindNodeByGuid(InBlueprint, StateGuid);
+		if (!Node)
+		{
+			OutError = FString::Printf(TEXT("No state node with guid '%s'."), *InStateGuidStr);
+			return false;
+		}
+		OutEndpoint.StateNode = Node;
+		OutEndpoint.VariableName = FName(*InVarName);
+
+		int32 StackIndex = INDEX_NONE;
+		if (InArgs->TryGetNumberField(InStackKey, StackIndex) && StackIndex >= 0)
+		{
+			OutEndpoint.StackIndex = StackIndex;
+		}
+		return true;
+	}
+}
+
+FSMAssistOperationResult LD::Assist::ConnectNodeVariableOutput(const TSharedRef<FJsonObject>& InArgs)
+{
+	FString AssetPath;
+	if (!InArgs->TryGetStringField(Args::AssetPath, AssetPath) || AssetPath.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'asset_path'."));
+	}
+
+	FString FromStateGuidStr;
+	if (!InArgs->TryGetStringField(Args::FromStateGuid, FromStateGuidStr) || FromStateGuidStr.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'from_state_guid'."));
+	}
+	FString FromVarName;
+	if (!InArgs->TryGetStringField(Args::FromVariableName, FromVarName) || FromVarName.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'from_variable_name'."));
+	}
+
+	FString ToStateGuidStr;
+	InArgs->TryGetStringField(Args::ToStateGuid, ToStateGuidStr);
+	FString ToVarName;
+	InArgs->TryGetStringField(Args::ToVariableName, ToVarName);
+	FString ToOwningVar;
+	InArgs->TryGetStringField(Args::ToOwningBlueprintVariable, ToOwningVar);
+
+	const bool bHasToInputVariable = !ToStateGuidStr.IsEmpty() || !ToVarName.IsEmpty();
+	const bool bHasToOwning = !ToOwningVar.IsEmpty();
+	if (bHasToInputVariable == bHasToOwning)
+	{
+		return FSMAssistOperationResult::MakeError(
+			TEXT("Exactly one of (to_state_guid + to_variable_name) or to_owning_blueprint_variable must be supplied."));
+	}
+	if (bHasToInputVariable && (ToStateGuidStr.IsEmpty() || ToVarName.IsEmpty()))
+	{
+		return FSMAssistOperationResult::MakeError(
+			TEXT("Both 'to_state_guid' and 'to_variable_name' are required for node->node wiring."));
+	}
+
+	FString LoadError;
+	USMBlueprint* Blueprint = LD::Assist::Utils::LoadStateMachineBlueprint(AssetPath, LoadError);
+	if (!Blueprint)
+	{
+		return FSMAssistOperationResult::MakeError(LoadError);
+	}
+
+	ISMGraphGeneration::FConnectNodeVariableOutputArgs ConnectArgs;
+	FString EndpointError;
+	if (!LD::Assist::Private::BuildNodeVariableEndpoint(Blueprint, FromStateGuidStr, Args::FromStackIndex, FromVarName, InArgs, ConnectArgs.FromOutputVariable, EndpointError))
+	{
+		return FSMAssistOperationResult::MakeError(EndpointError);
+	}
+
+	if (bHasToInputVariable)
+	{
+		ISMGraphGeneration::FNodeVariableEndpoint ToEndpoint;
+		if (!LD::Assist::Private::BuildNodeVariableEndpoint(Blueprint, ToStateGuidStr, Args::ToStackIndex, ToVarName, InArgs, ToEndpoint, EndpointError))
+		{
+			return FSMAssistOperationResult::MakeError(EndpointError);
+		}
+		ConnectArgs.ToInputVariable = ToEndpoint;
+	}
+	else
+	{
+		ConnectArgs.ToOwningBlueprintVariable = FName(*ToOwningVar);
+	}
+
+	FString GraphGenError;
+	ISMGraphGeneration* GraphGen = LD::Assist::Private::GetGraphGeneration(GraphGenError);
+	if (!GraphGen)
+	{
+		return FSMAssistOperationResult::MakeError(GraphGenError);
+	}
+
+	if (!GraphGen->ConnectNodeVariableOutput(Blueprint, ConnectArgs))
+	{
+		return FSMAssistOperationResult::MakeError(
+			TEXT("ConnectNodeVariableOutput failed. See log for details. Likely causes: source variable not configured as Output (or destination not as Input); pin types incompatible; missing variable; or — for to_owning_blueprint_variable targets — the FSM blueprint has not been compiled since AddSMVariable (AddSMVariable does not auto-compile, call sm.compile to materialize the FProperty)."));
+	}
+
+	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
+	Payload->SetStringField(Args::AssetPath, Blueprint->GetPathName());
+	Payload->SetStringField(Args::FromStateGuid, FromStateGuidStr);
+	Payload->SetStringField(Args::FromVariableName, FromVarName);
+	if (ConnectArgs.FromOutputVariable.StackIndex != INDEX_NONE)
+	{
+		Payload->SetNumberField(Args::FromStackIndex, ConnectArgs.FromOutputVariable.StackIndex);
+	}
+	if (bHasToInputVariable)
+	{
+		Payload->SetStringField(Args::ToStateGuid, ToStateGuidStr);
+		Payload->SetStringField(Args::ToVariableName, ToVarName);
+		if (ConnectArgs.ToInputVariable.GetValue().StackIndex != INDEX_NONE)
+		{
+			Payload->SetNumberField(Args::ToStackIndex, ConnectArgs.ToInputVariable.GetValue().StackIndex);
+		}
+	}
+	else
+	{
+		Payload->SetStringField(Args::ToOwningBlueprintVariable, ToOwningVar);
+	}
+	return FSMAssistOperationResult::MakeSuccess(Payload);
+}
+
+FSMAssistOperationResult LD::Assist::DisconnectNodeVariableOutput(const TSharedRef<FJsonObject>& InArgs)
+{
+	FString AssetPath;
+	if (!InArgs->TryGetStringField(Args::AssetPath, AssetPath) || AssetPath.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'asset_path'."));
+	}
+
+	FString FromStateGuidStr;
+	if (!InArgs->TryGetStringField(Args::FromStateGuid, FromStateGuidStr) || FromStateGuidStr.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'from_state_guid'."));
+	}
+	FString FromVarName;
+	if (!InArgs->TryGetStringField(Args::FromVariableName, FromVarName) || FromVarName.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'from_variable_name'."));
+	}
+
+	FString ToStateGuidStr;
+	InArgs->TryGetStringField(Args::ToStateGuid, ToStateGuidStr);
+	FString ToVarName;
+	InArgs->TryGetStringField(Args::ToVariableName, ToVarName);
+	FString ToOwningVar;
+	InArgs->TryGetStringField(Args::ToOwningBlueprintVariable, ToOwningVar);
+
+	const bool bHasToInputVariable = !ToStateGuidStr.IsEmpty() || !ToVarName.IsEmpty();
+	const bool bHasToOwning = !ToOwningVar.IsEmpty();
+	if (bHasToInputVariable == bHasToOwning)
+	{
+		return FSMAssistOperationResult::MakeError(
+			TEXT("Exactly one of (to_state_guid + to_variable_name) or to_owning_blueprint_variable must be supplied."));
+	}
+	if (bHasToInputVariable && (ToStateGuidStr.IsEmpty() || ToVarName.IsEmpty()))
+	{
+		return FSMAssistOperationResult::MakeError(
+			TEXT("Both 'to_state_guid' and 'to_variable_name' are required for node->node disconnect."));
+	}
+
+	FString LoadError;
+	USMBlueprint* Blueprint = LD::Assist::Utils::LoadStateMachineBlueprint(AssetPath, LoadError);
+	if (!Blueprint)
+	{
+		return FSMAssistOperationResult::MakeError(LoadError);
+	}
+
+	ISMGraphGeneration::FConnectNodeVariableOutputArgs DisconnectArgs;
+	FString EndpointError;
+	if (!LD::Assist::Private::BuildNodeVariableEndpoint(Blueprint, FromStateGuidStr, Args::FromStackIndex, FromVarName, InArgs, DisconnectArgs.FromOutputVariable, EndpointError))
+	{
+		return FSMAssistOperationResult::MakeError(EndpointError);
+	}
+
+	if (bHasToInputVariable)
+	{
+		ISMGraphGeneration::FNodeVariableEndpoint ToEndpoint;
+		if (!LD::Assist::Private::BuildNodeVariableEndpoint(Blueprint, ToStateGuidStr, Args::ToStackIndex, ToVarName, InArgs, ToEndpoint, EndpointError))
+		{
+			return FSMAssistOperationResult::MakeError(EndpointError);
+		}
+		DisconnectArgs.ToInputVariable = ToEndpoint;
+	}
+	else
+	{
+		DisconnectArgs.ToOwningBlueprintVariable = FName(*ToOwningVar);
+	}
+
+	FString GraphGenError;
+	ISMGraphGeneration* GraphGen = LD::Assist::Private::GetGraphGeneration(GraphGenError);
+	if (!GraphGen)
+	{
+		return FSMAssistOperationResult::MakeError(GraphGenError);
+	}
+
+	const bool bBroke = GraphGen->DisconnectNodeVariableOutput(Blueprint, DisconnectArgs);
+
+	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
+	Payload->SetStringField(Args::AssetPath, Blueprint->GetPathName());
+	Payload->SetStringField(Args::FromStateGuid, FromStateGuidStr);
+	Payload->SetStringField(Args::FromVariableName, FromVarName);
+	Payload->SetBoolField(Args::Applied, bBroke);
+	return FSMAssistOperationResult::MakeSuccess(Payload);
+}

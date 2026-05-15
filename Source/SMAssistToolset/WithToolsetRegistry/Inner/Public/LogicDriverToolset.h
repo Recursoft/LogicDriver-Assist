@@ -543,8 +543,14 @@ public:
 
 	/**
 	 * Adds a member variable to a state-machine blueprint. Mirrors the editor's My-Blueprint
-	 * Variables flow. Reserved namespace; a future AddNodeVariable endpoint will cover
-	 * USMStateInstance-subclass variables (node-class authoring).
+	 * Variables flow. For node-class variables (state, conduit, transition subclass), use
+	 * AddNodeVariable instead.
+	 *
+	 * Does NOT compile the blueprint. The variable lands in NewVariables but its FProperty
+	 * is not on GeneratedClass until you call Compile. Downstream ops that look up the
+	 * FProperty (notably ConnectNodeVariableOutput with ToOwningBlueprintVariable) will fail until
+	 * the blueprint is compiled. Batch many adds before compiling when you can.
+	 *
 	 * @param Blueprint The state-machine blueprint to modify. Required.
 	 * @param VarName Variable name (no spaces; FName-style). Required.
 	 * @param VarType Type token. Accepted short names: bool, int, int64, byte, float, single,
@@ -562,6 +568,134 @@ public:
 		const FString& VarName,
 		const FString& VarType,
 		const FString& DefaultValue = TEXT(""));
+
+	/**
+	 * Adds a Blueprint variable to a node-class Blueprint (a USMNodeInstance subclass, including
+	 * state, conduit, and transition classes). Mirrors the editor's My Blueprint -> +Variable
+	 * flow plus, for state/conduit BPs, the directional / hidden / read-only toggles in
+	 * SMVariableCustomization.
+	 *
+	 * Transition-class BPs accept the plain variable but reject Direction / bHidden / bReadOnly
+	 * (matches the editor's Variable Details panel filter). Pass an empty Direction and false
+	 * for both booleans when adding a variable to a transition class.
+	 *
+	 * Compile behavior: when any of Direction / bHidden / bReadOnly is set, the blueprint is
+	 * compiled in-call so the override can be stamped on the CDO and subsequent ops see the new
+	 * FProperty immediately. When all three are unset (plain variable add), the blueprint is
+	 * NOT compiled -- batch multiple adds and call Compile once at the end for best performance.
+	 *
+	 * @param NodeClassBlueprint The node-class Blueprint to modify. Required.
+	 * @param VarName Variable name (FName-style; no spaces). Required.
+	 * @param VarType Type token. Same forms as AddSMVariable. Required.
+	 * @param DefaultValue Default value in UE property-text format. Empty = engine default.
+	 * @param Direction One of "Input", "Output", "Both". Empty = no graph-pin exposure.
+	 *                  Transition-class BPs reject non-empty values.
+	 * @param bHidden Hide from on-node display. The property graph is still compiled and
+	 *                evaluated; only the on-node display is suppressed. Transition-class BPs
+	 *                reject true.
+	 * @param bReadOnly Display as read-only on the placed node. Transition-class BPs reject true.
+	 * @return JSON: { asset_path, variable_name, var_type, default_value?, direction?, b_hidden?, b_read_only? }
+	 */
+	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
+	static FString AddNodeVariable(
+		UBlueprint* NodeClassBlueprint,
+		const FString& VarName,
+		const FString& VarType,
+		const FString& DefaultValue = TEXT(""),
+		const FString& Direction = TEXT(""),
+		bool bHidden = false,
+		bool bReadOnly = false);
+
+	/**
+	 * Reconfigures an existing variable on a node-class Blueprint (state / conduit subclass).
+	 * Mirrors the Direction combobox and Hidden / ReadOnly toggles in SMVariableCustomization.
+	 * Each field is gated by a paired bUpdate* flag so the AI can express "leave alone" vs
+	 * "explicitly set" unambiguously. At least one of bUpdateDirection / bUpdateHidden /
+	 * bUpdateReadOnly must be true.
+	 *
+	 * Transition-class Blueprints are not supported (the function only sets directional /
+	 * hidden / read-only state, which transition-class variables do not have).
+	 *
+	 * @param NodeClassBlueprint The node-class Blueprint. Required.
+	 * @param VarName Existing variable name. Required.
+	 * @param bUpdateDirection Gate for Direction; must be true for Direction to apply.
+	 * @param Direction "Input" | "Output" | "Both" when gated.
+	 * @param bUpdateHidden Gate for bHidden.
+	 * @param bHidden New hidden state when gated.
+	 * @param bUpdateReadOnly Gate for bReadOnly.
+	 * @param bReadOnly New read-only state when gated.
+	 * @return JSON: { asset_path, variable_name, applied:[...], direction?, b_hidden?, b_read_only? }
+	 */
+	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
+	static FString ConfigureNodeVariable(
+		UBlueprint* NodeClassBlueprint,
+		const FString& VarName,
+		bool bUpdateDirection = false,
+		const FString& Direction = TEXT(""),
+		bool bUpdateHidden = false,
+		bool bHidden = false,
+		bool bUpdateReadOnly = false,
+		bool bReadOnly = false);
+
+	/**
+	 * Wires a node-class output variable to either another node's input variable (within the
+	 * same FSM) or a variable on the owning FSM blueprint. Spawns the matching IO reader/writer
+	 * K2 node inside the relevant property sub-graph and links pins, identical to what a user
+	 * does by opening the property graph and dragging.
+	 *
+	 * Stack-aware: when the source or destination variable lives on a stacked instance, set
+	 * the corresponding StackIndex (same convention as SetNodeProperty; -1 = primary template).
+	 * Variable names alone are ambiguous across stacks; the (NodeGuid, StackIndex, VarName)
+	 * tuple is unambiguous.
+	 *
+	 * Targets are mutually exclusive: supply EITHER (ToStateGuid, ToVarName) for node->node
+	 * wiring, OR ToOwningBlueprintVariable for node->owner wiring. Idempotent: if the wire
+	 * already exists, returns success without spawning duplicate IO nodes.
+	 *
+	 * Preconditions: source variable must be Output (or Both); destination variable must be
+	 * Input (or Both) for node->node; owning-BP variable must exist for node->owner; pin types
+	 * must be compatible (caught by the schema's TryCreateConnection).
+	 *
+	 * @param Blueprint The state-machine Blueprint containing both endpoints. Required.
+	 * @param FromStateGuid Guid of the source state node. Required.
+	 * @param FromStackIndex Stack index on the source state. -1 = primary template.
+	 * @param FromVarName Output variable name on the source template. Required.
+	 * @param ToStateGuid Guid of the destination state node. Empty when wiring to owner.
+	 * @param ToStackIndex Stack index on the destination state. -1 = primary template.
+	 * @param ToVarName Input variable name on the destination template. Empty when wiring to owner.
+	 * @param ToOwningBlueprintVariable Variable name on the owning FSM Blueprint. Empty when wiring node->node.
+	 * @return JSON: { asset_path, from_state_guid, from_variable_name, from_stack_index?, to_state_guid?, to_variable_name?, to_stack_index?, to_owning_blueprint_variable? }
+	 */
+	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
+	static FString ConnectNodeVariableOutput(
+		USMBlueprint* Blueprint,
+		const FString& FromStateGuid,
+		int32 FromStackIndex,
+		const FString& FromVarName,
+		const FString& ToStateGuid = TEXT(""),
+		int32 ToStackIndex = -1,
+		const FString& ToVarName = TEXT(""),
+		const FString& ToOwningBlueprintVariable = TEXT(""));
+
+	/**
+	 * Breaks a previously-established node-variable-output wire. Argument shape mirrors
+	 * ConnectNodeVariableOutput exactly. The matching wire is identified by the (From, To)
+	 * endpoint pair; only that wire is broken (other consumers of the same source output remain
+	 * wired). Returns 'applied' = true when a matching wire was found and broken, false when none
+	 * was present (idempotent).
+	 *
+	 * @return JSON: { asset_path, from_state_guid, from_variable_name, applied }
+	 */
+	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
+	static FString DisconnectNodeVariableOutput(
+		USMBlueprint* Blueprint,
+		const FString& FromStateGuid,
+		int32 FromStackIndex,
+		const FString& FromVarName,
+		const FString& ToStateGuid = TEXT(""),
+		int32 ToStackIndex = -1,
+		const FString& ToVarName = TEXT(""),
+		const FString& ToOwningBlueprintVariable = TEXT(""));
 
 	/**
 	 * Configures the USMStateMachineComponent template living on an actor blueprint's SCS. Operates
