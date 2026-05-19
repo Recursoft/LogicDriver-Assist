@@ -3120,9 +3120,11 @@ FSMAssistOperationResult LD::Assist::GetPropertyPins(const TSharedRef<FJsonObjec
 		}
 
 		FName VariableName;
+		bool bFlagSplit = false;
 		if (const FSMGraphProperty_Base* Prop = ResultNode->GetPropertyNodeConst())
 		{
 			VariableName = Prop->VariableName;
+			bFlagSplit = Prop->bSplit;
 		}
 		if (!VariableFilter.IsNone() && VariableName != VariableFilter)
 		{
@@ -3138,6 +3140,8 @@ FSMAssistOperationResult LD::Assist::GetPropertyPins(const TSharedRef<FJsonObjec
 		const TSharedRef<FJsonObject> PropObj = MakeShared<FJsonObject>();
 		PropObj->SetStringField(Args::VariableName, VariableName.ToString());
 		PropObj->SetStringField(TEXT("guid"), Pair.Key.ToString());
+		PropObj->SetBoolField(TEXT("is_split_struct"), LD::Editor::PropertyUtils::IsSplitStructResultNode(ResultNode));
+		PropObj->SetBoolField(TEXT("flag_b_split"), bFlagSplit);
 		PropObj->SetObjectField(TEXT("result_pin"), LD::Assist::Private::PinTreeToJson(Root, 0));
 		PropArr.Add(MakeShared<FJsonValueObject>(PropObj));
 	}
