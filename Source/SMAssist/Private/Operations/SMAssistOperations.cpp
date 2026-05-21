@@ -26,6 +26,7 @@
 #include "Graph/Nodes/PropertyNodes/SMGraphK2Node_PropertyNode_Base.h"
 #include "Graph/Nodes/RootNodes/SMGraphK2Node_TransitionResultNode.h"
 #include "Graph/SMGraph.h"
+#include "Graph/SMPropertyGraph.h"
 #include "Graph/SMTransitionGraph.h"
 #include "NodeStack/NodeStackContainer.h"
 #include "Properties/SMEditorPropertyUtils.h"
@@ -615,8 +616,22 @@ namespace LD::Assist::Private
 				OutString = InValue->AsString();
 				return true;
 			case EJson::Number:
-				OutString = FString::SanitizeFloat(InValue->AsNumber());
+			{
+				// Emit integer-valued numbers without a trailing ".0". UEdGraphSchema_K2::TrySetDefaultValue
+				// on integer sub-pins rejects float-formatted strings, and integer ImportText accepts
+				// both forms, so this format is universally safe across pin types.
+				const double Number = InValue->AsNumber();
+				const double Truncated = FMath::TruncToDouble(Number);
+				if (Number == Truncated && FMath::Abs(Number) < static_cast<double>(TNumericLimits<int64>::Max()))
+				{
+					OutString = FString::Printf(TEXT("%lld"), static_cast<int64>(Truncated));
+				}
+				else
+				{
+					OutString = FString::SanitizeFloat(Number);
+				}
 				return true;
+			}
 			case EJson::Boolean:
 				OutString = InValue->AsBool() ? TEXT("true") : TEXT("false");
 				return true;
@@ -825,6 +840,10 @@ FSMAssistOperationResult LD::Assist::SetNodeProperty(const TSharedRef<FJsonObjec
 	PropertyArgs.PropertyName = *PropertyName;
 	PropertyArgs.NodeInstance = TargetTemplate;
 
+	FString PropertyPath;
+	InArgs->TryGetStringField(Args::PropertyPath, PropertyPath);
+	PropertyArgs.SubPath = PropertyPath;
+
 	const bool bIsStructuralAction =
 		NormalizedAction == TEXT("add") ||
 		NormalizedAction == TEXT("insert") ||
@@ -832,6 +851,12 @@ FSMAssistOperationResult LD::Assist::SetNodeProperty(const TSharedRef<FJsonObjec
 		NormalizedAction == TEXT("move") ||
 		NormalizedAction == TEXT("remove") ||
 		NormalizedAction == TEXT("clear");
+
+	if (!PropertyPath.IsEmpty() && bIsStructuralAction)
+	{
+		return FSMAssistOperationResult::MakeError(
+			FString::Printf(TEXT("'property_path' targets a scalar leaf write and cannot combine with 'array_action=%s'."), *NormalizedAction));
+	}
 
 	// Structural actions never accept a 'value' payload, since they change the array's shape, not cell contents.
 	if (bIsStructuralAction)
@@ -1035,6 +1060,12 @@ FSMAssistOperationResult LD::Assist::SetNodeProperty(const TSharedRef<FJsonObjec
 			TEXT("'array_index' cannot be combined with an array 'value'; elements are written starting at index 0."));
 	}
 
+	if (!PropertyPath.IsEmpty() && bValueIsArray)
+	{
+		return FSMAssistOperationResult::MakeError(
+			TEXT("'property_path' addresses a single leaf; 'value' must be a scalar, not an array."));
+	}
+
 	PropertyArgs.ArrayChangeType = ISMGraphGeneration::EArrayChangeType::SetElement;
 	for (int32 Idx = 0; Idx < ValueStrings.Num(); ++Idx)
 	{
@@ -1043,7 +1074,9 @@ FSMAssistOperationResult LD::Assist::SetNodeProperty(const TSharedRef<FJsonObjec
 		if (!GraphGen->SetNodePropertyValue(Node, PropertyArgs))
 		{
 			return FSMAssistOperationResult::MakeError(
-				FString::Printf(TEXT("Failed to set property '%s' at index %d on node."), *PropertyName, PropertyArgs.PropertyIndex));
+				FString::Printf(TEXT("Failed to set property '%s'%s at index %d on node."),
+					*PropertyName, PropertyPath.IsEmpty() ? TEXT("") : *FString::Printf(TEXT(" path '%s'"), *PropertyPath),
+					PropertyArgs.PropertyIndex));
 		}
 	}
 
@@ -3151,6 +3184,238 @@ FSMAssistOperationResult LD::Assist::GetPropertyPins(const TSharedRef<FJsonObjec
 	Payload->SetNumberField(Args::Count, PropArr.Num());
 	Payload->SetArrayField(Args::Properties, PropArr);
 	return FSMAssistOperationResult::MakeSuccess(Payload);
+}
+
+namespace LD::Assist::Private
+{
+	struct FSplitRecombineTarget
+	{
+		USMGraphK2Node_PropertyNode_Base* ResultNode = nullptr;
+		USMPropertyGraph* PropertyGraph = nullptr;
+		UEdGraphPin* RootPin = nullptr;
+		UEdGraphPin* TargetSubPin = nullptr;
+		FGuid RequestedPinId;
+		bool bHasPinId = false;
+	};
+
+	static bool ResolveSplitRecombineTarget(const TSharedRef<FJsonObject>& InArgs, FSplitRecombineTarget& OutTarget, FString& OutError)
+	{
+		FString AssetPath;
+		if (!InArgs->TryGetStringField(Args::AssetPath, AssetPath) || AssetPath.IsEmpty())
+		{
+			OutError = TEXT("Missing required arg 'asset_path'.");
+			return false;
+		}
+
+		FString NodeGuidStr;
+		if (!InArgs->TryGetStringField(Args::NodeGuid, NodeGuidStr))
+		{
+			OutError = TEXT("Missing required arg 'node_guid'.");
+			return false;
+		}
+
+		FGuid NodeGuid;
+		if (!FGuid::Parse(NodeGuidStr, NodeGuid))
+		{
+			OutError = FString::Printf(TEXT("Invalid 'node_guid' '%s'."), *NodeGuidStr);
+			return false;
+		}
+
+		FString VariableName;
+		if (!InArgs->TryGetStringField(Args::VariableName, VariableName) || VariableName.IsEmpty())
+		{
+			OutError = TEXT("Missing required arg 'variable_name'.");
+			return false;
+		}
+
+		FString PinIdStr;
+		OutTarget.bHasPinId = InArgs->TryGetStringField(Args::PinId, PinIdStr) && !PinIdStr.IsEmpty();
+		if (OutTarget.bHasPinId && !FGuid::Parse(PinIdStr, OutTarget.RequestedPinId))
+		{
+			OutError = FString::Printf(TEXT("Invalid 'pin_id' '%s'."), *PinIdStr);
+			return false;
+		}
+
+		USMBlueprint* Blueprint = LD::Assist::Utils::LoadStateMachineBlueprint(AssetPath, OutError);
+		if (!Blueprint)
+		{
+			return false;
+		}
+
+		USMGraphNode_Base* Node = LD::Assist::Utils::FindNodeByGuid(Blueprint, NodeGuid);
+		if (!Node)
+		{
+			OutError = FString::Printf(TEXT("Could not find node with guid '%s'."), *NodeGuidStr);
+			return false;
+		}
+
+		const FName VariableFilter(*VariableName);
+		USMGraphK2Node_PropertyNode_Base* FirstCandidate = nullptr;
+		for (const TPair<FGuid, TObjectPtr<USMGraphK2Node_PropertyNode_Base>>& Pair : Node->GetAllPropertyGraphNodes())
+		{
+			USMGraphK2Node_PropertyNode_Base* Candidate = Pair.Value.Get();
+			if (!Candidate)
+			{
+				continue;
+			}
+			const FSMGraphProperty_Base* Prop = Candidate->GetPropertyNodeConst();
+			if (!Prop || Prop->VariableName != VariableFilter)
+			{
+				continue;
+			}
+			if (!FirstCandidate)
+			{
+				FirstCandidate = Candidate;
+			}
+			if (!OutTarget.bHasPinId)
+			{
+				continue;
+			}
+			// TArray<Struct> properties expose one bucket per element; the supplied PinId may live under any bucket's root or sub-pin tree.
+			UEdGraphPin* CandidateRoot = Candidate->GetResultPin(EGPD_Input);
+			if (!CandidateRoot)
+			{
+				continue;
+			}
+			if (CandidateRoot->PinId == OutTarget.RequestedPinId)
+			{
+				OutTarget.ResultNode = Candidate;
+				OutTarget.RootPin = CandidateRoot;
+				break;
+			}
+			if (UEdGraphPin* Sub = LD::Editor::PropertyUtils::FindSubPinByPinId(CandidateRoot, OutTarget.RequestedPinId))
+			{
+				OutTarget.ResultNode = Candidate;
+				OutTarget.RootPin = CandidateRoot;
+				OutTarget.TargetSubPin = Sub;
+				break;
+			}
+		}
+
+		if (!OutTarget.ResultNode)
+		{
+			if (!FirstCandidate)
+			{
+				OutError = FString::Printf(TEXT("No exposed property '%s' on node '%s'."), *VariableName, *NodeGuidStr);
+				return false;
+			}
+			if (OutTarget.bHasPinId)
+			{
+				OutError = FString::Printf(TEXT("Pin id '%s' not found under any bucket of property '%s' on node '%s'."),
+					*OutTarget.RequestedPinId.ToString(), *VariableName, *NodeGuidStr);
+				return false;
+			}
+			OutTarget.ResultNode = FirstCandidate;
+		}
+
+		OutTarget.PropertyGraph = OutTarget.ResultNode->GetPropertyGraph();
+		if (!OutTarget.PropertyGraph)
+		{
+			OutError = FString::Printf(TEXT("Property graph unavailable for '%s' on node '%s'."), *VariableName, *NodeGuidStr);
+			return false;
+		}
+
+		if (!OutTarget.RootPin)
+		{
+			OutTarget.RootPin = OutTarget.ResultNode->GetResultPin(EGPD_Input);
+			if (!OutTarget.RootPin)
+			{
+				OutError = FString::Printf(TEXT("Property '%s' has no input result pin to split or recombine."), *VariableName);
+				return false;
+			}
+		}
+
+		return true;
+	}
+
+	static TSharedRef<FJsonObject> BuildSplitRecombinePayload(const FSplitRecombineTarget& InTarget, bool bInApplied)
+	{
+		const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
+		Payload->SetBoolField(Args::Applied, bInApplied);
+		Payload->SetBoolField(TEXT("is_split_struct"),
+			LD::Editor::PropertyUtils::IsSplitStructResultNode(InTarget.ResultNode));
+
+		if (const FSMGraphProperty_Base* Prop = InTarget.ResultNode->GetPropertyNodeConst())
+		{
+			Payload->SetStringField(Args::VariableName, Prop->VariableName.ToString());
+			Payload->SetBoolField(TEXT("flag_b_split"), Prop->bSplit);
+		}
+
+		if (InTarget.bHasPinId)
+		{
+			Payload->SetStringField(Args::PinId, InTarget.RequestedPinId.ToString());
+		}
+
+		if (UEdGraphPin* Root = InTarget.ResultNode->GetResultPin(EGPD_Input))
+		{
+			Payload->SetObjectField(TEXT("result_pin"), LD::Assist::Private::PinTreeToJson(Root, 0));
+		}
+		return Payload;
+	}
+}
+
+FSMAssistOperationResult LD::Assist::SplitPin(const TSharedRef<FJsonObject>& InArgs)
+{
+	LD::Assist::Private::FSplitRecombineTarget Target;
+	FString Error;
+	if (!LD::Assist::Private::ResolveSplitRecombineTarget(InArgs, Target, Error))
+	{
+		return FSMAssistOperationResult::MakeError(Error);
+	}
+
+	if (!Target.TargetSubPin)
+	{
+		if (!Target.PropertyGraph->CanSplitResultPin())
+		{
+			return FSMAssistOperationResult::MakeError(
+				TEXT("Property is not splittable (CanSplitResultPin=false). Type may not be a splittable struct, the property may opt out via CanEverSplit, or it may already be split."));
+		}
+		Target.PropertyGraph->SplitResultPin();
+	}
+	else
+	{
+		if (!Target.PropertyGraph->CanSplitSubPin(Target.TargetSubPin))
+		{
+			return FSMAssistOperationResult::MakeError(
+				FString::Printf(TEXT("Sub-pin '%s' is not splittable (CanSplitSubPin=false). Type may not be a splittable struct, or the owning graph property opts out."),
+					*Target.TargetSubPin->PinName.ToString()));
+		}
+		Target.PropertyGraph->SplitSubPin(Target.TargetSubPin);
+	}
+
+	return FSMAssistOperationResult::MakeSuccess(LD::Assist::Private::BuildSplitRecombinePayload(Target, true));
+}
+
+FSMAssistOperationResult LD::Assist::RecombinePin(const TSharedRef<FJsonObject>& InArgs)
+{
+	LD::Assist::Private::FSplitRecombineTarget Target;
+	FString Error;
+	if (!LD::Assist::Private::ResolveSplitRecombineTarget(InArgs, Target, Error))
+	{
+		return FSMAssistOperationResult::MakeError(Error);
+	}
+
+	if (!Target.TargetSubPin)
+	{
+		if (!LD::Editor::PropertyUtils::IsSplitStructResultNode(Target.ResultNode))
+		{
+			return FSMAssistOperationResult::MakeError(
+				TEXT("Property is not currently split; nothing to recombine."));
+		}
+		Target.PropertyGraph->RecombineResultPin();
+	}
+	else
+	{
+		if (Target.TargetSubPin->SubPins.Num() == 0)
+		{
+			return FSMAssistOperationResult::MakeError(
+				FString::Printf(TEXT("Sub-pin '%s' is not currently split; nothing to recombine."),
+					*Target.TargetSubPin->PinName.ToString()));
+		}
+		Target.PropertyGraph->RecombineSubPin(Target.TargetSubPin);
+	}
+
+	return FSMAssistOperationResult::MakeSuccess(LD::Assist::Private::BuildSplitRecombinePayload(Target, true));
 }
 
 FSMAssistOperationResult LD::Assist::ResetNodeProperty(const TSharedRef<FJsonObject>& InArgs)

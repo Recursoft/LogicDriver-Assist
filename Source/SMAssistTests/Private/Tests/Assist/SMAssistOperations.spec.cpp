@@ -6,13 +6,18 @@
 #include "SMAssistTestClasses.h"
 
 #include "Helpers/SMTestHelpers.h"
+#include "Tests/StructSplit/SMStructSplitTestClasses.h"
 
 #include "Blueprints/SMBlueprint.h"
+#include "Graph/Nodes/SMGraphNode_Base.h"
 
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
 #include "Editor.h"
+#include "Kismet2/BlueprintEditorUtils.h"
 #include "Misc/Paths.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
 #include "UObject/SoftObjectPath.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -2044,6 +2049,772 @@ void FAssistOperationsSpec::Define()
 			int32 UpdateHits = 0;
 			int32 EndHits = 0;
 			TestHelpers::RunStateMachineToCompletion(this, Blueprint, EntryHits, UpdateHits, EndHits);
+		});
+	});
+
+	Describe("sm.split_pin / sm.recombine_pin", [this]()
+	{
+		auto AddSplitState = [this](const FString& InAssetPath) -> FString
+		{
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			if (!Subsystem)
+			{
+				return FString();
+			}
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), InAssetPath);
+			Args->SetStringField(TEXT("state_name"), TEXT("SplitState"));
+			Args->SetStringField(TEXT("state_class"), USMAssistSplitTestState::StaticClass()->GetPathName());
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.add_state")), Args);
+			if (!Result.bSuccess || !Result.Payload.IsValid())
+			{
+				return FString();
+			}
+
+			FString StateGuid;
+			Result.Payload->TryGetStringField(TEXT("state_guid"), StateGuid);
+			return StateGuid;
+		};
+
+		auto Split = [this](const FString& InAssetPath, const FString& InStateGuid, const FString& InVar, const FString& InPinId = FString())
+		{
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), InAssetPath);
+			Args->SetStringField(TEXT("node_guid"), InStateGuid);
+			Args->SetStringField(TEXT("variable_name"), InVar);
+			if (!InPinId.IsEmpty())
+			{
+				Args->SetStringField(TEXT("pin_id"), InPinId);
+			}
+			return Subsystem->ExecuteOperation(FName(TEXT("sm.split_pin")), Args);
+		};
+
+		auto Recombine = [this](const FString& InAssetPath, const FString& InStateGuid, const FString& InVar, const FString& InPinId = FString())
+		{
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), InAssetPath);
+			Args->SetStringField(TEXT("node_guid"), InStateGuid);
+			Args->SetStringField(TEXT("variable_name"), InVar);
+			if (!InPinId.IsEmpty())
+			{
+				Args->SetStringField(TEXT("pin_id"), InPinId);
+			}
+			return Subsystem->ExecuteOperation(FName(TEXT("sm.recombine_pin")), Args);
+		};
+
+		auto FindSubPinIdByName = [](const TSharedPtr<FJsonObject>& InResultPin, const FString& InEndsWith) -> FString
+		{
+			if (!InResultPin.IsValid())
+			{
+				return FString();
+			}
+			const TArray<TSharedPtr<FJsonValue>>* SubPins = nullptr;
+			if (!InResultPin->TryGetArrayField(TEXT("sub_pins"), SubPins))
+			{
+				return FString();
+			}
+			for (const TSharedPtr<FJsonValue>& Value : *SubPins)
+			{
+				const TSharedPtr<FJsonObject>* Entry = nullptr;
+				if (!Value->TryGetObject(Entry) || !Entry->IsValid())
+				{
+					continue;
+				}
+				FString PinName;
+				if ((*Entry)->TryGetStringField(TEXT("pin_name"), PinName)
+					&& PinName.EndsWith(InEndsWith))
+				{
+					FString PinId;
+					(*Entry)->TryGetStringField(TEXT("pin_id"), PinId);
+					return PinId;
+				}
+			}
+			return FString();
+		};
+
+		It("Splits a struct property, then recombines it (top-level round-trip)", [=, this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString StateGuid = AddSplitState(AssetPath);
+			if (!TestFalse("State created", StateGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			const FSMAssistOperationResult SplitResult = Split(AssetPath, StateGuid, TEXT("OurStruct"));
+			TestTrue("Split succeeds", SplitResult.bSuccess);
+			if (!TestTrue("Split payload populated", SplitResult.Payload.IsValid()))
+			{
+				return;
+			}
+			bool bApplied = false;
+			TestTrue("Split applied=true", SplitResult.Payload->TryGetBoolField(TEXT("applied"), bApplied) && bApplied);
+			bool bSplitFlag = false;
+			TestTrue("is_split_struct=true after split",
+				SplitResult.Payload->TryGetBoolField(TEXT("is_split_struct"), bSplitFlag) && bSplitFlag);
+
+			const FSMAssistOperationResult RecombineResult = Recombine(AssetPath, StateGuid, TEXT("OurStruct"));
+			TestTrue("Recombine succeeds", RecombineResult.bSuccess);
+			if (!TestTrue("Recombine payload populated", RecombineResult.Payload.IsValid()))
+			{
+				return;
+			}
+			bool bRecombineApplied = false;
+			TestTrue("Recombine applied=true",
+				RecombineResult.Payload->TryGetBoolField(TEXT("applied"), bRecombineApplied) && bRecombineApplied);
+			bool bSplitFlagAfterRecombine = true;
+			TestTrue("is_split_struct=false after recombine",
+				RecombineResult.Payload->TryGetBoolField(TEXT("is_split_struct"), bSplitFlagAfterRecombine)
+				&& !bSplitFlagAfterRecombine);
+
+			const FSMAssistOperationResult SplitAgain = Split(AssetPath, StateGuid, TEXT("OurStruct"));
+			TestTrue("Re-split succeeds", SplitAgain.bSuccess);
+			if (TestTrue("Re-split payload populated", SplitAgain.Payload.IsValid()))
+			{
+				bool bSplitFlag2 = false;
+				TestTrue("is_split_struct=true after re-split",
+					SplitAgain.Payload->TryGetBoolField(TEXT("is_split_struct"), bSplitFlag2) && bSplitFlag2);
+			}
+		});
+
+		It("Splits and recombines a nested sub-pin (OurStruct.NestedStruct)", [=, this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString StateGuid = AddSplitState(AssetPath);
+			if (!TestFalse("State created", StateGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			const FSMAssistOperationResult TopSplit = Split(AssetPath, StateGuid, TEXT("OurStruct"));
+			if (!TestTrue("Top-level split succeeds", TopSplit.bSuccess) || !TestTrue("Top-level payload", TopSplit.Payload.IsValid()))
+			{
+				return;
+			}
+
+			const TSharedPtr<FJsonObject>* ResultPin = nullptr;
+			if (!TestTrue("result_pin present after split", TopSplit.Payload->TryGetObjectField(TEXT("result_pin"), ResultPin)))
+			{
+				return;
+			}
+
+			const FString NestedPinId = FindSubPinIdByName(*ResultPin, TEXT("_NestedStruct"));
+			if (!TestFalse("Nested sub-pin id located", NestedPinId.IsEmpty()))
+			{
+				return;
+			}
+
+			const FSMAssistOperationResult SubSplit = Split(AssetPath, StateGuid, TEXT("OurStruct"), NestedPinId);
+			TestTrue("Sub-pin split succeeds", SubSplit.bSuccess);
+
+			const FSMAssistOperationResult SubRecombine = Recombine(AssetPath, StateGuid, TEXT("OurStruct"), NestedPinId);
+			TestTrue("Sub-pin recombine succeeds", SubRecombine.bSuccess);
+			if (TestTrue("Sub-pin recombine payload", SubRecombine.Payload.IsValid()))
+			{
+				bool bApplied = false;
+				TestTrue("Sub-pin recombine applied=true",
+					SubRecombine.Payload->TryGetBoolField(TEXT("applied"), bApplied) && bApplied);
+			}
+		});
+
+		It("Fails when 'asset_path' is missing", [=, this]()
+		{
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("node_guid"), FGuid::NewGuid().ToString());
+			Args->SetStringField(TEXT("variable_name"), TEXT("OurStruct"));
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(FName(TEXT("sm.split_pin")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+			TestTrue("Error mentions 'asset_path'", Result.ErrorMessage.Contains(TEXT("asset_path")));
+		});
+
+		It("Fails when 'variable_name' is missing", [=, this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+			const FString StateGuid = AddSplitState(AssetPath);
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("node_guid"), StateGuid);
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(FName(TEXT("sm.split_pin")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+			TestTrue("Error mentions 'variable_name'", Result.ErrorMessage.Contains(TEXT("variable_name")));
+		});
+
+		It("Fails when the property is not splittable (FText)", [=, this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+			const FString StateGuid = AddSplitState(AssetPath);
+			const FSMAssistOperationResult Result = Split(AssetPath, StateGuid, TEXT("NonSplittableText"));
+			TestFalse("Split is rejected", Result.bSuccess);
+			TestTrue("Error mentions CanSplitResultPin",
+				Result.ErrorMessage.Contains(TEXT("CanSplitResultPin")));
+		});
+
+		It("Fails when the variable is not exposed on the node", [=, this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+			const FString StateGuid = AddSplitState(AssetPath);
+			const FSMAssistOperationResult Result = Split(AssetPath, StateGuid, TEXT("NoSuchVariable"));
+			TestFalse("Split is rejected", Result.bSuccess);
+			TestTrue("Error mentions missing property", Result.ErrorMessage.Contains(TEXT("No exposed property")));
+		});
+
+		It("Fails when pin_id is invalid", [=, this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+			const FString StateGuid = AddSplitState(AssetPath);
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("node_guid"), StateGuid);
+			Args->SetStringField(TEXT("variable_name"), TEXT("OurStruct"));
+			Args->SetStringField(TEXT("pin_id"), TEXT("not-a-guid"));
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(FName(TEXT("sm.split_pin")), Args);
+			TestFalse("Split is rejected", Result.bSuccess);
+			TestTrue("Error mentions pin_id", Result.ErrorMessage.Contains(TEXT("pin_id")));
+		});
+
+		It("Fails recombine when nothing is split", [=, this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+			const FString StateGuid = AddSplitState(AssetPath);
+			const FSMAssistOperationResult Result = Recombine(AssetPath, StateGuid, TEXT("OurStruct"));
+			TestFalse("Recombine is rejected", Result.bSuccess);
+			TestTrue("Error mentions not currently split",
+				Result.ErrorMessage.Contains(TEXT("not currently split")));
+		});
+
+		It("Disambiguates multi-bucket TArray<Struct> buckets by root pin_id", [=, this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+			const FString StateGuid = AddSplitState(AssetPath);
+			if (!TestFalse("State created", StateGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			auto AddArrayElement = [&]()
+			{
+				const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+				Args->SetStringField(TEXT("asset_path"), AssetPath);
+				Args->SetStringField(TEXT("node_guid"), StateGuid);
+				Args->SetStringField(TEXT("property_name"), TEXT("StructArray"));
+				Args->SetStringField(TEXT("array_action"), TEXT("add"));
+				return Subsystem->ExecuteOperation(FName(TEXT("sm.set_node_property")), Args).bSuccess;
+			};
+			TestTrue("Add element 0", AddArrayElement());
+			TestTrue("Add element 1", AddArrayElement());
+
+			auto QueryBuckets = [&]() -> TSharedPtr<FJsonObject>
+			{
+				const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+				Args->SetStringField(TEXT("asset_path"), AssetPath);
+				Args->SetStringField(TEXT("node_guid"), StateGuid);
+				Args->SetStringField(TEXT("variable_name"), TEXT("StructArray"));
+				return Subsystem->ExecuteOperation(FName(TEXT("sm.get_property_pins")), Args).Payload;
+			};
+
+			{
+				const TSharedPtr<FJsonObject> Pins = QueryBuckets();
+				if (!TestTrue("Pins payload populated", Pins.IsValid()))
+				{
+					return;
+				}
+				int32 Count = 0;
+				Pins->TryGetNumberField(TEXT("count"), Count);
+				if (!TestEqual("Two buckets present before split", Count, 2))
+				{
+					return;
+				}
+			}
+
+			// Split the first bucket via the no-pin_id path (backward-compat single-bucket convention).
+			const FSMAssistOperationResult SplitFirst = Split(AssetPath, StateGuid, TEXT("StructArray"));
+			TestTrue("Split first bucket succeeds", SplitFirst.bSuccess);
+
+			// After splitting one bucket, exactly one of the two reports is_split_struct=false; grab its root pin_id.
+			FString UnsplitRootPinId;
+			{
+				const TSharedPtr<FJsonObject> Pins = QueryBuckets();
+				const TArray<TSharedPtr<FJsonValue>>* Props = nullptr;
+				if (!TestTrue("Pins array present", Pins->TryGetArrayField(TEXT("properties"), Props)))
+				{
+					return;
+				}
+				for (const TSharedPtr<FJsonValue>& Value : *Props)
+				{
+					const TSharedPtr<FJsonObject>* Entry = nullptr;
+					if (!Value->TryGetObject(Entry) || !Entry->IsValid())
+					{
+						continue;
+					}
+					bool bSplit = true;
+					(*Entry)->TryGetBoolField(TEXT("is_split_struct"), bSplit);
+					if (bSplit)
+					{
+						continue;
+					}
+					const TSharedPtr<FJsonObject>* ResultPin = nullptr;
+					if ((*Entry)->TryGetObjectField(TEXT("result_pin"), ResultPin) && ResultPin->IsValid())
+					{
+						(*ResultPin)->TryGetStringField(TEXT("pin_id"), UnsplitRootPinId);
+					}
+					break;
+				}
+			}
+			if (!TestFalse("Resolved unsplit bucket root pin_id", UnsplitRootPinId.IsEmpty()))
+			{
+				return;
+			}
+
+			// Split the second bucket by its root pin_id — the new multi-bucket disambiguation path.
+			const FSMAssistOperationResult SplitSecond = Split(AssetPath, StateGuid, TEXT("StructArray"), UnsplitRootPinId);
+			TestTrue("Split second bucket by root pin_id succeeds", SplitSecond.bSuccess);
+
+			{
+				const TSharedPtr<FJsonObject> Pins = QueryBuckets();
+				const TArray<TSharedPtr<FJsonValue>>* Props = nullptr;
+				Pins->TryGetArrayField(TEXT("properties"), Props);
+				int32 SplitCount = 0;
+				for (const TSharedPtr<FJsonValue>& Value : *Props)
+				{
+					const TSharedPtr<FJsonObject>* Entry = nullptr;
+					if (!Value->TryGetObject(Entry) || !Entry->IsValid())
+					{
+						continue;
+					}
+					bool bSplit = false;
+					(*Entry)->TryGetBoolField(TEXT("is_split_struct"), bSplit);
+					if (bSplit)
+					{
+						++SplitCount;
+					}
+				}
+				TestEqual("Both buckets report split=true", SplitCount, 2);
+			}
+
+			// Recombine the second bucket by its root pin_id, then the first via the no-pin_id path.
+			const FSMAssistOperationResult RecombineSecond = Recombine(AssetPath, StateGuid, TEXT("StructArray"), UnsplitRootPinId);
+			TestTrue("Recombine second bucket by root pin_id succeeds", RecombineSecond.bSuccess);
+
+			const FSMAssistOperationResult RecombineFirst = Recombine(AssetPath, StateGuid, TEXT("StructArray"));
+			TestTrue("Recombine first bucket succeeds", RecombineFirst.bSuccess);
+		});
+
+		It("Reports a clear error when pin_id matches no bucket", [=, this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+			const FString StateGuid = AddSplitState(AssetPath);
+			if (!TestFalse("State created", StateGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("node_guid"), StateGuid);
+			Args->SetStringField(TEXT("variable_name"), TEXT("OurStruct"));
+			Args->SetStringField(TEXT("pin_id"), FGuid::NewGuid().ToString());
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.split_pin")), Args);
+			TestFalse("Split with unknown pin_id is rejected", Result.bSuccess);
+			TestTrue("Error mentions 'not found'", Result.ErrorMessage.Contains(TEXT("not found")));
+		});
+	});
+
+	Describe("sm.set_node_property with property_path", [this]()
+	{
+		auto AddStructSplitTestState = [this](const FString& InAssetPath) -> FString
+		{
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			if (!Subsystem)
+			{
+				return FString();
+			}
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), InAssetPath);
+			Args->SetStringField(TEXT("state_name"), TEXT("DeepState"));
+			Args->SetStringField(TEXT("state_class"), USMStructSplitTestState::StaticClass()->GetPathName());
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.add_state")), Args);
+			if (!Result.bSuccess || !Result.Payload.IsValid())
+			{
+				return FString();
+			}
+			FString StateGuid;
+			Result.Payload->TryGetStringField(TEXT("state_guid"), StateGuid);
+			return StateGuid;
+		};
+
+		auto SplitVar = [this](const FString& InAssetPath, const FString& InStateGuid, const FString& InVar, const FString& InPinId = FString())
+		{
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), InAssetPath);
+			Args->SetStringField(TEXT("node_guid"), InStateGuid);
+			Args->SetStringField(TEXT("variable_name"), InVar);
+			if (!InPinId.IsEmpty())
+			{
+				Args->SetStringField(TEXT("pin_id"), InPinId);
+			}
+			return Subsystem->ExecuteOperation(FName(TEXT("sm.split_pin")), Args);
+		};
+
+		auto SetProperty = [this](const FString& InAssetPath, const FString& InStateGuid,
+			const FString& InPropertyName, const FString& InPropertyPath, const FString& InValueJson)
+		{
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), InAssetPath);
+			Args->SetStringField(TEXT("node_guid"), InStateGuid);
+			Args->SetStringField(TEXT("property_name"), InPropertyName);
+			if (!InPropertyPath.IsEmpty())
+			{
+				Args->SetStringField(TEXT("property_path"), InPropertyPath);
+			}
+			TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(FString::Printf(TEXT("{\"v\":%s}"), *InValueJson));
+			TSharedPtr<FJsonObject> Wrapper;
+			if (FJsonSerializer::Deserialize(Reader, Wrapper) && Wrapper.IsValid())
+			{
+				Args->SetField(TEXT("value"), Wrapper->TryGetField(TEXT("v")));
+			}
+			return Subsystem->ExecuteOperation(FName(TEXT("sm.set_node_property")), Args);
+		};
+
+		auto FindSubPinId = [](const TSharedPtr<FJsonObject>& InResultPin, const FString& InEndsWith) -> FString
+		{
+			if (!InResultPin.IsValid())
+			{
+				return FString();
+			}
+			TArray<TSharedPtr<FJsonObject>> Stack = { InResultPin };
+			while (Stack.Num() > 0)
+			{
+				const TSharedPtr<FJsonObject> Top = Stack.Pop();
+				FString Name;
+				if (Top->TryGetStringField(TEXT("pin_name"), Name) && Name.EndsWith(InEndsWith))
+				{
+					FString PinId;
+					Top->TryGetStringField(TEXT("pin_id"), PinId);
+					return PinId;
+				}
+				const TArray<TSharedPtr<FJsonValue>>* Subs = nullptr;
+				if (Top->TryGetArrayField(TEXT("sub_pins"), Subs))
+				{
+					for (const TSharedPtr<FJsonValue>& V : *Subs)
+					{
+						const TSharedPtr<FJsonObject>* Obj = nullptr;
+						if (V->TryGetObject(Obj) && Obj->IsValid())
+						{
+							Stack.Add(*Obj);
+						}
+					}
+				}
+			}
+			return FString();
+		};
+
+		It("Writes a deeply nested text-graph property addressed by the property itself", [=, this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+			const FString StateGuid = AddStructSplitTestState(AssetPath);
+			if (!TestFalse("State created", StateGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			// Split top-level and the InnerTextStruct sub-pin so TextMember lives at the leaf level.
+			const FSMAssistOperationResult TopSplit = SplitVar(AssetPath, StateGuid, TEXT("NestedTextGraphStruct"));
+			if (!TestTrue("Top-level split", TopSplit.bSuccess) || !TestTrue("Top-level payload", TopSplit.Payload.IsValid()))
+			{
+				return;
+			}
+			const TSharedPtr<FJsonObject>* ResultPin = nullptr;
+			if (!TestTrue("result_pin present", TopSplit.Payload->TryGetObjectField(TEXT("result_pin"), ResultPin)))
+			{
+				return;
+			}
+			const FString InnerPinId = FindSubPinId(*ResultPin, TEXT("_InnerTextStruct"));
+			if (!TestFalse("Inner sub-pin id located", InnerPinId.IsEmpty()))
+			{
+				return;
+			}
+			const FSMAssistOperationResult InnerSplit = SplitVar(AssetPath, StateGuid, TEXT("NestedTextGraphStruct"), InnerPinId);
+			if (!TestTrue("Inner sub-pin split", InnerSplit.bSuccess))
+			{
+				return;
+			}
+
+			// Address the FSMTextGraphProperty by the property itself, NOT by .Result.
+			const FSMAssistOperationResult Set = SetProperty(AssetPath, StateGuid,
+				TEXT("NestedTextGraphStruct"), TEXT("InnerTextStruct.TextMember"), TEXT("\"HELLO!\""));
+			TestTrue("Set succeeds", Set.bSuccess);
+			if (!Set.bSuccess)
+			{
+				AddError(FString::Printf(TEXT("Set error: %s"), *Set.ErrorMessage));
+				return;
+			}
+
+			// Verify the template received the value.
+			USMBlueprint* Blueprint = Cast<USMBlueprint>(FSoftObjectPath(AssetPath).TryLoad());
+			if (!TestNotNull("Blueprint reloaded", Blueprint))
+			{
+				return;
+			}
+			FGuid Guid;
+			FGuid::Parse(StateGuid, Guid);
+			USMGraphNode_Base* Node = nullptr;
+			TArray<UEdGraphNode*> AllNodes;
+			FBlueprintEditorUtils::GetAllNodesOfClassEx<USMGraphNode_Base>(Blueprint, AllNodes);
+			for (UEdGraphNode* Candidate : AllNodes)
+			{
+				if (Candidate && Candidate->NodeGuid == Guid)
+				{
+					Node = Cast<USMGraphNode_Base>(Candidate);
+					break;
+				}
+			}
+			if (!TestNotNull("Node located", Node))
+			{
+				return;
+			}
+			USMStructSplitTestState* TemplateState = Cast<USMStructSplitTestState>(Node->GetNodeTemplate());
+			if (!TestNotNull("Template is USMStructSplitTestState", TemplateState))
+			{
+				return;
+			}
+			TestEqual("Template TextMember.Result reflects the path write",
+				TemplateState->NestedTextGraphStruct.InnerTextStruct.TextMember.Result.ToString(),
+				FString(TEXT("HELLO!")));
+		});
+
+		It("Writes a deeply nested scalar leaf addressed by property_path", [=, this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+			const FString StateGuid = AddStructSplitTestState(AssetPath);
+			SplitVar(AssetPath, StateGuid, TEXT("NestedTextGraphStruct"));
+
+			const FSMAssistOperationResult Set = SetProperty(AssetPath, StateGuid,
+				TEXT("NestedTextGraphStruct"), TEXT("InnerTextStruct.ScalarValue"), TEXT("42"));
+			TestTrue("Set succeeds", Set.bSuccess);
+
+			USMBlueprint* Blueprint = Cast<USMBlueprint>(FSoftObjectPath(AssetPath).TryLoad());
+			FGuid Guid;
+			FGuid::Parse(StateGuid, Guid);
+			USMGraphNode_Base* Node = nullptr;
+			TArray<UEdGraphNode*> AllNodes;
+			FBlueprintEditorUtils::GetAllNodesOfClassEx<USMGraphNode_Base>(Blueprint, AllNodes);
+			for (UEdGraphNode* Candidate : AllNodes)
+			{
+				if (Candidate && Candidate->NodeGuid == Guid)
+				{
+					Node = Cast<USMGraphNode_Base>(Candidate);
+					break;
+				}
+			}
+			USMStructSplitTestState* TemplateState = Cast<USMStructSplitTestState>(Node->GetNodeTemplate());
+			TestEqual("Template InnerTextStruct.ScalarValue reflects path write",
+				TemplateState->NestedTextGraphStruct.InnerTextStruct.ScalarValue, 42);
+		});
+
+		// Repro for live-demo gap (2026-05-19): one-level-split scalar writes land, but with the
+		// inner sub-pin ALSO split (matching the user's flow), the path write returned success while
+		// the template stayed at 0. Tests both branches: outer scalar (OuterInt) and inner scalar
+		// (InnerTextStruct.ScalarValue) under two-level split.
+		It("Writes nested scalar leaves with two-level split (top + InnerTextStruct)", [=, this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+			const FString StateGuid = AddStructSplitTestState(AssetPath);
+			if (!TestFalse("State created", StateGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			// Split both the top-level pin and the InnerTextStruct sub-pin (mirrors the live demo).
+			const FSMAssistOperationResult TopSplit = SplitVar(AssetPath, StateGuid, TEXT("NestedTextGraphStruct"));
+			if (!TestTrue("Top split", TopSplit.bSuccess) || !TestTrue("Top payload", TopSplit.Payload.IsValid()))
+			{
+				return;
+			}
+			const TSharedPtr<FJsonObject>* ResultPin = nullptr;
+			if (!TestTrue("result_pin present", TopSplit.Payload->TryGetObjectField(TEXT("result_pin"), ResultPin)))
+			{
+				return;
+			}
+			const FString InnerPinId = FindSubPinId(*ResultPin, TEXT("_InnerTextStruct"));
+			if (!TestFalse("Inner sub-pin id located", InnerPinId.IsEmpty()))
+			{
+				return;
+			}
+			const FSMAssistOperationResult InnerSplit = SplitVar(AssetPath, StateGuid,
+				TEXT("NestedTextGraphStruct"), InnerPinId);
+			if (!TestTrue("Inner sub-pin split", InnerSplit.bSuccess))
+			{
+				return;
+			}
+
+			// Outer-tier scalar.
+			const FSMAssistOperationResult SetOuter = SetProperty(AssetPath, StateGuid,
+				TEXT("NestedTextGraphStruct"), TEXT("OuterInt"), TEXT("99"));
+			TestTrue("Set OuterInt succeeds", SetOuter.bSuccess);
+
+			// Inner-tier scalar under the further-split sub-pin.
+			const FSMAssistOperationResult SetInner = SetProperty(AssetPath, StateGuid,
+				TEXT("NestedTextGraphStruct"), TEXT("InnerTextStruct.ScalarValue"), TEXT("42"));
+			TestTrue("Set InnerTextStruct.ScalarValue succeeds", SetInner.bSuccess);
+
+			USMBlueprint* Blueprint = Cast<USMBlueprint>(FSoftObjectPath(AssetPath).TryLoad());
+			if (!TestNotNull("Blueprint reloaded", Blueprint))
+			{
+				return;
+			}
+			FGuid Guid;
+			FGuid::Parse(StateGuid, Guid);
+			USMGraphNode_Base* Node = nullptr;
+			TArray<UEdGraphNode*> AllNodes;
+			FBlueprintEditorUtils::GetAllNodesOfClassEx<USMGraphNode_Base>(Blueprint, AllNodes);
+			for (UEdGraphNode* Candidate : AllNodes)
+			{
+				if (Candidate && Candidate->NodeGuid == Guid)
+				{
+					Node = Cast<USMGraphNode_Base>(Candidate);
+					break;
+				}
+			}
+			if (!TestNotNull("Node located", Node))
+			{
+				return;
+			}
+			USMStructSplitTestState* TemplateState = Cast<USMStructSplitTestState>(Node->GetNodeTemplate());
+			if (!TestNotNull("Template is USMStructSplitTestState", TemplateState))
+			{
+				return;
+			}
+			TestEqual("Template OuterInt reflects path write under two-level split",
+				TemplateState->NestedTextGraphStruct.OuterInt, 99);
+			TestEqual("Template InnerTextStruct.ScalarValue reflects path write under two-level split",
+				TemplateState->NestedTextGraphStruct.InnerTextStruct.ScalarValue, 42);
+
+			// Mirror the live flow: compile after writing. Construction scripts read pin defaults
+			// back into the template, so if the cascade left the leaf sub-pins at "0" the writes
+			// get reverted here.
+			const TSharedRef<FJsonObject> CompileArgs = MakeShared<FJsonObject>();
+			CompileArgs->SetStringField(TEXT("asset_path"), AssetPath);
+			GetSubsystem()->ExecuteOperation(FName(TEXT("sm.compile")), CompileArgs);
+
+			TestEqual("Template OuterInt survives compile under two-level split",
+				TemplateState->NestedTextGraphStruct.OuterInt, 99);
+			TestEqual("Template InnerTextStruct.ScalarValue survives compile under two-level split",
+				TemplateState->NestedTextGraphStruct.InnerTextStruct.ScalarValue, 42);
+		});
+
+		It("Rejects malformed bracket syntax in property_path", [=, this]()
+		{
+			AddExpectedError(TEXT("Non-numeric array index"), EAutomationExpectedErrorFlags::Contains, 1);
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+			const FString StateGuid = AddStructSplitTestState(AssetPath);
+			const FSMAssistOperationResult Set = SetProperty(AssetPath, StateGuid,
+				TEXT("NestedTextGraphStruct"), TEXT("InnerTextStruct[abc].ScalarValue"), TEXT("0"));
+			TestFalse("Set rejected", Set.bSuccess);
+		});
+
+		It("Rejects a path segment that doesn't exist on the struct", [=, this]()
+		{
+			AddExpectedError(TEXT("not found under"), EAutomationExpectedErrorFlags::Contains, 1);
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+			const FString StateGuid = AddStructSplitTestState(AssetPath);
+			const FSMAssistOperationResult Set = SetProperty(AssetPath, StateGuid,
+				TEXT("NestedTextGraphStruct"), TEXT("InnerTextStruct.NoSuchField"), TEXT("0"));
+			TestFalse("Set rejected", Set.bSuccess);
+		});
+
+		It("Rejects property_path combined with structural array_action", [=, this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+			const FString StateGuid = AddStructSplitTestState(AssetPath);
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("node_guid"), StateGuid);
+			Args->SetStringField(TEXT("property_name"), TEXT("NestedTextGraphStruct"));
+			Args->SetStringField(TEXT("property_path"), TEXT("InnerTextStruct.ScalarValue"));
+			Args->SetStringField(TEXT("array_action"), TEXT("clear"));
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.set_node_property")), Args);
+			TestFalse("Set rejected", Result.bSuccess);
+			TestTrue("Error mentions property_path / array_action conflict",
+				Result.ErrorMessage.Contains(TEXT("property_path")));
 		});
 	});
 }

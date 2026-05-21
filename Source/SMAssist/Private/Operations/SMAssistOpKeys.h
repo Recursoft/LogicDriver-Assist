@@ -42,6 +42,8 @@ namespace LD::Assist::Ops
 	inline constexpr const TCHAR* ConfigureNodeVariable = TEXT("sm.configure_node_variable");
 	inline constexpr const TCHAR* ConnectNodeVariableOutput = TEXT("sm.connect_node_variable_output");
 	inline constexpr const TCHAR* DisconnectNodeVariableOutput = TEXT("sm.disconnect_node_variable_output");
+	inline constexpr const TCHAR* SplitPin = TEXT("sm.split_pin");
+	inline constexpr const TCHAR* RecombinePin = TEXT("sm.recombine_pin");
 }
 
 namespace LD::Assist::Args
@@ -91,6 +93,7 @@ namespace LD::Assist::Args
 	inline constexpr const TCHAR* UseIntermediateGraph = TEXT("use_intermediate_graph");
 	inline constexpr const TCHAR* EvalWithTransitions = TEXT("eval_with_transitions");
 	inline constexpr const TCHAR* Properties = TEXT("properties");
+	inline constexpr const TCHAR* PropertyPath = TEXT("property_path");
 	inline constexpr const TCHAR* Type = TEXT("type");
 	inline constexpr const TCHAR* Category = TEXT("category");
 	inline constexpr const TCHAR* Condition = TEXT("condition");

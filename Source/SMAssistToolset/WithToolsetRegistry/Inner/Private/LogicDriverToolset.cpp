@@ -253,7 +253,8 @@ FString ULogicDriverToolset::SetNodeProperty(
 	int32 ArrayIndex,
 	int32 TargetIndex,
 	const FString& ArrayAction,
-	int32 StackIndex)
+	int32 StackIndex,
+	const FString& PropertyPath)
 {
 	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
 	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
@@ -264,6 +265,7 @@ FString ULogicDriverToolset::SetNodeProperty(
 	LDA::AddIfNotIndexNone(*Args, TEXT("target_index"), TargetIndex);
 	LDA::AddIfNonEmpty(*Args, TEXT("array_action"), ArrayAction);
 	LDA::AddIfNotIndexNone(*Args, TEXT("stack_index"), StackIndex);
+	LDA::AddIfNonEmpty(*Args, TEXT("property_path"), PropertyPath);
 	return LDA::Execute(TEXT("sm.set_node_property"), Args);
 }
 
@@ -305,6 +307,34 @@ FString ULogicDriverToolset::GetPropertyPins(
 	Args->SetStringField(TEXT("node_guid"), NodeGuid);
 	LDA::AddIfNonEmpty(*Args, TEXT("variable_name"), VariableName);
 	return LDA::Execute(TEXT("sm.get_property_pins"), Args);
+}
+
+FString ULogicDriverToolset::SplitPin(
+	USMBlueprint* Blueprint,
+	const FString& NodeGuid,
+	const FString& VariableName,
+	const FString& PinId)
+{
+	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
+	Args->SetStringField(TEXT("node_guid"), NodeGuid);
+	Args->SetStringField(TEXT("variable_name"), VariableName);
+	LDA::AddIfNonEmpty(*Args, TEXT("pin_id"), PinId);
+	return LDA::Execute(TEXT("sm.split_pin"), Args);
+}
+
+FString ULogicDriverToolset::RecombinePin(
+	USMBlueprint* Blueprint,
+	const FString& NodeGuid,
+	const FString& VariableName,
+	const FString& PinId)
+{
+	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
+	Args->SetStringField(TEXT("node_guid"), NodeGuid);
+	Args->SetStringField(TEXT("variable_name"), VariableName);
+	LDA::AddIfNonEmpty(*Args, TEXT("pin_id"), PinId);
+	return LDA::Execute(TEXT("sm.recombine_pin"), Args);
 }
 
 FString ULogicDriverToolset::GetGraphView(

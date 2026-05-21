@@ -402,6 +402,14 @@ public:
 	 * @param TargetIndex Destination index for ArrayAction=move. -1 = not a move op.
 	 * @param ArrayAction One of "add" / "insert" / "duplicate" / "move" / "remove" / "clear". Empty = scalar set.
 	 * @param StackIndex Which stacked instance to target (for stacked nodes). -1 = base.
+	 * @param PropertyPath Optional dot-separated sub-path under PropertyName, with optional bracket
+	 *        indices for array elements (e.g. `"InnerStruct.TextMember"` or `"InnerArray[2].Field"`).
+	 *        When set, the write walks an IPropertyHandle chain to the leaf so
+	 *        PostEditChangeProperty fires with the correct property chain, cascading through
+	 *        Logic Driver's HandleOnPropertyChangedEvent to refresh child property graphs
+	 *        (text-graph buckets, scalar-array buckets). Extended graph properties
+	 *        (FSMTextGraphProperty) are addressed by the property itself; do NOT include the
+	 *        internal Result subfield. Rejected with structural ArrayAction values.
 	 * @return JSON: { node_guid, property_name, stack_index?, array_action?, array_index?, target_index?, element_count? }
 	 */
 	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
@@ -413,7 +421,8 @@ public:
 		int32 ArrayIndex = -1,
 		int32 TargetIndex = -1,
 		const FString& ArrayAction = TEXT(""),
-		int32 StackIndex = -1);
+		int32 StackIndex = -1,
+		const FString& PropertyPath = TEXT(""));
 
 	/**
 	 * Resets a property on a node back to its default value (or removes one array element if ArrayIndex set).
@@ -457,6 +466,53 @@ public:
 		USMBlueprint* Blueprint,
 		const FString& NodeGuid,
 		const FString& VariableName = TEXT(""));
+
+	/**
+	 * Splits a splittable-struct property pin on a state-like SM node, mirroring the editor's
+	 * right-click "Split Struct Pin" on the result pin (no PinId) or any sub-pin row (PinId).
+	 * Targets the property graph by VariableName; resolved via Node->GetAllPropertyGraphNodes().
+	 *
+	 * When PinId is empty, the top-level result pin is split (gated by CanSplitResultPin). When
+	 * PinId is supplied, the sub-pin is located by PinId in the result-pin tree (match the pin_id
+	 * field returned by GetPropertyPins) and gated by CanSplitSubPin. Refused when the type is not
+	 * a splittable struct, when the property opts out via CanEverSplit, or when the pin is already
+	 * split. Operation is transacted.
+	 *
+	 * @param Blueprint The blueprint to modify. Required.
+	 * @param NodeGuid GUID of the SM graph node owning the property. Required.
+	 * @param VariableName FSMGraphProperty_Base::VariableName of the property to split. Required.
+	 * @param PinId Optional. PinId (FGuid) of the sub-pin to split. Empty = top-level result pin.
+	 *              PinId values match the 'pin_id' returned by GetPropertyPins.
+	 * @return JSON: { applied, is_split_struct, variable_name, flag_b_split, pin_id?, result_pin:{...} }
+	 */
+	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
+	static FString SplitPin(
+		USMBlueprint* Blueprint,
+		const FString& NodeGuid,
+		const FString& VariableName,
+		const FString& PinId = TEXT(""));
+
+	/**
+	 * Recombines a previously split struct pin on a state-like SM node, mirroring the editor's
+	 * right-click "Recombine Struct Pin". Targets the property graph by VariableName.
+	 *
+	 * When PinId is empty, the top-level result pin is recombined (refused when the property is
+	 * not currently split). When PinId is supplied, the sub-pin is located by PinId and recombined
+	 * (refused when the sub-pin has no SubPins). Recombining a nested sub-pin flattens deeper
+	 * splits beneath it (engine RecombinePin is recursive). Operation is transacted.
+	 *
+	 * @param Blueprint The blueprint to modify. Required.
+	 * @param NodeGuid GUID of the SM graph node owning the property. Required.
+	 * @param VariableName FSMGraphProperty_Base::VariableName of the property to recombine. Required.
+	 * @param PinId Optional. PinId (FGuid) of the sub-pin to recombine. Empty = top-level result pin.
+	 * @return JSON: { applied, is_split_struct, variable_name, flag_b_split, pin_id?, result_pin:{...} }
+	 */
+	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
+	static FString RecombinePin(
+		USMBlueprint* Blueprint,
+		const FString& NodeGuid,
+		const FString& VariableName,
+		const FString& PinId = TEXT(""));
 
 	/**
 	 * Returns the on-canvas view of a state machine graph: node positions, sizes, colors, optional pins.

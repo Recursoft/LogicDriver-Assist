@@ -56,6 +56,10 @@ namespace LD::Assist
 
 	FSMAssistOperationResult GetPropertyPins(const TSharedRef<FJsonObject>& InArgs);
 
+	FSMAssistOperationResult SplitPin(const TSharedRef<FJsonObject>& InArgs);
+
+	FSMAssistOperationResult RecombinePin(const TSharedRef<FJsonObject>& InArgs);
+
 	FSMAssistOperationResult ResetNodeProperty(const TSharedRef<FJsonObject>& InArgs);
 
 	FSMAssistOperationResult AddSMVariable(const TSharedRef<FJsonObject>& InArgs);

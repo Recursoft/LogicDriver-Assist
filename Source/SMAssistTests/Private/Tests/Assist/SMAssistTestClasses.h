@@ -33,3 +33,44 @@ protected:
 		return true;
 	}
 };
+
+USTRUCT(BlueprintType)
+struct FSMAssistSplitInnerStruct
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Test)
+	int32 InnerInt = 0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Test)
+	float InnerFloat = 0.0f;
+};
+
+USTRUCT(BlueprintType)
+struct FSMAssistSplitOuterStruct
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Test)
+	int32 OuterInt = 0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Test)
+	FSMAssistSplitInnerStruct NestedStruct;
+};
+
+UCLASS()
+class USMAssistSplitTestState : public USMStateInstance
+{
+	GENERATED_BODY()
+
+public:
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Test)
+	FSMAssistSplitOuterStruct OurStruct;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Test)
+	FText NonSplittableText;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Test)
+	TArray<FSMAssistSplitOuterStruct> StructArray;
+};

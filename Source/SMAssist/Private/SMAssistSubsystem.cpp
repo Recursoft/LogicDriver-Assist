@@ -247,7 +247,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::SetNodeProperty;
-		Info.Description = TEXT("Set a value on a node property or mutate an array property's structure. Resolution order (when stack_index is omitted): graph-node properties first (NodePosX, NodePosY, NodeComment, bCommentBubblePinned, etc.), then the node's primary template (node-class fields). When stack_index is provided, targets the stack template directly. Supports scalar and array properties on templates; graph-node properties only support 'set'. Array actions (template-only): 'set' writes value(s) at array_index (auto-grows); 'add' appends a default element; 'insert' inserts a default at array_index; 'duplicate' clones the element at array_index (preserves pin literals and wired graphs); 'move' reorders array_index to target_index (preserves element guids); 'remove' removes array_index; 'clear' empties the array. Structural actions reject a 'value' payload and surface EditFixedSize / read-only arrays as explicit errors.");
+		Info.Description = TEXT("Set a value on a node property or mutate an array property's structure. Resolution order (when stack_index is omitted): graph-node properties first (NodePosX, NodePosY, NodeComment, bCommentBubblePinned, etc.), then the node's primary template (node-class fields). When stack_index is provided, targets the stack template directly. Supports scalar and array properties on templates; graph-node properties only support 'set'. Array actions (template-only): 'set' writes value(s) at array_index (auto-grows); 'add' appends a default element; 'insert' inserts a default at array_index; 'duplicate' clones the element at array_index (preserves pin literals and wired graphs); 'move' reorders array_index to target_index (preserves element guids); 'remove' removes array_index; 'clear' empties the array. Structural actions reject a 'value' payload and surface EditFixedSize / read-only arrays as explicit errors. For deeply-nested writes (sub-property of a split struct, text-graph property leaf, etc.) use 'property_path' to target the leaf directly: the write routes through an IPropertyHandle chain so PostEditChangeProperty fires with the full property chain, cascading through Logic Driver's HandleOnPropertyChangedEvent to refresh child property graphs (text-graph buckets, scalar-array buckets). Without 'property_path' only the top-level UPROPERTY is written and split sub-pin defaults / text-graph child graphs do not update.");
 		Info.InputSchema = MakeSchema(
 			{
 				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the target SMBlueprint.")) },
@@ -257,7 +257,8 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 				{ Args::ArrayIndex, MakePropertyObject(TEXT("number"), TEXT("Array index. 'set' scalar: element to write (auto-resizes). 'insert': insertion point (elements at/above shift up). 'duplicate': source element. 'move': source element. 'remove': element to remove. Must be omitted when 'value' is an array.")) },
 				{ Args::TargetIndex, MakePropertyObject(TEXT("number"), TEXT("Destination index for 'array_action=move'. Must differ from 'array_index'. Unused by other actions.")) },
 				{ Args::ArrayAction, MakePropertyObject(TEXT("string"), TEXT("Array operation mode. 'set' (default): write value(s). Structural (template-only): 'add', 'insert', 'duplicate', 'move', 'remove', 'clear'.")) },
-				{ Args::StackIndex, MakePropertyObject(TEXT("number"), TEXT("Optional state-stack template index. Omit to use the default resolution (graph-node then primary template); provide to target a stack element returned by sm.add_state_stack.")) }
+				{ Args::StackIndex, MakePropertyObject(TEXT("number"), TEXT("Optional state-stack template index. Omit to use the default resolution (graph-node then primary template); provide to target a stack element returned by sm.add_state_stack.")) },
+				{ Args::PropertyPath, MakePropertyObject(TEXT("string"), TEXT("Optional dot-separated sub-path under 'property_name', with optional bracket indices for array elements, e.g. \"InnerStruct.TextMember\" or \"InnerArray[2].Field\". When set, the write walks an IPropertyHandle chain to the leaf so PostEditChangeProperty fires with the full property chain (which Logic Driver's HandleOnPropertyChangedEvent uses to refresh child property graphs). Extended graph properties (text-graph) are addressed by the property itself; callers do NOT include the internal Result subfield. Rejected with structural 'array_action' values. 'value' must be a scalar when 'property_path' is set.")) }
 			},
 			{ Args::AssetPath, Args::NodeGuid, Args::PropertyName });
 		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::SetNodeProperty);
@@ -537,6 +538,38 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 			},
 			{ Args::AssetPath, Args::NodeGuid });
 		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::GetPropertyPins);
+		RegisterOperation(MoveTemp(Info));
+	}
+
+	{
+		FSMAssistOperationInfo Info;
+		Info.Name = Ops::SplitPin;
+		Info.Description = TEXT("Split a splittable-struct property pin on a state-like SM node, mirroring the editor's right-click 'Split Struct Pin' on the result pin (no pin_id) or any sub-pin row (pin_id). Targets the property graph identified by variable_name; resolves the result node via Node->GetAllPropertyGraphNodes(). When pin_id is omitted, gated by USMPropertyGraph::CanSplitResultPin (refused for non-struct types, struct types that opt out via CanEverSplit, FText-typed properties, the text-graph property, or properties already split). When pin_id is provided, the sub-pin is located by PinId in the result-pin tree (matching what sm.get_property_pins returns) and gated by USMPropertyGraph::CanSplitSubPin. Operation is transacted. Returns applied=true, is_split_struct (post-op), flag_b_split, and the post-op result_pin tree so callers can verify the split in one round-trip.");
+		Info.InputSchema = MakeSchema(
+			{
+				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the target SMBlueprint.")) },
+				{ Args::NodeGuid, MakePropertyObject(TEXT("string"), TEXT("Guid of the SM graph node owning the property.")) },
+				{ Args::VariableName, MakePropertyObject(TEXT("string"), TEXT("FSMGraphProperty_Base::VariableName of the exposed property to split (UPROPERTY name on the node template).")) },
+				{ Args::PinId, MakePropertyObject(TEXT("string"), TEXT("Optional. PinId (FGuid) of the sub-pin to split. Omit to split the top-level result pin. PinId values match the 'pin_id' returned by sm.get_property_pins.")) }
+			},
+			{ Args::AssetPath, Args::NodeGuid, Args::VariableName });
+		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::SplitPin);
+		RegisterOperation(MoveTemp(Info));
+	}
+
+	{
+		FSMAssistOperationInfo Info;
+		Info.Name = Ops::RecombinePin;
+		Info.Description = TEXT("Recombine a previously split struct pin on a state-like SM node, mirroring the editor's right-click 'Recombine Struct Pin'. Targets the property graph identified by variable_name; resolves the result node via Node->GetAllPropertyGraphNodes(). When pin_id is omitted, the top-level result pin is recombined (gated by LD::Editor::PropertyUtils::IsSplitStructResultNode; refused when the property is not currently split). When pin_id is provided, the sub-pin is located by PinId and recombined (refused when the sub-pin has no SubPins). Recombining a nested sub-pin flattens deeper splits beneath it (engine RecombinePin is recursive). Per-sub-pin wiring is discarded by the engine; the Logic Driver child-graph buckets that backed those sub-pins are cleaned up by the property graph. Operation is transacted. Returns applied=true, is_split_struct (post-op), flag_b_split, and the post-op result_pin tree.");
+		Info.InputSchema = MakeSchema(
+			{
+				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the target SMBlueprint.")) },
+				{ Args::NodeGuid, MakePropertyObject(TEXT("string"), TEXT("Guid of the SM graph node owning the property.")) },
+				{ Args::VariableName, MakePropertyObject(TEXT("string"), TEXT("FSMGraphProperty_Base::VariableName of the exposed property to recombine (UPROPERTY name on the node template).")) },
+				{ Args::PinId, MakePropertyObject(TEXT("string"), TEXT("Optional. PinId (FGuid) of the sub-pin to recombine. Omit to recombine the top-level result pin. PinId values match the 'pin_id' returned by sm.get_property_pins.")) }
+			},
+			{ Args::AssetPath, Args::NodeGuid, Args::VariableName });
+		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::RecombinePin);
 		RegisterOperation(MoveTemp(Info));
 	}
 
