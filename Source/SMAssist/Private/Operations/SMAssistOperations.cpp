@@ -852,12 +852,6 @@ FSMAssistOperationResult LD::Assist::SetNodeProperty(const TSharedRef<FJsonObjec
 		NormalizedAction == TEXT("remove") ||
 		NormalizedAction == TEXT("clear");
 
-	if (!PropertyPath.IsEmpty() && bIsStructuralAction)
-	{
-		return FSMAssistOperationResult::MakeError(
-			FString::Printf(TEXT("'property_path' targets a scalar leaf write and cannot combine with 'array_action=%s'."), *NormalizedAction));
-	}
-
 	// Structural actions never accept a 'value' payload, since they change the array's shape, not cell contents.
 	if (bIsStructuralAction)
 	{
@@ -869,7 +863,9 @@ FSMAssistOperationResult LD::Assist::SetNodeProperty(const TSharedRef<FJsonObjec
 	}
 
 	// Pre-flight: distinguish "not an array" from "array but locked" so the gate error below stays accurate.
-	if (bIsStructuralAction && ResolvedTemplate)
+	// SubPath cases defer this check to the leaf-resolver downstream; the top-level property is the
+	// struct that owns the path, not the target array.
+	if (bIsStructuralAction && ResolvedTemplate && PropertyPath.IsEmpty())
 	{
 		if (const FProperty* TargetProperty = ResolvedTemplate->GetClass()->FindPropertyByName(*PropertyName))
 		{
@@ -883,8 +879,14 @@ FSMAssistOperationResult LD::Assist::SetNodeProperty(const TSharedRef<FJsonObjec
 	}
 
 	// Pre-flight gate: surface EditFixedSize / BlueprintReadOnly as an explicit error rather than a silent no-op.
+	// CanModify* keys on top-level FName and would always fail at depth, so SubPath cases skip the
+	// gate; locked nested arrays surface later via SetNodePropertyValueStructuralAtSubPath.
 	auto CanMutateArray = [&](bool bStructural) -> bool
 	{
+		if (!PropertyPath.IsEmpty())
+		{
+			return true;
+		}
 		return bStructural
 			? Node->CanModifyArraySize(*PropertyName, PropertyArgs.NodeInstance)
 			: Node->CanModifyArrayContents(*PropertyName, PropertyArgs.NodeInstance);
@@ -894,6 +896,16 @@ FSMAssistOperationResult LD::Assist::SetNodeProperty(const TSharedRef<FJsonObjec
 		return FSMAssistOperationResult::MakeError(
 			FString::Printf(TEXT("Array property '%s' rejects '%s' (EditFixedSize, BlueprintReadOnly, or ExposedPropertyOverrides.bReadOnly)."),
 				*PropertyName, *NormalizedAction));
+	};
+
+	// Hint surfaced on PropertyPath-write failures so the MCP caller knows the strict-split
+	// precondition (the log line has the exact unsplit segment, but the JSON error reaches the
+	// agent first and needs to be actionable on its own).
+	auto MakeSplitHint = [&]() -> FString
+	{
+		return PropertyPath.IsEmpty()
+			? FString()
+			: TEXT(" When using property_path, every struct parent in the chain must be split via SplitPin first (top-level pin AND every intermediate struct member).");
 	};
 
 	if (NormalizedAction == TEXT("clear"))
@@ -906,7 +918,7 @@ FSMAssistOperationResult LD::Assist::SetNodeProperty(const TSharedRef<FJsonObjec
 		if (!GraphGen->SetNodePropertyValue(Node, PropertyArgs))
 		{
 			return FSMAssistOperationResult::MakeError(
-				FString::Printf(TEXT("Failed to clear array property '%s' on node."), *PropertyName));
+				FString::Printf(TEXT("Failed to clear array property '%s' on node.%s"), *PropertyName, *MakeSplitHint()));
 		}
 		Payload->SetStringField(Args::ArrayAction, TEXT("clear"));
 		return FSMAssistOperationResult::MakeSuccess(Payload);
@@ -929,7 +941,7 @@ FSMAssistOperationResult LD::Assist::SetNodeProperty(const TSharedRef<FJsonObjec
 		if (!GraphGen->SetNodePropertyValue(Node, PropertyArgs))
 		{
 			return FSMAssistOperationResult::MakeError(
-				FString::Printf(TEXT("Failed to remove element %d from array property '%s'."), RemoveIndex, *PropertyName));
+				FString::Printf(TEXT("Failed to remove element %d from array property '%s'.%s"), RemoveIndex, *PropertyName, *MakeSplitHint()));
 		}
 		Payload->SetStringField(Args::ArrayAction, TEXT("remove"));
 		Payload->SetNumberField(Args::ArrayIndex, RemoveIndex);
@@ -946,7 +958,7 @@ FSMAssistOperationResult LD::Assist::SetNodeProperty(const TSharedRef<FJsonObjec
 		if (!GraphGen->SetNodePropertyValue(Node, PropertyArgs))
 		{
 			return FSMAssistOperationResult::MakeError(
-				FString::Printf(TEXT("Failed to add element to array property '%s'."), *PropertyName));
+				FString::Printf(TEXT("Failed to add element to array property '%s'.%s"), *PropertyName, *MakeSplitHint()));
 		}
 		Payload->SetStringField(Args::ArrayAction, TEXT("add"));
 		return FSMAssistOperationResult::MakeSuccess(Payload);
@@ -969,7 +981,7 @@ FSMAssistOperationResult LD::Assist::SetNodeProperty(const TSharedRef<FJsonObjec
 		if (!GraphGen->SetNodePropertyValue(Node, PropertyArgs))
 		{
 			return FSMAssistOperationResult::MakeError(
-				FString::Printf(TEXT("Failed to insert element at %d into array property '%s'."), InsertIndex, *PropertyName));
+				FString::Printf(TEXT("Failed to insert element at %d into array property '%s'.%s"), InsertIndex, *PropertyName, *MakeSplitHint()));
 		}
 		Payload->SetStringField(Args::ArrayAction, TEXT("insert"));
 		Payload->SetNumberField(Args::ArrayIndex, InsertIndex);
@@ -993,7 +1005,7 @@ FSMAssistOperationResult LD::Assist::SetNodeProperty(const TSharedRef<FJsonObjec
 		if (!GraphGen->SetNodePropertyValue(Node, PropertyArgs))
 		{
 			return FSMAssistOperationResult::MakeError(
-				FString::Printf(TEXT("Failed to duplicate element %d in array property '%s'."), SourceIndex, *PropertyName));
+				FString::Printf(TEXT("Failed to duplicate element %d in array property '%s'.%s"), SourceIndex, *PropertyName, *MakeSplitHint()));
 		}
 		Payload->SetStringField(Args::ArrayAction, TEXT("duplicate"));
 		Payload->SetNumberField(Args::ArrayIndex, SourceIndex);
@@ -1029,7 +1041,7 @@ FSMAssistOperationResult LD::Assist::SetNodeProperty(const TSharedRef<FJsonObjec
 		if (!GraphGen->SetNodePropertyValue(Node, PropertyArgs))
 		{
 			return FSMAssistOperationResult::MakeError(
-				FString::Printf(TEXT("Failed to move element %d to %d in array property '%s'."), SourceIndex, DestIndex, *PropertyName));
+				FString::Printf(TEXT("Failed to move element %d to %d in array property '%s'.%s"), SourceIndex, DestIndex, *PropertyName, *MakeSplitHint()));
 		}
 		Payload->SetStringField(Args::ArrayAction, TEXT("move"));
 		Payload->SetNumberField(Args::ArrayIndex, SourceIndex);
@@ -1073,10 +1085,15 @@ FSMAssistOperationResult LD::Assist::SetNodeProperty(const TSharedRef<FJsonObjec
 		PropertyArgs.PropertyDefaultValue = ValueStrings[Idx];
 		if (!GraphGen->SetNodePropertyValue(Node, PropertyArgs))
 		{
+			const FString PathSuffix = PropertyPath.IsEmpty()
+				? FString()
+				: FString::Printf(TEXT(" path '%s'"), *PropertyPath);
+			const FString SplitHint = PropertyPath.IsEmpty()
+				? FString()
+				: TEXT(" When using property_path, every struct parent in the chain must be split via SplitPin first (top-level pin AND every intermediate struct member).");
 			return FSMAssistOperationResult::MakeError(
-				FString::Printf(TEXT("Failed to set property '%s'%s at index %d on node."),
-					*PropertyName, PropertyPath.IsEmpty() ? TEXT("") : *FString::Printf(TEXT(" path '%s'"), *PropertyPath),
-					PropertyArgs.PropertyIndex));
+				FString::Printf(TEXT("Failed to set property '%s'%s at index %d on node.%s"),
+					*PropertyName, *PathSuffix, PropertyArgs.PropertyIndex, *SplitHint));
 		}
 	}
 

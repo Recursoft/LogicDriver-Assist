@@ -2561,6 +2561,32 @@ void FAssistOperationsSpec::Define()
 			return FString();
 		};
 
+		// Splits NestedTextGraphStruct and its InnerTextStruct sub-pin so SubPath writes that descend
+		// into InnerTextStruct.* satisfy the strict-split contract (every struct parent in the chain
+		// must be split before the writer can address sub-pins). SplitVar / FindSubPinId are captured
+		// by value because the enclosing Describe lambda exits before the It blocks execute.
+		auto EnsureNestedTextGraphSplit = [this, SplitVar, FindSubPinId](const FString& InAssetPath, const FString& InStateGuid) -> bool
+		{
+			const FSMAssistOperationResult TopSplit = SplitVar(InAssetPath, InStateGuid, TEXT("NestedTextGraphStruct"));
+			if (!TestTrue("Top-level split", TopSplit.bSuccess) || !TestTrue("Top-level payload", TopSplit.Payload.IsValid()))
+			{
+				return false;
+			}
+			const TSharedPtr<FJsonObject>* ResultPin = nullptr;
+			if (!TestTrue("result_pin present", TopSplit.Payload->TryGetObjectField(TEXT("result_pin"), ResultPin)))
+			{
+				return false;
+			}
+			const FString InnerPinId = FindSubPinId(*ResultPin, TEXT("_InnerTextStruct"));
+			if (!TestFalse("Inner sub-pin id located", InnerPinId.IsEmpty()))
+			{
+				return false;
+			}
+			const FSMAssistOperationResult InnerSplit = SplitVar(InAssetPath, InStateGuid,
+				TEXT("NestedTextGraphStruct"), InnerPinId);
+			return TestTrue("Inner sub-pin split", InnerSplit.bSuccess);
+		};
+
 		It("Writes a deeply nested text-graph property addressed by the property itself", [=, this]()
 		{
 			const FString AssetPath = CreateTransientBlueprint();
@@ -2647,7 +2673,10 @@ void FAssistOperationsSpec::Define()
 				return;
 			}
 			const FString StateGuid = AddStructSplitTestState(AssetPath);
-			SplitVar(AssetPath, StateGuid, TEXT("NestedTextGraphStruct"));
+			if (!EnsureNestedTextGraphSplit(AssetPath, StateGuid))
+			{
+				return;
+			}
 
 			const FSMAssistOperationResult Set = SetProperty(AssetPath, StateGuid,
 				TEXT("NestedTextGraphStruct"), TEXT("InnerTextStruct.ScalarValue"), TEXT("42"));
@@ -2783,26 +2812,36 @@ void FAssistOperationsSpec::Define()
 
 		It("Rejects a path segment that doesn't exist on the struct", [=, this]()
 		{
-			AddExpectedError(TEXT("not found under"), EAutomationExpectedErrorFlags::Contains, 1);
+			AddExpectedError(TEXT("has no matching sub-pin"), EAutomationExpectedErrorFlags::Contains, 1);
 			const FString AssetPath = CreateTransientBlueprint();
 			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
 			{
 				return;
 			}
 			const FString StateGuid = AddStructSplitTestState(AssetPath);
+			if (!EnsureNestedTextGraphSplit(AssetPath, StateGuid))
+			{
+				return;
+			}
 			const FSMAssistOperationResult Set = SetProperty(AssetPath, StateGuid,
 				TEXT("NestedTextGraphStruct"), TEXT("InnerTextStruct.NoSuchField"), TEXT("0"));
 			TestFalse("Set rejected", Set.bSuccess);
 		});
 
-		It("Rejects property_path combined with structural array_action", [=, this]()
+		It("Rejects structural array_action when property_path leaf is a scalar", [=, this]()
 		{
+			AddExpectedError(TEXT("requires the SubPath leaf to name an array"),
+				EAutomationExpectedErrorFlags::Contains, 1);
 			const FString AssetPath = CreateTransientBlueprint();
 			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
 			{
 				return;
 			}
 			const FString StateGuid = AddStructSplitTestState(AssetPath);
+			if (!EnsureNestedTextGraphSplit(AssetPath, StateGuid))
+			{
+				return;
+			}
 			USMAssistSubsystem* Subsystem = GetSubsystem();
 			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
 			Args->SetStringField(TEXT("asset_path"), AssetPath);
@@ -2813,8 +2852,144 @@ void FAssistOperationsSpec::Define()
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
 				FName(TEXT("sm.set_node_property")), Args);
 			TestFalse("Set rejected", Result.bSuccess);
-			TestTrue("Error mentions property_path / array_action conflict",
-				Result.ErrorMessage.Contains(TEXT("property_path")));
+		});
+
+		auto LoadStateTemplate = [this](const FString& InAssetPath, const FString& InStateGuid) -> USMStructSplitTestState*
+		{
+			USMBlueprint* Blueprint = Cast<USMBlueprint>(FSoftObjectPath(InAssetPath).TryLoad());
+			if (!Blueprint)
+			{
+				return nullptr;
+			}
+			FGuid Guid;
+			FGuid::Parse(InStateGuid, Guid);
+			TArray<UEdGraphNode*> AllNodes;
+			FBlueprintEditorUtils::GetAllNodesOfClassEx<USMGraphNode_Base>(Blueprint, AllNodes);
+			for (UEdGraphNode* Candidate : AllNodes)
+			{
+				if (Candidate && Candidate->NodeGuid == Guid)
+				{
+					if (USMGraphNode_Base* Node = Cast<USMGraphNode_Base>(Candidate))
+					{
+						return Cast<USMStructSplitTestState>(Node->GetNodeTemplate());
+					}
+				}
+			}
+			return nullptr;
+		};
+
+		auto MutateArrayAtPath = [this](const FString& InAssetPath, const FString& InStateGuid,
+			const FString& InPropertyName, const FString& InPropertyPath, const FString& InAction,
+			TOptional<int32> InArrayIndex = TOptional<int32>(), TOptional<int32> InTargetIndex = TOptional<int32>())
+		{
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), InAssetPath);
+			Args->SetStringField(TEXT("node_guid"), InStateGuid);
+			Args->SetStringField(TEXT("property_name"), InPropertyName);
+			Args->SetStringField(TEXT("property_path"), InPropertyPath);
+			Args->SetStringField(TEXT("array_action"), InAction);
+			if (InArrayIndex.IsSet())
+			{
+				Args->SetNumberField(TEXT("array_index"), InArrayIndex.GetValue());
+			}
+			if (InTargetIndex.IsSet())
+			{
+				Args->SetNumberField(TEXT("target_index"), InTargetIndex.GetValue());
+			}
+			return Subsystem->ExecuteOperation(FName(TEXT("sm.set_node_property")), Args);
+		};
+
+		It("Adds elements to a nested array via property_path", [=, this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+			const FString StateGuid = AddStructSplitTestState(AssetPath);
+			if (!TestFalse("State created", StateGuid.IsEmpty()))
+			{
+				return;
+			}
+			if (!EnsureNestedTextGraphSplit(AssetPath, StateGuid))
+			{
+				return;
+			}
+
+			const FSMAssistOperationResult First = MutateArrayAtPath(AssetPath, StateGuid,
+				TEXT("NestedTextGraphStruct"), TEXT("InnerTextStruct.TextArray"), TEXT("add"));
+			TestTrue("First add succeeds", First.bSuccess);
+			const FSMAssistOperationResult Second = MutateArrayAtPath(AssetPath, StateGuid,
+				TEXT("NestedTextGraphStruct"), TEXT("InnerTextStruct.TextArray"), TEXT("add"));
+			TestTrue("Second add succeeds", Second.bSuccess);
+
+			USMStructSplitTestState* TemplateState = LoadStateTemplate(AssetPath, StateGuid);
+			if (TestNotNull("Template located", TemplateState))
+			{
+				TestEqual("Nested TextArray Num is 2 after two adds via MCP",
+					TemplateState->NestedTextGraphStruct.InnerTextStruct.TextArray.Num(), 2);
+			}
+		});
+
+		It("Removes a nested array element via property_path + array_index", [=, this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+			const FString StateGuid = AddStructSplitTestState(AssetPath);
+			if (!EnsureNestedTextGraphSplit(AssetPath, StateGuid))
+			{
+				return;
+			}
+
+			MutateArrayAtPath(AssetPath, StateGuid, TEXT("NestedTextGraphStruct"),
+				TEXT("InnerTextStruct.TextArray"), TEXT("add"));
+			MutateArrayAtPath(AssetPath, StateGuid, TEXT("NestedTextGraphStruct"),
+				TEXT("InnerTextStruct.TextArray"), TEXT("add"));
+
+			const FSMAssistOperationResult Remove = MutateArrayAtPath(AssetPath, StateGuid,
+				TEXT("NestedTextGraphStruct"), TEXT("InnerTextStruct.TextArray"), TEXT("remove"), /*Index=*/0);
+			TestTrue("Remove succeeds", Remove.bSuccess);
+
+			USMStructSplitTestState* TemplateState = LoadStateTemplate(AssetPath, StateGuid);
+			if (TestNotNull("Template located", TemplateState))
+			{
+				TestEqual("Nested TextArray shrinks to 1 after remove via MCP",
+					TemplateState->NestedTextGraphStruct.InnerTextStruct.TextArray.Num(), 1);
+			}
+		});
+
+		It("Clears a nested array via property_path", [=, this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+			const FString StateGuid = AddStructSplitTestState(AssetPath);
+			if (!EnsureNestedTextGraphSplit(AssetPath, StateGuid))
+			{
+				return;
+			}
+
+			MutateArrayAtPath(AssetPath, StateGuid, TEXT("NestedTextGraphStruct"),
+				TEXT("InnerTextStruct.TextArray"), TEXT("add"));
+			MutateArrayAtPath(AssetPath, StateGuid, TEXT("NestedTextGraphStruct"),
+				TEXT("InnerTextStruct.TextArray"), TEXT("add"));
+
+			const FSMAssistOperationResult Clear = MutateArrayAtPath(AssetPath, StateGuid,
+				TEXT("NestedTextGraphStruct"), TEXT("InnerTextStruct.TextArray"), TEXT("clear"));
+			TestTrue("Clear succeeds", Clear.bSuccess);
+
+			USMStructSplitTestState* TemplateState = LoadStateTemplate(AssetPath, StateGuid);
+			if (TestNotNull("Template located", TemplateState))
+			{
+				TestEqual("Nested TextArray empty after clear via MCP",
+					TemplateState->NestedTextGraphStruct.InnerTextStruct.TextArray.Num(), 0);
+			}
 		});
 	});
 }

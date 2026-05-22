@@ -394,6 +394,14 @@ public:
 	/**
 	 * Sets a property on a state/transition node. Multiplexes set / add / insert / duplicate /
 	 * move / remove / clear based on ArrayAction.
+	 *
+	 * Split-pin precondition for PropertyPath: when PropertyPath is non-empty, every struct
+	 * parent in the chain (the top-level pin named by PropertyName AND every intermediate struct
+	 * member) must be split first via SplitPin. Calls against any unsplit struct parent are
+	 * rejected with an actionable error message and no template changes are applied. Arrays do
+	 * not require splitting; writing to fields inside an array element struct requires splitting
+	 * that element's struct pin separately. Top-level array index uses ArrayIndex, not PropertyPath.
+	 *
 	 * @param Blueprint The blueprint to modify. Required.
 	 * @param NodeGuid GUID of the node containing the property. Required.
 	 * @param PropertyName Name of the property to set. Required.
@@ -404,12 +412,16 @@ public:
 	 * @param StackIndex Which stacked instance to target (for stacked nodes). -1 = base.
 	 * @param PropertyPath Optional dot-separated sub-path under PropertyName, with optional bracket
 	 *        indices for array elements (e.g. `"InnerStruct.TextMember"` or `"InnerArray[2].Field"`).
-	 *        When set, the write walks an IPropertyHandle chain to the leaf so
-	 *        PostEditChangeProperty fires with the correct property chain, cascading through
-	 *        Logic Driver's HandleOnPropertyChangedEvent to refresh child property graphs
-	 *        (text-graph buckets, scalar-array buckets). Extended graph properties
-	 *        (FSMTextGraphProperty) are addressed by the property itself; do NOT include the
-	 *        internal Result subfield. Rejected with structural ArrayAction values.
+	 *        Requires every struct parent in the chain to be split via SplitPin first - the
+	 *        top-level pin AND every intermediate struct member. Calls against any unsplit struct
+	 *        parent are rejected; the error message identifies which segment is unsplit. Arrays
+	 *        themselves do not need to be split, but writing to fields inside an array element
+	 *        struct requires splitting that element's struct pin. When set, the write walks an
+	 *        IPropertyHandle chain to the leaf so PostEditChangeProperty fires with the correct
+	 *        property chain, cascading through Logic Driver's HandleOnPropertyChangedEvent to
+	 *        refresh child property graphs (text-graph buckets, scalar-array buckets). Extended
+	 *        graph properties (FSMTextGraphProperty) are addressed by the property itself; do NOT
+	 *        include the internal Result subfield.
 	 * @return JSON: { node_guid, property_name, stack_index?, array_action?, array_index?, target_index?, element_count? }
 	 */
 	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
@@ -472,6 +484,12 @@ public:
 	 * right-click "Split Struct Pin" on the result pin (no PinId) or any sub-pin row (PinId).
 	 * Targets the property graph by VariableName; resolved via Node->GetAllPropertyGraphNodes().
 	 *
+	 * Required as a precondition for SetNodeProperty and ResetNodeProperty calls that use a
+	 * non-empty PropertyPath: every struct parent in the path must be split via this tool before
+	 * the write. Each call splits one struct pin (top-level result pin when PinId is empty, or
+	 * a specific sub-pin when PinId is supplied), so deep chains require one SplitPin call per
+	 * nested struct level.
+	 *
 	 * When PinId is empty, the top-level result pin is split (gated by CanSplitResultPin). When
 	 * PinId is supplied, the sub-pin is located by PinId in the result-pin tree (match the pin_id
 	 * field returned by GetPropertyPins) and gated by CanSplitSubPin. Refused when the type is not
@@ -496,10 +514,14 @@ public:
 	 * Recombines a previously split struct pin on a state-like SM node, mirroring the editor's
 	 * right-click "Recombine Struct Pin". Targets the property graph by VariableName.
 	 *
+	 * Recombining a struct parent invalidates any subsequent SetNodeProperty or ResetNodeProperty
+	 * call whose PropertyPath descends through it; the recombined parent is no longer split and
+	 * the call will be rejected until SplitPin is re-applied. RecombinePin is recursive: deeper
+	 * splits beneath the recombined pin are flattened in the same call.
+	 *
 	 * When PinId is empty, the top-level result pin is recombined (refused when the property is
 	 * not currently split). When PinId is supplied, the sub-pin is located by PinId and recombined
-	 * (refused when the sub-pin has no SubPins). Recombining a nested sub-pin flattens deeper
-	 * splits beneath it (engine RecombinePin is recursive). Operation is transacted.
+	 * (refused when the sub-pin has no SubPins). Operation is transacted.
 	 *
 	 * @param Blueprint The blueprint to modify. Required.
 	 * @param NodeGuid GUID of the SM graph node owning the property. Required.
