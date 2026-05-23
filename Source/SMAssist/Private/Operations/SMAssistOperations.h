@@ -55,6 +55,8 @@ namespace LD::Assist
 	FSMAssistOperationResult LayoutStates(const TSharedRef<FJsonObject>& InArgs);
 
 	FSMAssistOperationResult GetPropertyPins(const TSharedRef<FJsonObject>& InArgs);
+	FSMAssistOperationResult GetPropertyGraph(const TSharedRef<FJsonObject>& InArgs);
+	FSMAssistOperationResult SetPropertyGraphEditMode(const TSharedRef<FJsonObject>& InArgs);
 
 	FSMAssistOperationResult SplitPin(const TSharedRef<FJsonObject>& InArgs);
 

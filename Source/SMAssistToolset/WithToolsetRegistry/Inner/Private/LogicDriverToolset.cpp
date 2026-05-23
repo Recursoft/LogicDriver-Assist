@@ -309,6 +309,38 @@ FString ULogicDriverToolset::GetPropertyPins(
 	return LDA::Execute(TEXT("sm.get_property_pins"), Args);
 }
 
+FString ULogicDriverToolset::GetPropertyGraph(
+	USMBlueprint* Blueprint,
+	const FString& NodeGuid,
+	const FString& VariableName,
+	const FString& PropertyPath,
+	bool bIncludePinTree)
+{
+	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
+	Args->SetStringField(TEXT("node_guid"), NodeGuid);
+	Args->SetStringField(TEXT("variable_name"), VariableName);
+	LDA::AddIfNonEmpty(*Args, TEXT("property_path"), PropertyPath);
+	Args->SetBoolField(TEXT("include_pin_tree"), bIncludePinTree);
+	return LDA::Execute(TEXT("sm.get_property_graph"), Args);
+}
+
+FString ULogicDriverToolset::SetPropertyGraphEditMode(
+	USMBlueprint* Blueprint,
+	const FString& NodeGuid,
+	const FString& VariableName,
+	bool bEnable,
+	const FString& PropertyPath)
+{
+	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
+	Args->SetStringField(TEXT("node_guid"), NodeGuid);
+	Args->SetStringField(TEXT("variable_name"), VariableName);
+	LDA::AddIfNonEmpty(*Args, TEXT("property_path"), PropertyPath);
+	Args->SetBoolField(TEXT("b_enable"), bEnable);
+	return LDA::Execute(TEXT("sm.set_property_graph_edit_mode"), Args);
+}
+
 FString ULogicDriverToolset::SplitPin(
 	USMBlueprint* Blueprint,
 	const FString& NodeGuid,

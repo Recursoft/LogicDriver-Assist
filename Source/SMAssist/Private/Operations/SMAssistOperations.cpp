@@ -3205,6 +3205,160 @@ FSMAssistOperationResult LD::Assist::GetPropertyPins(const TSharedRef<FJsonObjec
 
 namespace LD::Assist::Private
 {
+	struct FResolvePropertyGraphInputs
+	{
+		USMBlueprint* Blueprint = nullptr;
+		USMGraphNode_Base* Node = nullptr;
+		FString VariableName;
+		FString PropertyPath;
+	};
+
+	static bool ParseResolvePropertyGraphInputs(const TSharedRef<FJsonObject>& InArgs,
+		FResolvePropertyGraphInputs& OutInputs, FString& OutError)
+	{
+		FString AssetPath;
+		if (!InArgs->TryGetStringField(Args::AssetPath, AssetPath) || AssetPath.IsEmpty())
+		{
+			OutError = TEXT("Missing required arg 'asset_path'.");
+			return false;
+		}
+
+		FString NodeGuidStr;
+		if (!InArgs->TryGetStringField(Args::NodeGuid, NodeGuidStr))
+		{
+			OutError = TEXT("Missing required arg 'node_guid'.");
+			return false;
+		}
+		FGuid NodeGuid;
+		if (!FGuid::Parse(NodeGuidStr, NodeGuid))
+		{
+			OutError = FString::Printf(TEXT("Invalid 'node_guid' '%s'."), *NodeGuidStr);
+			return false;
+		}
+
+		if (!InArgs->TryGetStringField(Args::VariableName, OutInputs.VariableName) || OutInputs.VariableName.IsEmpty())
+		{
+			OutError = TEXT("Missing required arg 'variable_name'.");
+			return false;
+		}
+
+		InArgs->TryGetStringField(Args::PropertyPath, OutInputs.PropertyPath);
+
+		OutInputs.Blueprint = LD::Assist::Utils::LoadStateMachineBlueprint(AssetPath, OutError);
+		if (!OutInputs.Blueprint)
+		{
+			return false;
+		}
+
+		OutInputs.Node = LD::Assist::Utils::FindNodeByGuid(OutInputs.Blueprint, NodeGuid);
+		if (!OutInputs.Node)
+		{
+			OutError = FString::Printf(TEXT("Could not find node with guid '%s'."), *NodeGuidStr);
+			return false;
+		}
+		return true;
+	}
+}
+
+FSMAssistOperationResult LD::Assist::GetPropertyGraph(const TSharedRef<FJsonObject>& InArgs)
+{
+	FString Error;
+	LD::Assist::Private::FResolvePropertyGraphInputs Inputs;
+	if (!LD::Assist::Private::ParseResolvePropertyGraphInputs(InArgs, Inputs, Error))
+	{
+		return FSMAssistOperationResult::MakeError(Error);
+	}
+
+	ISMGraphGeneration* GraphGen = LD::Assist::Private::GetGraphGeneration(Error);
+	if (!GraphGen)
+	{
+		return FSMAssistOperationResult::MakeError(Error);
+	}
+
+	bool bIncludePinTree = false;
+	InArgs->TryGetBoolField(Args::IncludePinTree, bIncludePinTree);
+
+	ISMGraphGeneration::FFindPropertyGraphArgs FindArgs;
+	FindArgs.VariableName = *Inputs.VariableName;
+	FindArgs.SubPath = Inputs.PropertyPath;
+
+	ISMGraphGeneration::FFindPropertyGraphResult Resolution;
+	if (!GraphGen->FindPropertyGraph(Inputs.Node, FindArgs, Resolution, &Error))
+	{
+		return FSMAssistOperationResult::MakeError(Error);
+	}
+
+	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
+	Payload->SetStringField(Args::AssetPath, Inputs.Blueprint->GetPathName());
+	Payload->SetStringField(Args::GraphPath, Resolution.Graph->GetPathName());
+	Payload->SetStringField(Args::GraphName, Resolution.Graph->GetName());
+	Payload->SetStringField(Args::GraphGuid, Resolution.Graph->GraphGuid.ToString());
+	Payload->SetStringField(Args::ResultNodeName, Resolution.ResultNode->GetName());
+	Payload->SetStringField(Args::ResultPinName, Resolution.ResultPin->PinName.ToString());
+	Payload->SetNumberField(Args::BucketIndex, Resolution.BucketIndex);
+	Payload->SetStringField(Args::ElementType, LD::Assist::Private::PinTypeToShortString(Resolution.ResultPin->PinType));
+
+	if (bIncludePinTree)
+	{
+		if (UEdGraphPin* ResultPin = Resolution.ResultNode->GetResultPin(EGPD_Input))
+		{
+			Payload->SetObjectField(Args::ResultPin, LD::Assist::Private::PinTreeToJson(ResultPin, 0));
+		}
+	}
+
+	return FSMAssistOperationResult::MakeSuccess(Payload);
+}
+
+FSMAssistOperationResult LD::Assist::SetPropertyGraphEditMode(const TSharedRef<FJsonObject>& InArgs)
+{
+	FString Error;
+	LD::Assist::Private::FResolvePropertyGraphInputs Inputs;
+	if (!LD::Assist::Private::ParseResolvePropertyGraphInputs(InArgs, Inputs, Error))
+	{
+		return FSMAssistOperationResult::MakeError(Error);
+	}
+
+	bool bEnable = false;
+	if (!InArgs->TryGetBoolField(Args::Enable, bEnable))
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'b_enable'."));
+	}
+
+	ISMGraphGeneration* GraphGen = LD::Assist::Private::GetGraphGeneration(Error);
+	if (!GraphGen)
+	{
+		return FSMAssistOperationResult::MakeError(Error);
+	}
+
+	ISMGraphGeneration::FFindPropertyGraphArgs FindArgs;
+	FindArgs.VariableName = *Inputs.VariableName;
+	FindArgs.SubPath = Inputs.PropertyPath;
+
+	ISMGraphGeneration::FFindPropertyGraphResult Resolution;
+	if (!GraphGen->FindPropertyGraph(Inputs.Node, FindArgs, Resolution, &Error))
+	{
+		return FSMAssistOperationResult::MakeError(Error);
+	}
+
+	if (!GraphGen->SetPropertyGraphEditMode(Resolution.Graph, bEnable))
+	{
+		if (Resolution.Graph->IsVariableReadOnly())
+		{
+			return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("Cannot toggle edit mode on '%s%s%s': the underlying variable is read-only."),
+				*Inputs.VariableName, Inputs.PropertyPath.IsEmpty() ? TEXT("") : TEXT("."), *Inputs.PropertyPath));
+		}
+		return FSMAssistOperationResult::MakeError(TEXT("SetPropertyGraphEditMode failed on the resolved graph."));
+	}
+
+	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
+	Payload->SetStringField(Args::AssetPath, Inputs.Blueprint->GetPathName());
+	Payload->SetStringField(Args::GraphPath, Resolution.Graph->GetPathName());
+	Payload->SetBoolField(Args::Enable, bEnable);
+	return FSMAssistOperationResult::MakeSuccess(Payload);
+}
+
+namespace LD::Assist::Private
+{
 	struct FSplitRecombineTarget
 	{
 		USMGraphK2Node_PropertyNode_Base* ResultNode = nullptr;

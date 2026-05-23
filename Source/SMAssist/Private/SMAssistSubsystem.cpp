@@ -543,6 +543,40 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 
 	{
 		FSMAssistOperationInfo Info;
+		Info.Name = Ops::GetPropertyGraph;
+		Info.Description = TEXT("Resolve a USMPropertyGraph by node + variable + property_path. Returns enough handles (graph_path, graph_name, graph_guid, result_node_name, result_pin_name, bucket_index, element_type) for downstream MCP servers to wire general K2 logic into it. property_path uses the same syntax as sm.set_node_property: 'MemberA.MemberB[i].MemberC'. Indexed segments descend through nested-array buckets, switching to each bucket's child property graph for subsequent segments. Top-level array variables require a leading bare '[index]' segment. Strict-split contract: every struct parent in the path must be split first (use sm.split_pin). bucket_index is -1 for non-bucket leaves; use it as the bucket-element predicate. For text-graph property graphs, call sm.set_property_graph_edit_mode before wiring; it is idempotent on graphs already in edit mode.");
+		Info.InputSchema = MakeSchema(
+			{
+				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the target SMBlueprint.")) },
+				{ Args::NodeGuid, MakePropertyObject(TEXT("string"), TEXT("Guid of the SM graph node owning the property.")) },
+				{ Args::VariableName, MakePropertyObject(TEXT("string"), TEXT("Top-level FSMGraphProperty variable name (UPROPERTY name on the node template).")) },
+				{ Args::PropertyPath, MakePropertyObject(TEXT("string"), TEXT("Optional. Dotted sub-path under variable_name: 'MemberA.MemberB[i].MemberC'. Empty resolves the top property graph; for top-level array variables, a leading bare '[index]' is required.")) },
+				{ Args::IncludePinTree, MakePropertyObject(TEXT("boolean"), TEXT("Optional. When true, the response includes a result_pin sub-tree mirroring sm.get_property_pins output. Defaults to false to keep payloads small.")) }
+			},
+			{ Args::AssetPath, Args::NodeGuid, Args::VariableName });
+		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::GetPropertyGraph);
+		RegisterOperation(MoveTemp(Info));
+	}
+
+	{
+		FSMAssistOperationInfo Info;
+		Info.Name = Ops::SetPropertyGraphEditMode;
+		Info.Description = TEXT("Toggle graph-edit mode on a property graph. Required before wiring text graphs durably: USMTextPropertyGraph's compile pipeline only honors wired changes when the graph is in edit mode. Resolves the target graph the same way as sm.get_property_graph (node + variable + property_path), then routes through ISMGraphGeneration::SetPropertyGraphEditMode under a scoped transaction so single-step undo reverts the toggle.");
+		Info.InputSchema = MakeSchema(
+			{
+				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the target SMBlueprint.")) },
+				{ Args::NodeGuid, MakePropertyObject(TEXT("string"), TEXT("Guid of the SM graph node owning the property.")) },
+				{ Args::VariableName, MakePropertyObject(TEXT("string"), TEXT("Top-level FSMGraphProperty variable name (UPROPERTY name on the node template).")) },
+				{ Args::PropertyPath, MakePropertyObject(TEXT("string"), TEXT("Optional. Dotted sub-path under variable_name; empty toggles the top property graph.")) },
+				{ Args::Enable, MakePropertyObject(TEXT("boolean"), TEXT("Target edit-mode state: true to enable, false to disable.")) }
+			},
+			{ Args::AssetPath, Args::NodeGuid, Args::VariableName, Args::Enable });
+		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::SetPropertyGraphEditMode);
+		RegisterOperation(MoveTemp(Info));
+	}
+
+	{
+		FSMAssistOperationInfo Info;
 		Info.Name = Ops::SplitPin;
 		Info.Description = TEXT("Split a splittable-struct property pin on a state-like SM node, mirroring the editor's right-click 'Split Struct Pin' on the result pin (no pin_id) or any sub-pin row (pin_id). Targets the property graph identified by variable_name; resolves the result node via Node->GetAllPropertyGraphNodes(). When pin_id is omitted, gated by USMPropertyGraph::CanSplitResultPin (refused for non-struct types, struct types that opt out via CanEverSplit, FText-typed properties, the text-graph property, or properties already split). When pin_id is provided, the sub-pin is located by PinId in the result-pin tree (matching what sm.get_property_pins returns) and gated by USMPropertyGraph::CanSplitSubPin. Operation is transacted. Returns applied=true, is_split_struct (post-op), flag_b_split, and the post-op result_pin tree so callers can verify the split in one round-trip.");
 		Info.InputSchema = MakeSchema(

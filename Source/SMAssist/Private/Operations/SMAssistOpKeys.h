@@ -30,6 +30,8 @@ namespace LD::Assist::Ops
 	inline constexpr const TCHAR* ClearScreenshots = TEXT("sm.clear_screenshots");
 	inline constexpr const TCHAR* LayoutStates = TEXT("sm.layout_states");
 	inline constexpr const TCHAR* GetPropertyPins = TEXT("sm.get_property_pins");
+	inline constexpr const TCHAR* GetPropertyGraph = TEXT("sm.get_property_graph");
+	inline constexpr const TCHAR* SetPropertyGraphEditMode = TEXT("sm.set_property_graph_edit_mode");
 	inline constexpr const TCHAR* ResetNodeProperty = TEXT("sm.reset_node_property");
 	inline constexpr const TCHAR* AddSMVariable = TEXT("sm.add_sm_variable");
 	inline constexpr const TCHAR* ConfigureSMComponentOnActor = TEXT("sm.configure_sm_component_on_actor");
@@ -204,6 +206,16 @@ namespace LD::Assist::Args
 	inline constexpr const TCHAR* UpdateDirection = TEXT("b_update_direction");
 	inline constexpr const TCHAR* UpdateHidden = TEXT("b_update_hidden");
 	inline constexpr const TCHAR* UpdateReadOnly = TEXT("b_update_read_only");
+
+	inline constexpr const TCHAR* GraphName = TEXT("graph_name");
+	inline constexpr const TCHAR* GraphGuid = TEXT("graph_guid");
+	inline constexpr const TCHAR* ResultNodeName = TEXT("result_node_name");
+	inline constexpr const TCHAR* ResultPinName = TEXT("result_pin_name");
+	inline constexpr const TCHAR* BucketIndex = TEXT("bucket_index");
+	inline constexpr const TCHAR* ElementType = TEXT("element_type");
+	inline constexpr const TCHAR* ResultPin = TEXT("result_pin");
+	inline constexpr const TCHAR* IncludePinTree = TEXT("include_pin_tree");
+	inline constexpr const TCHAR* Enable = TEXT("b_enable");
 
 	inline constexpr const TCHAR* FromStackIndex = TEXT("from_stack_index");
 	inline constexpr const TCHAR* FromVariableName = TEXT("from_variable_name");

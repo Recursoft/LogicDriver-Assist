@@ -480,6 +480,67 @@ public:
 		const FString& VariableName = TEXT(""));
 
 	/**
+	 * Resolves a USMPropertyGraph by node + variable + property path, returning enough handles
+	 * for downstream MCP servers (Monolith, Unreal-MCP) to wire general K2 logic into it. The
+	 * resolved property graph is just an event graph; once GetPropertyGraph hands back graph_path
+	 * / graph_name / graph_guid, callers compose general BlueprintTools create_node + connect_pins
+	 * against it. No LD-specific wiring tools required.
+	 *
+	 * PropertyPath uses the same syntax as SetNodeProperty: "MemberA.MemberB[i].MemberC".
+	 * Indexed segments descend through nested-array buckets, switching to each bucket's child
+	 * property graph for subsequent segments. Top-level array variables require a leading bare
+	 * "[index]" segment.
+	 *
+	 * Strict-split contract: every struct parent in the path must be split first via SplitPin.
+	 * The error wording matches SetNodePropertyValue's actionable hint so callers can recover.
+	 *
+	 * For text-graph property graphs, wired changes only persist when the graph is in graph-edit
+	 * mode. Callers wiring into a text graph should call SetPropertyGraphEditMode beforehand; it
+	 * is idempotent on graphs already in edit mode.
+	 *
+	 * bucket_index is INDEX_NONE (-1) for non-bucket leaves and a non-negative integer when the
+	 * path terminates inside an array-bucket child graph; use it as the bucket-element predicate.
+	 *
+	 * @param Blueprint The blueprint to inspect. Required.
+	 * @param NodeGuid GUID of the SM graph node owning the property. Required.
+	 * @param VariableName Top-level FSMGraphProperty variable name. Required.
+	 * @param PropertyPath Optional sub-path; empty resolves the top property graph.
+	 * @param bIncludePinTree Optional; false by default to keep responses small. When true, the
+	 *        response includes a result_pin sub-tree mirroring GetPropertyPins output.
+	 * @return JSON: { asset_path, graph_path, graph_name, graph_guid, result_node_name,
+	 *                 result_pin_name, bucket_index, element_type, [result_pin] }
+	 */
+	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
+	static FString GetPropertyGraph(
+		USMBlueprint* Blueprint,
+		const FString& NodeGuid,
+		const FString& VariableName,
+		const FString& PropertyPath = TEXT(""),
+		bool bIncludePinTree = false);
+
+	/**
+	 * Toggles graph-edit mode on a property graph. Required before wiring text graphs durably:
+	 * USMTextPropertyGraph's compile pipeline only honors wired changes when the graph is in
+	 * edit mode. Resolves the target graph the same way as GetPropertyGraph (node + variable +
+	 * property path), then routes through ISMGraphGeneration::SetPropertyGraphEditMode under a
+	 * scoped transaction so single-step undo reverts the toggle.
+	 *
+	 * @param Blueprint The blueprint to modify. Required.
+	 * @param NodeGuid GUID of the SM graph node owning the property. Required.
+	 * @param VariableName Top-level FSMGraphProperty variable name. Required.
+	 * @param bEnable Target edit-mode state.
+	 * @param PropertyPath Optional sub-path; empty toggles the top property graph.
+	 * @return JSON: { asset_path, graph_path, b_enable }
+	 */
+	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
+	static FString SetPropertyGraphEditMode(
+		USMBlueprint* Blueprint,
+		const FString& NodeGuid,
+		const FString& VariableName,
+		bool bEnable,
+		const FString& PropertyPath = TEXT(""));
+
+	/**
 	 * Splits a splittable-struct property pin on a state-like SM node, mirroring the editor's
 	 * right-click "Split Struct Pin" on the result pin (no PinId) or any sub-pin row (PinId).
 	 * Targets the property graph by VariableName; resolved via Node->GetAllPropertyGraphNodes().

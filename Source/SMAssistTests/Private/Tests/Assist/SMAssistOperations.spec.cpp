@@ -9,7 +9,10 @@
 #include "Tests/StructSplit/SMStructSplitTestClasses.h"
 
 #include "Blueprints/SMBlueprint.h"
+#include "Graph/Nodes/PropertyNodes/SMGraphK2Node_PropertyNode_Base.h"
 #include "Graph/Nodes/SMGraphNode_Base.h"
+#include "Graph/SMPropertyGraph.h"
+#include "Properties/SMGraphProperty_Base.h"
 
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
@@ -2798,7 +2801,7 @@ void FAssistOperationsSpec::Define()
 
 		It("Rejects malformed bracket syntax in property_path", [=, this]()
 		{
-			AddExpectedError(TEXT("Non-numeric array index"), EAutomationExpectedErrorFlags::Contains, 1);
+			AddExpectedError(TEXT("Non-integer array index"), EAutomationExpectedErrorFlags::Contains, 1);
 			const FString AssetPath = CreateTransientBlueprint();
 			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
 			{
@@ -2990,6 +2993,237 @@ void FAssistOperationsSpec::Define()
 				TestEqual("Nested TextArray empty after clear via MCP",
 					TemplateState->NestedTextGraphStruct.InnerTextStruct.TextArray.Num(), 0);
 			}
+		});
+
+		auto GetPropertyGraph = [this](const FString& InAssetPath, const FString& InStateGuid,
+			const FString& InVar, const FString& InPath = FString(), bool bIncludePinTree = false)
+		{
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), InAssetPath);
+			Args->SetStringField(TEXT("node_guid"), InStateGuid);
+			Args->SetStringField(TEXT("variable_name"), InVar);
+			if (!InPath.IsEmpty())
+			{
+				Args->SetStringField(TEXT("property_path"), InPath);
+			}
+			Args->SetBoolField(TEXT("include_pin_tree"), bIncludePinTree);
+			return Subsystem->ExecuteOperation(FName(TEXT("sm.get_property_graph")), Args);
+		};
+
+		auto SetEditMode = [this](const FString& InAssetPath, const FString& InStateGuid,
+			const FString& InVar, bool bEnable, bool bSetEnableField = true)
+		{
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), InAssetPath);
+			Args->SetStringField(TEXT("node_guid"), InStateGuid);
+			Args->SetStringField(TEXT("variable_name"), InVar);
+			if (bSetEnableField)
+			{
+				Args->SetBoolField(TEXT("b_enable"), bEnable);
+			}
+			return Subsystem->ExecuteOperation(FName(TEXT("sm.set_property_graph_edit_mode")), Args);
+		};
+
+		auto LoadResolvedGraph = [](const FSMAssistOperationResult& InResult) -> USMPropertyGraph*
+		{
+			if (!InResult.bSuccess || !InResult.Payload.IsValid())
+			{
+				return nullptr;
+			}
+			FString GraphPath;
+			if (!InResult.Payload->TryGetStringField(TEXT("graph_path"), GraphPath))
+			{
+				return nullptr;
+			}
+			return Cast<USMPropertyGraph>(FSoftObjectPath(GraphPath).TryLoad());
+		};
+
+		It("get_property_graph resolves a top-level text-graph variable and returns handles", [=, this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+			const FString StateGuid = AddStructSplitTestState(AssetPath);
+			if (!TestFalse("State created", StateGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			const FSMAssistOperationResult Result = GetPropertyGraph(AssetPath, StateGuid, TEXT("TextGraphValue"));
+			if (!TestTrue("get_property_graph succeeds", Result.bSuccess) ||
+				!TestTrue("Payload valid", Result.Payload.IsValid()))
+			{
+				return;
+			}
+
+			for (const TCHAR* Field : { TEXT("graph_path"), TEXT("graph_name"), TEXT("graph_guid"),
+				TEXT("result_node_name"), TEXT("result_pin_name"), TEXT("element_type") })
+			{
+				FString Value;
+				TestTrue(FString::Printf(TEXT("%s present and non-empty"), Field),
+					Result.Payload->TryGetStringField(Field, Value) && !Value.IsEmpty());
+			}
+
+			double BucketIndex = 0.0;
+			if (TestTrue("bucket_index present", Result.Payload->TryGetNumberField(TEXT("bucket_index"), BucketIndex)))
+			{
+				TestEqual("bucket_index is INDEX_NONE for a non-bucket leaf", static_cast<int32>(BucketIndex), INDEX_NONE);
+			}
+			TestFalse("result_pin omitted when include_pin_tree is false", Result.Payload->HasField(TEXT("result_pin")));
+		});
+
+		It("get_property_graph includes the result_pin tree when include_pin_tree is set", [=, this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+			const FString StateGuid = AddStructSplitTestState(AssetPath);
+			if (!TestFalse("State created", StateGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			const FSMAssistOperationResult Result = GetPropertyGraph(AssetPath, StateGuid,
+				TEXT("TextGraphValue"), FString(), /*bIncludePinTree=*/true);
+			if (!TestTrue("get_property_graph succeeds", Result.bSuccess) ||
+				!TestTrue("Payload valid", Result.Payload.IsValid()))
+			{
+				return;
+			}
+			const TSharedPtr<FJsonObject>* ResultPin = nullptr;
+			TestTrue("result_pin sub-tree present", Result.Payload->TryGetObjectField(TEXT("result_pin"), ResultPin));
+		});
+
+		It("get_property_graph surfaces a non-negative bucket_index for a nested array element", [=, this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+			const FString StateGuid = AddStructSplitTestState(AssetPath);
+			if (!EnsureNestedTextGraphSplit(AssetPath, StateGuid))
+			{
+				return;
+			}
+			MutateArrayAtPath(AssetPath, StateGuid, TEXT("NestedTextGraphStruct"),
+				TEXT("InnerTextStruct.TextArray"), TEXT("add"));
+
+			const FSMAssistOperationResult Result = GetPropertyGraph(AssetPath, StateGuid,
+				TEXT("NestedTextGraphStruct"), TEXT("InnerTextStruct.TextArray[0]"));
+			if (!TestTrue("get_property_graph succeeds", Result.bSuccess) ||
+				!TestTrue("Payload valid", Result.Payload.IsValid()))
+			{
+				return;
+			}
+			double BucketIndex = -1.0;
+			if (TestTrue("bucket_index present", Result.Payload->TryGetNumberField(TEXT("bucket_index"), BucketIndex)))
+			{
+				TestEqual("bucket_index is 0 for the first array element", static_cast<int32>(BucketIndex), 0);
+			}
+		});
+
+		It("get_property_graph rejects a variable that does not exist", [=, this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+			const FString StateGuid = AddStructSplitTestState(AssetPath);
+			const FSMAssistOperationResult Result = GetPropertyGraph(AssetPath, StateGuid, TEXT("DoesNotExist"));
+			TestFalse("Resolve rejected", Result.bSuccess);
+			TestTrue("Error names the missing variable", Result.ErrorMessage.Contains(TEXT("DoesNotExist")));
+		});
+
+		It("set_property_graph_edit_mode rejects a missing b_enable arg", [=, this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+			const FString StateGuid = AddStructSplitTestState(AssetPath);
+			const FSMAssistOperationResult Result = SetEditMode(AssetPath, StateGuid,
+				TEXT("TextGraphValue"), /*bEnable=*/true, /*bSetEnableField=*/false);
+			TestFalse("Rejected without b_enable", Result.bSuccess);
+			TestTrue("Error names the missing arg", Result.ErrorMessage.Contains(TEXT("b_enable")));
+		});
+
+		It("set_property_graph_edit_mode flips a text graph into edit mode and back", [=, this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+			const FString StateGuid = AddStructSplitTestState(AssetPath);
+			if (!TestFalse("State created", StateGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			const FSMAssistOperationResult Enable = SetEditMode(AssetPath, StateGuid, TEXT("TextGraphValue"), true);
+			TestTrue("Enable succeeds", Enable.bSuccess);
+			if (USMPropertyGraph* Graph = LoadResolvedGraph(Enable))
+			{
+				TestTrue("Graph reports edit mode after enable", Graph->IsGraphBeingUsedToEdit());
+			}
+			else
+			{
+				AddError(TEXT("Could not load the resolved graph after enable"));
+			}
+
+			const FSMAssistOperationResult Idempotent = SetEditMode(AssetPath, StateGuid, TEXT("TextGraphValue"), true);
+			TestTrue("Re-enable is idempotent and succeeds", Idempotent.bSuccess);
+
+			const FSMAssistOperationResult Disable = SetEditMode(AssetPath, StateGuid, TEXT("TextGraphValue"), false);
+			TestTrue("Disable succeeds", Disable.bSuccess);
+			if (USMPropertyGraph* Graph = LoadResolvedGraph(Disable))
+			{
+				TestFalse("Graph reports edit mode cleared after disable", Graph->IsGraphBeingUsedToEdit());
+			}
+		});
+
+		It("set_property_graph_edit_mode maps a read-only variable to an actionable error", [=, this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+			const FString StateGuid = AddStructSplitTestState(AssetPath);
+			if (!TestFalse("State created", StateGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMPropertyGraph* Graph = LoadResolvedGraph(GetPropertyGraph(AssetPath, StateGuid, TEXT("TextGraphValue")));
+			if (!TestNotNull("Resolved text-graph graph", Graph) || !TestNotNull("Result node", Graph->ResultNode.Get()))
+			{
+				return;
+			}
+			FSMGraphProperty_Base* PropertyNode = Graph->ResultNode->GetPropertyNode();
+			if (!TestNotNull("Property node accessible", PropertyNode))
+			{
+				return;
+			}
+			PropertyNode->bReadOnly = true;
+			Graph->RefreshProperty(/*bModify=*/false, /*bSetFromPinFirst=*/false);
+			if (!TestTrue("Graph picked up read-only flag", Graph->IsVariableReadOnly()))
+			{
+				return;
+			}
+
+			const FSMAssistOperationResult Result = SetEditMode(AssetPath, StateGuid, TEXT("TextGraphValue"), true);
+			TestFalse("Toggle rejected on read-only variable", Result.bSuccess);
+			TestTrue("Error explains the variable is read-only", Result.ErrorMessage.Contains(TEXT("read-only")));
 		});
 	});
 }
