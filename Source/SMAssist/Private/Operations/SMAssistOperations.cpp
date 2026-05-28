@@ -3682,54 +3682,60 @@ FSMAssistOperationResult LD::Assist::ResetNodeProperty(const TSharedRef<FJsonObj
 
 namespace LD::Assist::Private
 {
-	static bool ResolveVariablePinType(const FString& InTypeStr, FEdGraphPinType& OutPinType)
+	static bool ResolveTerminalType(const FString& InTypeStr, FName& OutCategory, FName& OutSubCategory, UObject*& OutSubCategoryObject)
 	{
+		OutCategory = NAME_None;
+		OutSubCategory = NAME_None;
+		OutSubCategoryObject = nullptr;
+
 		const FString TypeStr = InTypeStr.ToLower();
 
 		if (TypeStr == TEXT("bool") || TypeStr == TEXT("boolean"))
 		{
-			OutPinType = FEdGraphPinType(UEdGraphSchema_K2::PC_Boolean, NAME_None, nullptr, EPinContainerType::None, false, FEdGraphTerminalType());
+			OutCategory = UEdGraphSchema_K2::PC_Boolean;
 			return true;
 		}
 		if (TypeStr == TEXT("byte") || TypeStr == TEXT("uint8"))
 		{
-			OutPinType = FEdGraphPinType(UEdGraphSchema_K2::PC_Byte, NAME_None, nullptr, EPinContainerType::None, false, FEdGraphTerminalType());
+			OutCategory = UEdGraphSchema_K2::PC_Byte;
 			return true;
 		}
 		if (TypeStr == TEXT("int") || TypeStr == TEXT("int32") || TypeStr == TEXT("integer"))
 		{
-			OutPinType = FEdGraphPinType(UEdGraphSchema_K2::PC_Int, NAME_None, nullptr, EPinContainerType::None, false, FEdGraphTerminalType());
+			OutCategory = UEdGraphSchema_K2::PC_Int;
 			return true;
 		}
 		if (TypeStr == TEXT("int64") || TypeStr == TEXT("long"))
 		{
-			OutPinType = FEdGraphPinType(UEdGraphSchema_K2::PC_Int64, NAME_None, nullptr, EPinContainerType::None, false, FEdGraphTerminalType());
+			OutCategory = UEdGraphSchema_K2::PC_Int64;
 			return true;
 		}
 		// BP UI's "Float" maps to PC_Real + PC_Double in UE 5.x.
 		if (TypeStr == TEXT("float") || TypeStr == TEXT("real") || TypeStr == TEXT("double"))
 		{
-			OutPinType = FEdGraphPinType(UEdGraphSchema_K2::PC_Real, UEdGraphSchema_K2::PC_Double, nullptr, EPinContainerType::None, false, FEdGraphTerminalType());
+			OutCategory = UEdGraphSchema_K2::PC_Real;
+			OutSubCategory = UEdGraphSchema_K2::PC_Double;
 			return true;
 		}
 		if (TypeStr == TEXT("single") || TypeStr == TEXT("single_precision_float"))
 		{
-			OutPinType = FEdGraphPinType(UEdGraphSchema_K2::PC_Real, UEdGraphSchema_K2::PC_Float, nullptr, EPinContainerType::None, false, FEdGraphTerminalType());
+			OutCategory = UEdGraphSchema_K2::PC_Real;
+			OutSubCategory = UEdGraphSchema_K2::PC_Float;
 			return true;
 		}
 		if (TypeStr == TEXT("string") || TypeStr == TEXT("fstring"))
 		{
-			OutPinType = FEdGraphPinType(UEdGraphSchema_K2::PC_String, NAME_None, nullptr, EPinContainerType::None, false, FEdGraphTerminalType());
+			OutCategory = UEdGraphSchema_K2::PC_String;
 			return true;
 		}
 		if (TypeStr == TEXT("name") || TypeStr == TEXT("fname"))
 		{
-			OutPinType = FEdGraphPinType(UEdGraphSchema_K2::PC_Name, NAME_None, nullptr, EPinContainerType::None, false, FEdGraphTerminalType());
+			OutCategory = UEdGraphSchema_K2::PC_Name;
 			return true;
 		}
 		if (TypeStr == TEXT("text") || TypeStr == TEXT("ftext"))
 		{
-			OutPinType = FEdGraphPinType(UEdGraphSchema_K2::PC_Text, NAME_None, nullptr, EPinContainerType::None, false, FEdGraphTerminalType());
+			OutCategory = UEdGraphSchema_K2::PC_Text;
 			return true;
 		}
 
@@ -3764,7 +3770,8 @@ namespace LD::Assist::Private
 		}
 		if (StructType)
 		{
-			OutPinType = FEdGraphPinType(UEdGraphSchema_K2::PC_Struct, NAME_None, StructType, EPinContainerType::None, false, FEdGraphTerminalType());
+			OutCategory = UEdGraphSchema_K2::PC_Struct;
+			OutSubCategoryObject = StructType;
 			return true;
 		}
 
@@ -3772,17 +3779,124 @@ namespace LD::Assist::Private
 		{
 			if (UClass* ObjectClass = LoadClass<UObject>(nullptr, *InTypeStr))
 			{
-				OutPinType = FEdGraphPinType(UEdGraphSchema_K2::PC_Object, NAME_None, ObjectClass, EPinContainerType::None, false, FEdGraphTerminalType());
+				OutCategory = UEdGraphSchema_K2::PC_Object;
+				OutSubCategoryObject = ObjectClass;
 				return true;
 			}
 			if (UScriptStruct* ArbitraryStruct = LoadObject<UScriptStruct>(nullptr, *InTypeStr))
 			{
-				OutPinType = FEdGraphPinType(UEdGraphSchema_K2::PC_Struct, NAME_None, ArbitraryStruct, EPinContainerType::None, false, FEdGraphTerminalType());
+				OutCategory = UEdGraphSchema_K2::PC_Struct;
+				OutSubCategoryObject = ArbitraryStruct;
 				return true;
 			}
 		}
 
 		return false;
+	}
+
+	static bool ResolveContainerType(const FString& InContainerTypeStr, EPinContainerType& OutContainerType)
+	{
+		if (InContainerTypeStr.IsEmpty() || InContainerTypeStr.Equals(TEXT("None"), ESearchCase::IgnoreCase))
+		{
+			OutContainerType = EPinContainerType::None;
+			return true;
+		}
+		if (InContainerTypeStr.Equals(TEXT("Array"), ESearchCase::IgnoreCase))
+		{
+			OutContainerType = EPinContainerType::Array;
+			return true;
+		}
+		if (InContainerTypeStr.Equals(TEXT("Map"), ESearchCase::IgnoreCase))
+		{
+			OutContainerType = EPinContainerType::Map;
+			return true;
+		}
+		if (InContainerTypeStr.Equals(TEXT("Set"), ESearchCase::IgnoreCase))
+		{
+			OutContainerType = EPinContainerType::Set;
+			return true;
+		}
+		return false;
+	}
+
+	static const TCHAR* ContainerTypeToString(EPinContainerType InContainerType)
+	{
+		switch (InContainerType)
+		{
+		case EPinContainerType::Array: return TEXT("Array");
+		case EPinContainerType::Map:   return TEXT("Map");
+		case EPinContainerType::Set:   return TEXT("Set");
+		default:                       return TEXT("None");
+		}
+	}
+
+	static const TCHAR* GetAcceptedTypeTokens()
+	{
+		return TEXT("bool, int, int64, byte, float, single, string, name, text, vector, vector2d, rotator, transform, linearcolor, color, guid, or a class/struct path (e.g. /Script/Engine.Actor)");
+	}
+
+	// Map semantics in FEdGraphPinType: the outer PinCategory/SubCategory/SubCategoryObject describe
+	// the KEY type; PinValueType describes the VALUE type. This is the reverse of how Blueprint's
+	// pin-type widget displays them, but it matches the engine's serialization.
+	static bool ResolveVariablePinType(
+		const FString& InVarType,
+		const FString& InContainerTypeStr,
+		const FString& InKeyType,
+		FEdGraphPinType& OutPinType,
+		FString& OutError)
+	{
+		FName ValueCategory;
+		FName ValueSubCategory;
+		UObject* ValueSubCategoryObject = nullptr;
+		if (!ResolveTerminalType(InVarType, ValueCategory, ValueSubCategory, ValueSubCategoryObject))
+		{
+			OutError = FString::Printf(TEXT("Unrecognized 'var_type' '%s'. Accepted values: %s."),
+				*InVarType, GetAcceptedTypeTokens());
+			return false;
+		}
+
+		EPinContainerType ContainerType = EPinContainerType::None;
+		if (!ResolveContainerType(InContainerTypeStr, ContainerType))
+		{
+			OutError = FString::Printf(TEXT("Unrecognized 'container_type' '%s'. Accepted: None, Array, Map, Set."),
+				*InContainerTypeStr);
+			return false;
+		}
+
+		if (ContainerType == EPinContainerType::Map)
+		{
+			if (InKeyType.IsEmpty())
+			{
+				OutError = TEXT("Missing 'key_type' for container_type='Map'. Required vocabulary matches 'var_type'.");
+				return false;
+			}
+
+			FName KeyCategory;
+			FName KeySubCategory;
+			UObject* KeySubCategoryObject = nullptr;
+			if (!ResolveTerminalType(InKeyType, KeyCategory, KeySubCategory, KeySubCategoryObject))
+			{
+				OutError = FString::Printf(TEXT("Unrecognized 'key_type' '%s'. Accepted values: %s."),
+					*InKeyType, GetAcceptedTypeTokens());
+				return false;
+			}
+
+			OutPinType = FEdGraphPinType(KeyCategory, KeySubCategory, KeySubCategoryObject, EPinContainerType::Map, false, FEdGraphTerminalType());
+			OutPinType.PinValueType.TerminalCategory = ValueCategory;
+			OutPinType.PinValueType.TerminalSubCategory = ValueSubCategory;
+			OutPinType.PinValueType.TerminalSubCategoryObject = ValueSubCategoryObject;
+			return true;
+		}
+
+		if (!InKeyType.IsEmpty())
+		{
+			OutError = FString::Printf(TEXT("'key_type' is only valid when container_type='Map'; got container_type='%s', key_type='%s'."),
+				*InContainerTypeStr, *InKeyType);
+			return false;
+		}
+
+		OutPinType = FEdGraphPinType(ValueCategory, ValueSubCategory, ValueSubCategoryObject, ContainerType, false, FEdGraphTerminalType());
+		return true;
 	}
 }
 
@@ -3813,11 +3927,17 @@ FSMAssistOperationResult LD::Assist::AddSMVariable(const TSharedRef<FJsonObject>
 		return FSMAssistOperationResult::MakeError(LoadError);
 	}
 
+	FString ContainerTypeStr;
+	InArgs->TryGetStringField(Args::ContainerType, ContainerTypeStr);
+
+	FString KeyType;
+	InArgs->TryGetStringField(Args::KeyType, KeyType);
+
 	FEdGraphPinType PinType;
-	if (!LD::Assist::Private::ResolveVariablePinType(VarType, PinType))
+	FString ResolveError;
+	if (!LD::Assist::Private::ResolveVariablePinType(VarType, ContainerTypeStr, KeyType, PinType, ResolveError))
 	{
-		return FSMAssistOperationResult::MakeError(
-			FString::Printf(TEXT("Unrecognized 'var_type' '%s'. Accepted values: bool, int, int64, byte, float, single, string, name, text, vector, vector2d, rotator, transform, linearcolor, color, guid, or a class/struct path (e.g. /Script/Engine.Actor)."), *VarType));
+		return FSMAssistOperationResult::MakeError(ResolveError);
 	}
 
 	FString DefaultValue;
@@ -3838,6 +3958,14 @@ FSMAssistOperationResult LD::Assist::AddSMVariable(const TSharedRef<FJsonObject>
 	if (!DefaultValue.IsEmpty())
 	{
 		Payload->SetStringField(Args::DefaultValue, DefaultValue);
+	}
+	if (PinType.ContainerType != EPinContainerType::None)
+	{
+		Payload->SetStringField(Args::ContainerType, LD::Assist::Private::ContainerTypeToString(PinType.ContainerType));
+		if (PinType.ContainerType == EPinContainerType::Map)
+		{
+			Payload->SetStringField(Args::KeyType, KeyType);
+		}
 	}
 	return FSMAssistOperationResult::MakeSuccess(Payload);
 }
@@ -4651,11 +4779,17 @@ FSMAssistOperationResult LD::Assist::AddNodeVariable(const TSharedRef<FJsonObjec
 		return FSMAssistOperationResult::MakeError(LoadError);
 	}
 
+	FString ContainerTypeStr;
+	InArgs->TryGetStringField(Args::ContainerType, ContainerTypeStr);
+
+	FString KeyType;
+	InArgs->TryGetStringField(Args::KeyType, KeyType);
+
 	FEdGraphPinType PinType;
-	if (!LD::Assist::Private::ResolveVariablePinType(VarType, PinType))
+	FString ResolveError;
+	if (!LD::Assist::Private::ResolveVariablePinType(VarType, ContainerTypeStr, KeyType, PinType, ResolveError))
 	{
-		return FSMAssistOperationResult::MakeError(
-			FString::Printf(TEXT("Unrecognized 'var_type' '%s'. Accepted values: bool, int, int64, byte, float, single, string, name, text, vector, vector2d, rotator, transform, linearcolor, color, guid, or a class/struct path (e.g. /Script/Engine.Actor)."), *VarType));
+		return FSMAssistOperationResult::MakeError(ResolveError);
 	}
 
 	ISMGraphGeneration::FCreateNodeClassVariableArgs CreateArgs;
@@ -4692,6 +4826,14 @@ FSMAssistOperationResult LD::Assist::AddNodeVariable(const TSharedRef<FJsonObjec
 			FString::Printf(TEXT("Blueprint '%s' is a USMTransitionInstance subclass. Transition-class variables do not support directional / hidden / read-only configuration (matches editor filter). Omit 'direction', 'b_hidden', 'b_read_only' to add a plain variable."), *AssetPath));
 	}
 
+	const bool bIsMapOrSet = PinType.ContainerType == EPinContainerType::Map || PinType.ContainerType == EPinContainerType::Set;
+	if (bWantsSMConfig && bIsMapOrSet)
+	{
+		return FSMAssistOperationResult::MakeError(
+			FString::Printf(TEXT("Variable '%s' on '%s' is a %s container, which cannot be exposed on the graph node (matches editor's Variable Details panel filter). Omit 'direction', 'b_hidden', 'b_read_only' to add the variable as a plain property."),
+				*VarName, *AssetPath, LD::Assist::Private::ContainerTypeToString(PinType.ContainerType)));
+	}
+
 	FString GraphGenError;
 	ISMGraphGeneration* GraphGen = LD::Assist::Private::GetGraphGeneration(GraphGenError);
 	if (!GraphGen)
@@ -4724,6 +4866,84 @@ FSMAssistOperationResult LD::Assist::AddNodeVariable(const TSharedRef<FJsonObjec
 	if (CreateArgs.bReadOnly.IsSet())
 	{
 		Payload->SetBoolField(Args::ReadOnly, CreateArgs.bReadOnly.GetValue());
+	}
+	if (PinType.ContainerType != EPinContainerType::None)
+	{
+		Payload->SetStringField(Args::ContainerType, LD::Assist::Private::ContainerTypeToString(PinType.ContainerType));
+		if (PinType.ContainerType == EPinContainerType::Map)
+		{
+			Payload->SetStringField(Args::KeyType, KeyType);
+		}
+	}
+	return FSMAssistOperationResult::MakeSuccess(Payload);
+}
+
+FSMAssistOperationResult LD::Assist::AddBlueprintVariable(const TSharedRef<FJsonObject>& InArgs)
+{
+	FString AssetPath;
+	if (!InArgs->TryGetStringField(Args::AssetPath, AssetPath) || AssetPath.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'asset_path'."));
+	}
+
+	FString VarName;
+	if (!InArgs->TryGetStringField(Args::VariableName, VarName) || VarName.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'variable_name'."));
+	}
+
+	FString VarType;
+	if (!InArgs->TryGetStringField(Args::VarType, VarType) || VarType.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'var_type'."));
+	}
+
+	FString LoadError;
+	UBlueprint* Blueprint = LD::Assist::Utils::LoadBlueprint(AssetPath, LoadError);
+	if (!Blueprint)
+	{
+		return FSMAssistOperationResult::MakeError(LoadError);
+	}
+
+	FString ContainerTypeStr;
+	InArgs->TryGetStringField(Args::ContainerType, ContainerTypeStr);
+
+	FString KeyType;
+	InArgs->TryGetStringField(Args::KeyType, KeyType);
+
+	FEdGraphPinType PinType;
+	FString ResolveError;
+	if (!LD::Assist::Private::ResolveVariablePinType(VarType, ContainerTypeStr, KeyType, PinType, ResolveError))
+	{
+		return FSMAssistOperationResult::MakeError(ResolveError);
+	}
+
+	FString DefaultValue;
+	InArgs->TryGetStringField(Args::DefaultValue, DefaultValue);
+
+	const FName VarFName(*VarName);
+	const bool bAdded = FBlueprintEditorUtils::AddMemberVariable(Blueprint, VarFName, PinType, DefaultValue);
+	if (!bAdded)
+	{
+		return FSMAssistOperationResult::MakeError(
+			FString::Printf(TEXT("AddMemberVariable failed for '%s' (likely duplicate name or unsupported type)."), *VarName));
+	}
+
+	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
+	Payload->SetStringField(Args::AssetPath, Blueprint->GetPathName());
+	Payload->SetStringField(Args::VariableName, VarName);
+	Payload->SetStringField(Args::VarType, VarType);
+	if (!DefaultValue.IsEmpty())
+	{
+		Payload->SetStringField(Args::DefaultValue, DefaultValue);
+	}
+	if (PinType.ContainerType != EPinContainerType::None)
+	{
+		Payload->SetStringField(Args::ContainerType, LD::Assist::Private::ContainerTypeToString(PinType.ContainerType));
+		if (PinType.ContainerType == EPinContainerType::Map)
+		{
+			Payload->SetStringField(Args::KeyType, KeyType);
+		}
 	}
 	return FSMAssistOperationResult::MakeSuccess(Payload);
 }

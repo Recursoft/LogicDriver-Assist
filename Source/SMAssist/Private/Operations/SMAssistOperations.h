@@ -80,6 +80,8 @@ namespace LD::Assist
 
 	FSMAssistOperationResult AddNodeVariable(const TSharedRef<FJsonObject>& InArgs);
 
+	FSMAssistOperationResult AddBlueprintVariable(const TSharedRef<FJsonObject>& InArgs);
+
 	FSMAssistOperationResult ConfigureNodeVariable(const TSharedRef<FJsonObject>& InArgs);
 
 	FSMAssistOperationResult ConnectNodeVariableOutput(const TSharedRef<FJsonObject>& InArgs);

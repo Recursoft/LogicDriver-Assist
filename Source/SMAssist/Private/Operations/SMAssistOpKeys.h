@@ -41,6 +41,7 @@ namespace LD::Assist::Ops
 	inline constexpr const TCHAR* ConfigureTransitionEvent = TEXT("sm.configure_transition_event");
 	inline constexpr const TCHAR* FindNodeTypes = TEXT("sm.find_node_types");
 	inline constexpr const TCHAR* AddNodeVariable = TEXT("sm.add_node_variable");
+	inline constexpr const TCHAR* AddBlueprintVariable = TEXT("sm.add_blueprint_variable");
 	inline constexpr const TCHAR* ConfigureNodeVariable = TEXT("sm.configure_node_variable");
 	inline constexpr const TCHAR* ConnectNodeVariableOutput = TEXT("sm.connect_node_variable_output");
 	inline constexpr const TCHAR* DisconnectNodeVariableOutput = TEXT("sm.disconnect_node_variable_output");
@@ -162,6 +163,8 @@ namespace LD::Assist::Args
 
 	inline constexpr const TCHAR* VariableName = TEXT("variable_name");
 	inline constexpr const TCHAR* VarType = TEXT("var_type");
+	inline constexpr const TCHAR* ContainerType = TEXT("container_type");
+	inline constexpr const TCHAR* KeyType = TEXT("key_type");
 	inline constexpr const TCHAR* DefaultValue = TEXT("default_value");
 
 	inline constexpr const TCHAR* ActorBlueprint = TEXT("actor_blueprint");

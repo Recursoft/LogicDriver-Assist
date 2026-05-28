@@ -696,21 +696,27 @@ public:
 	 *
 	 * @param Blueprint The state-machine blueprint to modify. Required.
 	 * @param VarName Variable name (no spaces; FName-style). Required.
-	 * @param VarType Type token. Accepted short names: bool, int, int64, byte, float, single,
+	 * @param VarType Element-type token. Accepted short names: bool, int, int64, byte, float, single,
 	 *                string, name, text, vector, vector2d, rotator, transform, linearcolor,
 	 *                color, guid. Or a class/struct object path such as /Script/Engine.Actor
 	 *                or /Game/MyBP.MyBP_C. Required.
 	 * @param DefaultValue Default value as a string in UE property-text format. Empty = engine
 	 *                     default for the type. Examples: "true" for bool, "1.25" for float,
-	 *                     "(R=1.0,G=0.0,B=0.0,A=1.0)" for FLinearColor.
-	 * @return JSON: { asset_path, variable_name, var_type, default_value? }
+	 *                     "(R=1.0,G=0.0,B=0.0,A=1.0)" for FLinearColor. Containers default to empty.
+	 * @param ContainerType Container wrapping the element type. Accepted: "None" (default),
+	 *                      "Array", "Map", "Set". Case-insensitive.
+	 * @param KeyType Required when ContainerType=="Map"; uses the same vocabulary as VarType.
+	 *                Must be empty when ContainerType is not "Map".
+	 * @return JSON: { asset_path, variable_name, var_type, default_value?, container_type?, key_type? }
 	 */
 	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
 	static FString AddSMVariable(
 		USMBlueprint* Blueprint,
 		const FString& VarName,
 		const FString& VarType,
-		const FString& DefaultValue = TEXT(""));
+		const FString& DefaultValue = TEXT(""),
+		const FString& ContainerType = TEXT("None"),
+		const FString& KeyType = TEXT(""));
 
 	/**
 	 * Adds a Blueprint variable to a node-class Blueprint (a USMNodeInstance subclass, including
@@ -722,6 +728,11 @@ public:
 	 * (matches the editor's Variable Details panel filter). Pass an empty Direction and false
 	 * for both booleans when adding a variable to a transition class.
 	 *
+	 * Container variables: Array is graph-exposable (Direction / bHidden / bReadOnly accepted).
+	 * Map and Set are NOT graph-exposable on any node-class BP -- the editor's Variable Details
+	 * panel filter does not surface direction controls for those container kinds. Direction /
+	 * bHidden / bReadOnly must remain at their defaults when ContainerType is Map or Set.
+	 *
 	 * Compile behavior: when any of Direction / bHidden / bReadOnly is set, the blueprint is
 	 * compiled in-call so the override can be stamped on the CDO and subsequent ops see the new
 	 * FProperty immediately. When all three are unset (plain variable add), the blueprint is
@@ -729,15 +740,21 @@ public:
 	 *
 	 * @param NodeClassBlueprint The node-class Blueprint to modify. Required.
 	 * @param VarName Variable name (FName-style; no spaces). Required.
-	 * @param VarType Type token. Same forms as AddSMVariable. Required.
+	 * @param VarType Element-type token. Same forms as AddSMVariable. Required.
 	 * @param DefaultValue Default value in UE property-text format. Empty = engine default.
 	 * @param Direction One of "Input", "Output", "Both". Empty = no graph-pin exposure.
-	 *                  Transition-class BPs reject non-empty values.
+	 *                  Transition-class BPs reject non-empty values; Map / Set containers reject
+	 *                  non-empty values regardless of base class.
 	 * @param bHidden Hide from on-node display. The property graph is still compiled and
 	 *                evaluated; only the on-node display is suppressed. Transition-class BPs
-	 *                reject true.
-	 * @param bReadOnly Display as read-only on the placed node. Transition-class BPs reject true.
-	 * @return JSON: { asset_path, variable_name, var_type, default_value?, direction?, b_hidden?, b_read_only? }
+	 *                reject true; Map / Set containers reject true regardless of base class.
+	 * @param bReadOnly Display as read-only on the placed node. Transition-class BPs reject true;
+	 *                  Map / Set containers reject true regardless of base class.
+	 * @param ContainerType Container wrapping the element type. Accepted: "None" (default),
+	 *                      "Array", "Map", "Set". Case-insensitive.
+	 * @param KeyType Required when ContainerType=="Map"; uses the same vocabulary as VarType.
+	 *                Must be empty when ContainerType is not "Map".
+	 * @return JSON: { asset_path, variable_name, var_type, default_value?, direction?, b_hidden?, b_read_only?, container_type?, key_type? }
 	 */
 	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
 	static FString AddNodeVariable(
@@ -747,7 +764,42 @@ public:
 		const FString& DefaultValue = TEXT(""),
 		const FString& Direction = TEXT(""),
 		bool bHidden = false,
-		bool bReadOnly = false);
+		bool bReadOnly = false,
+		const FString& ContainerType = TEXT("None"),
+		const FString& KeyType = TEXT(""));
+
+	/**
+	 * Adds a member variable to ANY blueprint (a plain UBlueprint: Actor, GameMode, GameState,
+	 * object, etc.), with full container support. Mirrors the editor's My-Blueprint Variables flow
+	 * via FBlueprintEditorUtils::AddMemberVariable. Use this where the engine's BlueprintTools.add_variable
+	 * falls short -- notably for Array / Map / Set variables, which the engine op cannot author.
+	 * For state-machine blueprints use AddSMVariable; for node-class blueprints use AddNodeVariable.
+	 *
+	 * Does NOT compile the blueprint. The variable lands in NewVariables but its FProperty is not on
+	 * GeneratedClass until the blueprint is compiled. Batch many adds before compiling when you can.
+	 *
+	 * @param Blueprint The blueprint to modify. Required.
+	 * @param VarName Variable name (no spaces; FName-style). Required.
+	 * @param VarType Element-type token. Accepted short names: bool, int, int64, byte, float, single,
+	 *                string, name, text, vector, vector2d, rotator, transform, linearcolor,
+	 *                color, guid. Or a class/struct object path such as /Script/Engine.Actor
+	 *                or /Game/MyBP.MyBP_C. Required.
+	 * @param DefaultValue Default value as a string in UE property-text format. Empty = engine
+	 *                     default for the type. Containers default to empty.
+	 * @param ContainerType Container wrapping the element type. Accepted: "None" (default),
+	 *                      "Array", "Map", "Set". Case-insensitive.
+	 * @param KeyType Required when ContainerType=="Map"; uses the same vocabulary as VarType.
+	 *               Must be empty when ContainerType is not "Map".
+	 * @return JSON: { asset_path, variable_name, var_type, default_value?, container_type?, key_type? }
+	 */
+	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
+	static FString AddBlueprintVariable(
+		UBlueprint* Blueprint,
+		const FString& VarName,
+		const FString& VarType,
+		const FString& DefaultValue = TEXT(""),
+		const FString& ContainerType = TEXT("None"),
+		const FString& KeyType = TEXT(""));
 
 	/**
 	 * Reconfigures an existing variable on a node-class Blueprint (state / conduit subclass).

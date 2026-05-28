@@ -632,7 +632,9 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 			{
 				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the target SMBlueprint.")) },
 				{ Args::VariableName, MakePropertyObject(TEXT("string"), TEXT("Variable name (FName-style; no spaces).")) },
-				{ Args::VarType, MakePropertyObject(TEXT("string"), TEXT("Type token. Accepted: bool, int, int64, byte, float, single, string, name, text, vector, vector2d, rotator, transform, linearcolor, color, guid; or a class/struct path such as /Script/Engine.Actor.")) },
+				{ Args::VarType, MakePropertyObject(TEXT("string"), TEXT("Type token for the element type. Accepted: bool, int, int64, byte, float, single, string, name, text, vector, vector2d, rotator, transform, linearcolor, color, guid; or a class/struct path such as /Script/Engine.Actor.")) },
+				{ Args::ContainerType, MakePropertyObject(TEXT("string"), TEXT("Optional. Container wrapping the element type. Accepted: 'None', 'Array', 'Map', 'Set' (case-insensitive). Empty or 'None' = single value.")) },
+				{ Args::KeyType, MakePropertyObject(TEXT("string"), TEXT("Optional. Required when container_type='Map'; same vocabulary as var_type. Must be empty when container_type is not 'Map'.")) },
 				{ Args::DefaultValue, MakePropertyObject(TEXT("string"), TEXT("Optional. Default value as a string in UE property-text format (e.g. 'true', '1.25', '(R=1.0,G=0.0,B=0.0,A=1.0)'). Empty = engine default for the type.")) }
 			},
 			{ Args::AssetPath, Args::VariableName, Args::VarType });
@@ -747,14 +749,34 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 			{
 				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the node-class blueprint (USMNodeInstance subclass, including state, conduit, transition).")) },
 				{ Args::VariableName, MakePropertyObject(TEXT("string"), TEXT("Variable name (FName-style; no spaces).")) },
-				{ Args::VarType, MakePropertyObject(TEXT("string"), TEXT("Type token. Accepted: bool, int, int64, byte, float, single, string, name, text, vector, vector2d, rotator, transform, linearcolor, color, guid; or a class/struct path such as /Script/Engine.Actor.")) },
+				{ Args::VarType, MakePropertyObject(TEXT("string"), TEXT("Type token for the element type. Accepted: bool, int, int64, byte, float, single, string, name, text, vector, vector2d, rotator, transform, linearcolor, color, guid; or a class/struct path such as /Script/Engine.Actor.")) },
+				{ Args::ContainerType, MakePropertyObject(TEXT("string"), TEXT("Optional. Container wrapping the element type. Accepted: 'None', 'Array', 'Map', 'Set' (case-insensitive). Maps and Sets cannot be graph-exposed on a node-class blueprint -- omit 'direction', 'b_hidden', 'b_read_only' for those.")) },
+				{ Args::KeyType, MakePropertyObject(TEXT("string"), TEXT("Optional. Required when container_type='Map'; same vocabulary as var_type. Must be empty when container_type is not 'Map'.")) },
 				{ Args::DefaultValue, MakePropertyObject(TEXT("string"), TEXT("Optional. Default value in UE property-text format (e.g. 'true', '1.25', '(R=1.0,G=0.0,B=0.0,A=1.0)'). Empty = engine default for the type.")) },
-				{ Args::Direction, MakePropertyObject(TEXT("string"), TEXT("Optional. 'Input', 'Output', or 'Both'. Empty = no graph-pin exposure (plain BP variable). Transition-class blueprints reject this.")) },
-				{ Args::Hidden, MakePropertyObject(TEXT("boolean"), TEXT("Optional. Hide the variable from on-node display. The property graph is still compiled and evaluated. Transition-class blueprints reject this.")) },
-				{ Args::ReadOnly, MakePropertyObject(TEXT("boolean"), TEXT("Optional. Display the variable as read-only on the placed node. Transition-class blueprints reject this.")) }
+				{ Args::Direction, MakePropertyObject(TEXT("string"), TEXT("Optional. 'Input', 'Output', or 'Both'. Empty = no graph-pin exposure (plain BP variable). Transition-class blueprints reject this; Map / Set container variables reject this regardless of base class.")) },
+				{ Args::Hidden, MakePropertyObject(TEXT("boolean"), TEXT("Optional. Hide the variable from on-node display. The property graph is still compiled and evaluated. Transition-class blueprints reject this; Map / Set container variables reject this regardless of base class.")) },
+				{ Args::ReadOnly, MakePropertyObject(TEXT("boolean"), TEXT("Optional. Display the variable as read-only on the placed node. Transition-class blueprints reject this; Map / Set container variables reject this regardless of base class.")) }
 			},
 			{ Args::AssetPath, Args::VariableName, Args::VarType });
 		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::AddNodeVariable);
+		RegisterOperation(MoveTemp(Info));
+	}
+
+	{
+		FSMAssistOperationInfo Info;
+		Info.Name = Ops::AddBlueprintVariable;
+		Info.Description = TEXT("Add a member variable to ANY blueprint (UBlueprint), including plain Actor / GameMode / GameState / object blueprints. Mirrors the editor's My Blueprint -> +Variable flow via FBlueprintEditorUtils::AddMemberVariable, with full container support (Array / Map / Set). Use this when the engine's BlueprintTools.add_variable falls short -- notably for container-typed variables, which the engine op cannot author. For state-machine blueprints use sm.add_sm_variable; for node-class (USMNodeInstance subclass) blueprints use sm.add_node_variable. NOTE: this op does NOT compile the blueprint. The variable is added to the blueprint's NewVariables list but its FProperty is not materialized on the GeneratedClass until the next compile. Compile yourself when ready -- batch many adds before compiling for best performance.");
+		Info.InputSchema = MakeSchema(
+			{
+				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the target blueprint (any UBlueprint).")) },
+				{ Args::VariableName, MakePropertyObject(TEXT("string"), TEXT("Variable name (FName-style; no spaces).")) },
+				{ Args::VarType, MakePropertyObject(TEXT("string"), TEXT("Type token for the element type. Accepted: bool, int, int64, byte, float, single, string, name, text, vector, vector2d, rotator, transform, linearcolor, color, guid; or a class/struct path such as /Script/Engine.Actor.")) },
+				{ Args::ContainerType, MakePropertyObject(TEXT("string"), TEXT("Optional. Container wrapping the element type. Accepted: 'None', 'Array', 'Map', 'Set' (case-insensitive). Empty or 'None' = single value.")) },
+				{ Args::KeyType, MakePropertyObject(TEXT("string"), TEXT("Optional. Required when container_type='Map'; same vocabulary as var_type. Must be empty when container_type is not 'Map'.")) },
+				{ Args::DefaultValue, MakePropertyObject(TEXT("string"), TEXT("Optional. Default value as a string in UE property-text format (e.g. 'true', '1.25', '(R=1.0,G=0.0,B=0.0,A=1.0)'). Empty = engine default for the type.")) }
+			},
+			{ Args::AssetPath, Args::VariableName, Args::VarType });
+		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::AddBlueprintVariable);
 		RegisterOperation(MoveTemp(Info));
 	}
 

@@ -439,17 +439,32 @@ FString ULogicDriverToolset::LayoutStates(
 	return LDA::Execute(TEXT("sm.layout_states"), Args);
 }
 
+namespace LD::Assist::Toolset::Private
+{
+	static bool IsContainerTypeSentinel(const FString& Value)
+	{
+		return Value.IsEmpty() || Value.Equals(TEXT("None"), ESearchCase::IgnoreCase);
+	}
+}
+
 FString ULogicDriverToolset::AddSMVariable(
 	USMBlueprint* Blueprint,
 	const FString& VarName,
 	const FString& VarType,
-	const FString& DefaultValue)
+	const FString& DefaultValue,
+	const FString& ContainerType,
+	const FString& KeyType)
 {
 	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
 	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
 	Args->SetStringField(TEXT("variable_name"), VarName);
 	Args->SetStringField(TEXT("var_type"), VarType);
 	LDA::AddIfNonEmpty(*Args, TEXT("default_value"), DefaultValue);
+	if (!LD::Assist::Toolset::Private::IsContainerTypeSentinel(ContainerType))
+	{
+		Args->SetStringField(TEXT("container_type"), ContainerType);
+	}
+	LDA::AddIfNonEmpty(*Args, TEXT("key_type"), KeyType);
 	return LDA::Execute(TEXT("sm.add_sm_variable"), Args);
 }
 
@@ -587,7 +602,9 @@ FString ULogicDriverToolset::AddNodeVariable(
 	const FString& DefaultValue,
 	const FString& Direction,
 	bool bHidden,
-	bool bReadOnly)
+	bool bReadOnly,
+	const FString& ContainerType,
+	const FString& KeyType)
 {
 	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
 	LDA::AddObjectPath(*Args, TEXT("asset_path"), NodeClassBlueprint);
@@ -603,7 +620,33 @@ FString ULogicDriverToolset::AddNodeVariable(
 	{
 		LDA::AddBool(*Args, TEXT("b_read_only"), bReadOnly);
 	}
+	if (!LD::Assist::Toolset::Private::IsContainerTypeSentinel(ContainerType))
+	{
+		Args->SetStringField(TEXT("container_type"), ContainerType);
+	}
+	LDA::AddIfNonEmpty(*Args, TEXT("key_type"), KeyType);
 	return LDA::Execute(TEXT("sm.add_node_variable"), Args);
+}
+
+FString ULogicDriverToolset::AddBlueprintVariable(
+	UBlueprint* Blueprint,
+	const FString& VarName,
+	const FString& VarType,
+	const FString& DefaultValue,
+	const FString& ContainerType,
+	const FString& KeyType)
+{
+	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
+	Args->SetStringField(TEXT("variable_name"), VarName);
+	Args->SetStringField(TEXT("var_type"), VarType);
+	LDA::AddIfNonEmpty(*Args, TEXT("default_value"), DefaultValue);
+	if (!LD::Assist::Toolset::Private::IsContainerTypeSentinel(ContainerType))
+	{
+		Args->SetStringField(TEXT("container_type"), ContainerType);
+	}
+	LDA::AddIfNonEmpty(*Args, TEXT("key_type"), KeyType);
+	return LDA::Execute(TEXT("sm.add_blueprint_variable"), Args);
 }
 
 FString ULogicDriverToolset::ConfigureNodeVariable(

@@ -19,6 +19,7 @@
 
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
+#include "EdGraphSchema_K2.h"
 #include "Editor.h"
 #include "Engine/Blueprint.h"
 #include "Engine/BlueprintGeneratedClass.h"
@@ -3360,6 +3361,393 @@ void FAssistOperationsSpec::Define()
 			const FSMAssistOperationResult Result = SetEditMode(AssetPath, StateGuid, TEXT("TextGraphValue"), true);
 			TestFalse("Toggle rejected on read-only variable", Result.bSuccess);
 			TestTrue("Error explains the variable is read-only", Result.ErrorMessage.Contains(TEXT("read-only")));
+		});
+	});
+
+	Describe("sm.add_sm_variable container types", [this]()
+	{
+		It("Echoes container_type=Array in the payload for TArray variables", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("variable_name"), TEXT("Tags"));
+			Args->SetStringField(TEXT("var_type"), TEXT("name"));
+			Args->SetStringField(TEXT("container_type"), TEXT("Array"));
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.add_sm_variable")), Args);
+			TestTrue("Result is success", Result.bSuccess);
+			if (TestTrue("Payload populated", Result.Payload.IsValid()))
+			{
+				FString ContainerType;
+				TestTrue("Payload has 'container_type'",
+					Result.Payload->TryGetStringField(TEXT("container_type"), ContainerType));
+				TestEqual("container_type echoed as Array", ContainerType, FString(TEXT("Array")));
+			}
+		});
+
+		It("Echoes container_type=Map + key_type in the payload for TMap variables", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("variable_name"), TEXT("Flags"));
+			Args->SetStringField(TEXT("var_type"), TEXT("bool"));
+			Args->SetStringField(TEXT("container_type"), TEXT("Map"));
+			Args->SetStringField(TEXT("key_type"), TEXT("name"));
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.add_sm_variable")), Args);
+			TestTrue("Result is success", Result.bSuccess);
+			if (TestTrue("Payload populated", Result.Payload.IsValid()))
+			{
+				FString ContainerType;
+				TestTrue("Payload has 'container_type'",
+					Result.Payload->TryGetStringField(TEXT("container_type"), ContainerType));
+				TestEqual("container_type echoed as Map", ContainerType, FString(TEXT("Map")));
+
+				FString KeyType;
+				TestTrue("Payload has 'key_type'",
+					Result.Payload->TryGetStringField(TEXT("key_type"), KeyType));
+				TestEqual("key_type echoed as name", KeyType, FString(TEXT("name")));
+			}
+		});
+
+		It("Adds a TSet variable", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("variable_name"), TEXT("UniqueIds"));
+			Args->SetStringField(TEXT("var_type"), TEXT("int"));
+			Args->SetStringField(TEXT("container_type"), TEXT("Set"));
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.add_sm_variable")), Args);
+			TestTrue("Result is success", Result.bSuccess);
+			if (TestTrue("Payload populated", Result.Payload.IsValid()))
+			{
+				FString ContainerType;
+				TestTrue("Payload has 'container_type'",
+					Result.Payload->TryGetStringField(TEXT("container_type"), ContainerType));
+				TestEqual("container_type echoed as Set", ContainerType, FString(TEXT("Set")));
+			}
+		});
+
+		It("Fails with unrecognized container_type", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("variable_name"), TEXT("Bad"));
+			Args->SetStringField(TEXT("var_type"), TEXT("int"));
+			Args->SetStringField(TEXT("container_type"), TEXT("Bag"));
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.add_sm_variable")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+			TestTrue("Error mentions container_type", Result.ErrorMessage.Contains(TEXT("container_type")));
+		});
+
+		It("Fails with Map but missing key_type", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("variable_name"), TEXT("NoKey"));
+			Args->SetStringField(TEXT("var_type"), TEXT("bool"));
+			Args->SetStringField(TEXT("container_type"), TEXT("Map"));
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.add_sm_variable")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+			TestTrue("Error mentions key_type", Result.ErrorMessage.Contains(TEXT("key_type")));
+		});
+
+		It("Fails with key_type but no Map container", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("variable_name"), TEXT("StrayKey"));
+			Args->SetStringField(TEXT("var_type"), TEXT("int"));
+			Args->SetStringField(TEXT("container_type"), TEXT("Array"));
+			Args->SetStringField(TEXT("key_type"), TEXT("name"));
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.add_sm_variable")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+			TestTrue("Error mentions key_type", Result.ErrorMessage.Contains(TEXT("key_type")));
+		});
+	});
+
+	Describe("sm.add_blueprint_variable container types on a plain Actor blueprint", [this]()
+	{
+		It("Adds a TMap<FName,bool> with the correct key and value pin types", [this]()
+		{
+			UBlueprint* ActorBP = CreateTransientBlueprintOfType(
+				AActor::StaticClass(),
+				UBlueprint::StaticClass(),
+				UBlueprintGeneratedClass::StaticClass());
+			if (!TestNotNull("Actor blueprint created", ActorBP))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), ActorBP->GetPathName());
+			Args->SetStringField(TEXT("variable_name"), TEXT("WorldFlags"));
+			Args->SetStringField(TEXT("var_type"), TEXT("bool"));
+			Args->SetStringField(TEXT("container_type"), TEXT("Map"));
+			Args->SetStringField(TEXT("key_type"), TEXT("name"));
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.add_blueprint_variable")), Args);
+			TestTrue("Result is success", Result.bSuccess);
+
+			const FBPVariableDescription* Var = ActorBP->NewVariables.FindByPredicate(
+				[](const FBPVariableDescription& Desc) { return Desc.VarName == FName(TEXT("WorldFlags")); });
+			if (TestNotNull("Variable lands in NewVariables", Var))
+			{
+				TestEqual("Container is Map", Var->VarType.ContainerType, EPinContainerType::Map);
+				// Map convention: the outer pin category is the KEY type, PinValueType is the VALUE type.
+				TestEqual("Key type is FName", Var->VarType.PinCategory, UEdGraphSchema_K2::PC_Name);
+				TestEqual("Value type is bool", Var->VarType.PinValueType.TerminalCategory, UEdGraphSchema_K2::PC_Boolean);
+			}
+		});
+
+		It("Adds a TArray<int32> for parity", [this]()
+		{
+			UBlueprint* ActorBP = CreateTransientBlueprintOfType(
+				AActor::StaticClass(),
+				UBlueprint::StaticClass(),
+				UBlueprintGeneratedClass::StaticClass());
+			if (!TestNotNull("Actor blueprint created", ActorBP))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), ActorBP->GetPathName());
+			Args->SetStringField(TEXT("variable_name"), TEXT("Scores"));
+			Args->SetStringField(TEXT("var_type"), TEXT("int"));
+			Args->SetStringField(TEXT("container_type"), TEXT("Array"));
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.add_blueprint_variable")), Args);
+			TestTrue("Result is success", Result.bSuccess);
+
+			const FBPVariableDescription* Var = ActorBP->NewVariables.FindByPredicate(
+				[](const FBPVariableDescription& Desc) { return Desc.VarName == FName(TEXT("Scores")); });
+			if (TestNotNull("Variable lands in NewVariables", Var))
+			{
+				TestEqual("Container is Array", Var->VarType.ContainerType, EPinContainerType::Array);
+				TestEqual("Element type is int", Var->VarType.PinCategory, UEdGraphSchema_K2::PC_Int);
+			}
+		});
+
+		It("Adds a TSet<FName> for parity", [this]()
+		{
+			UBlueprint* ActorBP = CreateTransientBlueprintOfType(
+				AActor::StaticClass(),
+				UBlueprint::StaticClass(),
+				UBlueprintGeneratedClass::StaticClass());
+			if (!TestNotNull("Actor blueprint created", ActorBP))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), ActorBP->GetPathName());
+			Args->SetStringField(TEXT("variable_name"), TEXT("VisitedRooms"));
+			Args->SetStringField(TEXT("var_type"), TEXT("name"));
+			Args->SetStringField(TEXT("container_type"), TEXT("Set"));
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.add_blueprint_variable")), Args);
+			TestTrue("Result is success", Result.bSuccess);
+
+			const FBPVariableDescription* Var = ActorBP->NewVariables.FindByPredicate(
+				[](const FBPVariableDescription& Desc) { return Desc.VarName == FName(TEXT("VisitedRooms")); });
+			if (TestNotNull("Variable lands in NewVariables", Var))
+			{
+				TestEqual("Container is Set", Var->VarType.ContainerType, EPinContainerType::Set);
+				TestEqual("Element type is FName", Var->VarType.PinCategory, UEdGraphSchema_K2::PC_Name);
+			}
+		});
+	});
+
+	Describe("sm.add_node_variable container types", [this]()
+	{
+		It("Adds a plain TArray<FName> variable on a state class", [this]()
+		{
+			UBlueprint* NodeBP = CreateTransientBlueprintOfType(
+				USMStateInstance::StaticClass(),
+				USMNodeBlueprint::StaticClass(),
+				USMNodeBlueprintGeneratedClass::StaticClass());
+			if (!TestNotNull("State node-class blueprint created", NodeBP))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), NodeBP->GetPathName());
+			Args->SetStringField(TEXT("variable_name"), TEXT("Tags"));
+			Args->SetStringField(TEXT("var_type"), TEXT("name"));
+			Args->SetStringField(TEXT("container_type"), TEXT("Array"));
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.add_node_variable")), Args);
+			TestTrue("Result is success", Result.bSuccess);
+			if (TestTrue("Payload populated", Result.Payload.IsValid()))
+			{
+				FString ContainerType;
+				TestTrue("Payload has 'container_type'",
+					Result.Payload->TryGetStringField(TEXT("container_type"), ContainerType));
+				TestEqual("container_type echoed as Array", ContainerType, FString(TEXT("Array")));
+			}
+		});
+
+		It("Allows TArray with Direction=Input (Array is graph-exposable)", [this]()
+		{
+			UBlueprint* NodeBP = CreateTransientBlueprintOfType(
+				USMStateInstance::StaticClass(),
+				USMNodeBlueprint::StaticClass(),
+				USMNodeBlueprintGeneratedClass::StaticClass());
+			if (!TestNotNull("State node-class blueprint created", NodeBP))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), NodeBP->GetPathName());
+			Args->SetStringField(TEXT("variable_name"), TEXT("InTags"));
+			Args->SetStringField(TEXT("var_type"), TEXT("name"));
+			Args->SetStringField(TEXT("container_type"), TEXT("Array"));
+			Args->SetStringField(TEXT("direction"), TEXT("Input"));
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.add_node_variable")), Args);
+			TestTrue("Result is success", Result.bSuccess);
+		});
+
+		It("Refuses TMap with Direction=Input (Map not graph-exposable)", [this]()
+		{
+			UBlueprint* NodeBP = CreateTransientBlueprintOfType(
+				USMStateInstance::StaticClass(),
+				USMNodeBlueprint::StaticClass(),
+				USMNodeBlueprintGeneratedClass::StaticClass());
+			if (!TestNotNull("State node-class blueprint created", NodeBP))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), NodeBP->GetPathName());
+			Args->SetStringField(TEXT("variable_name"), TEXT("InFlags"));
+			Args->SetStringField(TEXT("var_type"), TEXT("bool"));
+			Args->SetStringField(TEXT("container_type"), TEXT("Map"));
+			Args->SetStringField(TEXT("key_type"), TEXT("name"));
+			Args->SetStringField(TEXT("direction"), TEXT("Input"));
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.add_node_variable")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+			TestTrue("Error mentions graph node exposure",
+				Result.ErrorMessage.Contains(TEXT("cannot be exposed on the graph node")));
+		});
+
+		It("Allows TMap without Direction (plain variable)", [this]()
+		{
+			UBlueprint* NodeBP = CreateTransientBlueprintOfType(
+				USMStateInstance::StaticClass(),
+				USMNodeBlueprint::StaticClass(),
+				USMNodeBlueprintGeneratedClass::StaticClass());
+			if (!TestNotNull("State node-class blueprint created", NodeBP))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), NodeBP->GetPathName());
+			Args->SetStringField(TEXT("variable_name"), TEXT("Flags"));
+			Args->SetStringField(TEXT("var_type"), TEXT("bool"));
+			Args->SetStringField(TEXT("container_type"), TEXT("Map"));
+			Args->SetStringField(TEXT("key_type"), TEXT("name"));
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.add_node_variable")), Args);
+			TestTrue("Result is success", Result.bSuccess);
+		});
+
+		It("Refuses TSet with b_hidden=true", [this]()
+		{
+			UBlueprint* NodeBP = CreateTransientBlueprintOfType(
+				USMStateInstance::StaticClass(),
+				USMNodeBlueprint::StaticClass(),
+				USMNodeBlueprintGeneratedClass::StaticClass());
+			if (!TestNotNull("State node-class blueprint created", NodeBP))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), NodeBP->GetPathName());
+			Args->SetStringField(TEXT("variable_name"), TEXT("HiddenSet"));
+			Args->SetStringField(TEXT("var_type"), TEXT("name"));
+			Args->SetStringField(TEXT("container_type"), TEXT("Set"));
+			Args->SetBoolField(TEXT("b_hidden"), true);
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.add_node_variable")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+			TestTrue("Error mentions graph node exposure",
+				Result.ErrorMessage.Contains(TEXT("cannot be exposed on the graph node")));
 		});
 	});
 }
