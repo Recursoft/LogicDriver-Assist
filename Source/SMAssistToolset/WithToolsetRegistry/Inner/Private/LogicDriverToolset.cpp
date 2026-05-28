@@ -32,7 +32,7 @@ FString ULogicDriverToolset::GetAsset(USMBlueprint* Blueprint)
 	return LDA::Execute(TEXT("sm.get_asset"), Args);
 }
 
-FString ULogicDriverToolset::Compile(USMBlueprint* Blueprint)
+FString ULogicDriverToolset::Compile(UBlueprint* Blueprint)
 {
 	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
 	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);

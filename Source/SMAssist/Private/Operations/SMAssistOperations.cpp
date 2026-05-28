@@ -1117,7 +1117,7 @@ FSMAssistOperationResult LD::Assist::Compile(const TSharedRef<FJsonObject>& InAr
 	}
 
 	FString LoadError;
-	USMBlueprint* Blueprint = LD::Assist::Utils::LoadStateMachineBlueprint(AssetPath, LoadError);
+	UBlueprint* Blueprint = LD::Assist::Utils::LoadBlueprint(AssetPath, LoadError);
 	if (!Blueprint)
 	{
 		return FSMAssistOperationResult::MakeError(LoadError);

@@ -268,10 +268,10 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::Compile;
-		Info.Description = TEXT("Compile a state machine blueprint and return its compile status.");
+		Info.Description = TEXT("Compile a Blueprint and return its compile status. Accepts any UBlueprint subclass: state-machine Blueprints (USMBlueprint), Logic Driver node-class Blueprints (USMNodeBlueprint child of USMStateInstance / USMTransitionInstance / etc.), and regular UBlueprints (actor, widget, component subclasses).");
 		Info.InputSchema = MakeSchema(
 			{
-				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the target SMBlueprint.")) }
+				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the Blueprint to compile.")) }
 			},
 			{ Args::AssetPath });
 		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::Compile);

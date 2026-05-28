@@ -150,12 +150,16 @@ public:
 	static FString GetAsset(USMBlueprint* Blueprint);
 
 	/**
-	 * Compiles a state-machine blueprint and reports the result.
+	 * Compiles a Blueprint and reports the result. Accepts any UBlueprint subclass: state-machine
+	 * Blueprints (USMBlueprint), Logic Driver node-class Blueprints (USMNodeBlueprint child of
+	 * USMStateInstance / USMTransitionInstance / etc.), and regular UBlueprints (actor, widget,
+	 * component subclasses). Use this in place of engine-side compile_blueprint when the
+	 * structured status payload is wanted.
 	 * @param Blueprint The blueprint to compile. Required.
 	 * @return JSON: { asset_path, up_to_date, has_warnings, has_errors, status }
 	 */
 	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
-	static FString Compile(USMBlueprint* Blueprint);
+	static FString Compile(UBlueprint* Blueprint);
 
 	/**
 	 * Adds a regular state node to a blueprint's root state machine graph.

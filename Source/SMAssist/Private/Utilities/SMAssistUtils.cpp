@@ -8,10 +8,11 @@
 #include "Graph/SMGraph.h"
 #include "Utilities/SMBlueprintEditorUtils.h"
 
+#include "Engine/Blueprint.h"
 #include "Misc/PackageName.h"
 #include "UObject/SoftObjectPath.h"
 
-USMBlueprint* LD::Assist::Utils::LoadStateMachineBlueprint(const FString& InAssetPath, FString& OutError)
+UBlueprint* LD::Assist::Utils::LoadBlueprint(const FString& InAssetPath, FString& OutError)
 {
 	if (InAssetPath.IsEmpty())
 	{
@@ -41,14 +42,32 @@ USMBlueprint* LD::Assist::Utils::LoadStateMachineBlueprint(const FString& InAsse
 		return nullptr;
 	}
 
-	USMBlueprint* Blueprint = Cast<USMBlueprint>(Loaded);
+	UBlueprint* Blueprint = Cast<UBlueprint>(Loaded);
 	if (!Blueprint)
+	{
+		OutError = FString::Printf(TEXT("Asset '%s' is not a blueprint."), *InAssetPath);
+		return nullptr;
+	}
+
+	return Blueprint;
+}
+
+USMBlueprint* LD::Assist::Utils::LoadStateMachineBlueprint(const FString& InAssetPath, FString& OutError)
+{
+	UBlueprint* Blueprint = LoadBlueprint(InAssetPath, OutError);
+	if (!Blueprint)
+	{
+		return nullptr;
+	}
+
+	USMBlueprint* SMBlueprint = Cast<USMBlueprint>(Blueprint);
+	if (!SMBlueprint)
 	{
 		OutError = FString::Printf(TEXT("Asset '%s' is not a state machine blueprint."), *InAssetPath);
 		return nullptr;
 	}
 
-	return Blueprint;
+	return SMBlueprint;
 }
 
 USMGraphNode_Base* LD::Assist::Utils::FindNodeByGuid(USMBlueprint* InBlueprint, const FGuid& InGuid)

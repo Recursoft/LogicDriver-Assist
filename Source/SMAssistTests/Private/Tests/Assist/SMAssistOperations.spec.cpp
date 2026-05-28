@@ -9,18 +9,26 @@
 #include "Tests/StructSplit/SMStructSplitTestClasses.h"
 
 #include "Blueprints/SMBlueprint.h"
+#include "Blueprints/SMBlueprintGeneratedClass.h"
 #include "Graph/Nodes/PropertyNodes/SMGraphK2Node_PropertyNode_Base.h"
 #include "Graph/Nodes/SMGraphNode_Base.h"
 #include "Graph/SMPropertyGraph.h"
 #include "Properties/SMGraphProperty_Base.h"
+#include "SMStateInstance.h"
+#include "SMTransitionInstance.h"
 
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
 #include "Editor.h"
+#include "Engine/Blueprint.h"
+#include "Engine/BlueprintGeneratedClass.h"
+#include "GameFramework/Actor.h"
 #include "Kismet2/BlueprintEditorUtils.h"
+#include "Kismet2/KismetEditorUtilities.h"
 #include "Misc/Paths.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
+#include "UObject/Package.h"
 #include "UObject/SoftObjectPath.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -72,6 +80,24 @@ BEGIN_DEFINE_SPEC(FAssistOperationsSpec, "LogicDriver.Assist",
 		FString AssetPath;
 		Result.Payload->TryGetStringField(TEXT("asset_path"), AssetPath);
 		return AssetPath;
+	}
+
+	UBlueprint* CreateTransientBlueprintOfType(
+		UClass* InParentClass,
+		TSubclassOf<UBlueprint> InBlueprintClass,
+		TSubclassOf<UBlueprintGeneratedClass> InGeneratedClass)
+	{
+		const FString PackageName = FAssetHandler::DefaultGamePath()
+			+ FString::Printf(TEXT("BP_Compile_%s"), *FGuid::NewGuid().ToString());
+		UPackage* Package = CreatePackage(*PackageName);
+		if (!Package)
+		{
+			return nullptr;
+		}
+
+		const FName BPName(*FPackageName::GetShortName(PackageName));
+		return FKismetEditorUtilities::CreateBlueprint(
+			InParentClass, Package, BPName, BPTYPE_Normal, InBlueprintClass, InGeneratedClass);
 	}
 
 	FString AddStateToBlueprint(const FString& InAssetPath, const FString& InStateName, UClass* InStateClass = nullptr)
@@ -1176,6 +1202,116 @@ void FAssistOperationsSpec::Define()
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
 				FName(TEXT("sm.compile")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
+		});
+
+		It("Compiles a state node-class blueprint successfully", [this]()
+		{
+			UBlueprint* NodeBP = CreateTransientBlueprintOfType(
+				USMStateInstance::StaticClass(),
+				USMNodeBlueprint::StaticClass(),
+				USMNodeBlueprintGeneratedClass::StaticClass());
+			if (!TestNotNull("State node-class blueprint created", NodeBP))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), NodeBP->GetPathName());
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.compile")), Args);
+			TestTrue("Result is success", Result.bSuccess);
+			if (TestTrue("Payload populated", Result.Payload.IsValid()))
+			{
+				bool bUpToDate = false;
+				TestTrue("Payload has 'up_to_date'",
+					Result.Payload->TryGetBoolField(TEXT("up_to_date"), bUpToDate));
+				TestTrue("Node blueprint is up to date", bUpToDate);
+
+				bool bHasErrors = true;
+				Result.Payload->TryGetBoolField(TEXT("has_errors"), bHasErrors);
+				TestFalse("No compile errors", bHasErrors);
+			}
+		});
+
+		It("Compiles a transition node-class blueprint successfully", [this]()
+		{
+			UBlueprint* NodeBP = CreateTransientBlueprintOfType(
+				USMTransitionInstance::StaticClass(),
+				USMNodeBlueprint::StaticClass(),
+				USMNodeBlueprintGeneratedClass::StaticClass());
+			if (!TestNotNull("Transition node-class blueprint created", NodeBP))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), NodeBP->GetPathName());
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.compile")), Args);
+			TestTrue("Result is success", Result.bSuccess);
+			if (TestTrue("Payload populated", Result.Payload.IsValid()))
+			{
+				bool bUpToDate = false;
+				TestTrue("Payload has 'up_to_date'",
+					Result.Payload->TryGetBoolField(TEXT("up_to_date"), bUpToDate));
+				TestTrue("Node blueprint is up to date", bUpToDate);
+
+				bool bHasErrors = true;
+				Result.Payload->TryGetBoolField(TEXT("has_errors"), bHasErrors);
+				TestFalse("No compile errors", bHasErrors);
+			}
+		});
+
+		It("Compiles a non-LD UBlueprint (Actor child) successfully", [this]()
+		{
+			UBlueprint* ActorBP = CreateTransientBlueprintOfType(
+				AActor::StaticClass(),
+				UBlueprint::StaticClass(),
+				UBlueprintGeneratedClass::StaticClass());
+			if (!TestNotNull("Actor blueprint created", ActorBP))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), ActorBP->GetPathName());
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.compile")), Args);
+			TestTrue("Result is success", Result.bSuccess);
+			if (TestTrue("Payload populated", Result.Payload.IsValid()))
+			{
+				bool bUpToDate = false;
+				TestTrue("Payload has 'up_to_date'",
+					Result.Payload->TryGetBoolField(TEXT("up_to_date"), bUpToDate));
+				TestTrue("Actor blueprint is up to date", bUpToDate);
+
+				bool bHasErrors = true;
+				Result.Payload->TryGetBoolField(TEXT("has_errors"), bHasErrors);
+				TestFalse("No compile errors", bHasErrors);
+			}
+		});
+
+		It("Fails when asset_path resolves to a non-blueprint asset", [this]()
+		{
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), TEXT("/Engine/EngineMaterials/DefaultMaterial.DefaultMaterial"));
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.compile")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+			TestTrue("Error mentions blueprint requirement",
+				Result.ErrorMessage.Contains(TEXT("not a blueprint")));
 		});
 	});
 
