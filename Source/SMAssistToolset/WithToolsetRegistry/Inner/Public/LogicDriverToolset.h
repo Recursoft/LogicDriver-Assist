@@ -99,13 +99,18 @@ struct FSMComponentConfig
  * GetAsset returns logical coordinates only; for visual verification use CaptureGraphView (see
  * its docstring for cost guidance on when to call).
  *
- * K2 self-binding inside nested state and transition graphs: when authoring K2 nodes in a
- * state's OnStateBegin / OnStateUpdate / OnStateEnd graph or a transition's CanEnterTransition
- * graph, the implicit K2 self resolves to the FSM's USMInstance, not a USMNodeInstance. Calls
- * into UFUNCTIONs on USMNodeInstance fail to compile with "(self) is not a SMNodeInstance". Use
- * the USMStateMachineInstances function library (StateMachineInstances::GetContext and friends),
- * which binds self to the SM instance automatically, or wire an explicit Target pin from a
- * node-instance retrieval node.
+ * K2 self-binding depends on which kind of graph you author in, and the two cases are opposite:
+ *   - Local (inline) graphs authored directly on a state or transition node inside an FSM
+ *     (USMBlueprint): implicit self is the FSM's USMInstance. Member calls on USMNodeInstance
+ *     fail with "(self) is not a SMNodeInstance". Use the StateMachineInstances function library
+ *     (StateMachineInstances::GetContext and friends), which binds self to the SM instance.
+ *   - Node-class blueprints (a standalone USMStateInstance / USMTransitionInstance subclass):
+ *     implicit self is the node instance (USMNodeInstance). Member calls on USMInstance through
+ *     the StateMachineInstances library fail with "(self) is not a SMInstance, Target must have a
+ *     connection". Use the NodeInstance function library (NodeInstance::GetContext and friends),
+ *     which binds self to the node instance; GetStateMachineInstance retrieves the owning
+ *     USMInstance when you need it.
+ * Either way, wiring an explicit Target pin from the matching retrieval node also works.
  *
  * LD K2 specials such as TimeInState, HasStateUpdated, and CanEvaluate are spawned by the editor
  * based on the local state or transition scope and are not reachable through the engine's
