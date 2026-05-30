@@ -3,6 +3,8 @@
 #include "SMAssistSubsystem.h"
 
 #include "SMAssistLog.h"
+#include "Operations/SMAssistGenericOpKeys.h"
+#include "Operations/SMAssistGenericOps.h"
 #include "Operations/SMAssistOpKeys.h"
 #include "Operations/SMAssistOperations.h"
 
@@ -837,6 +839,112 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 			},
 			{ Args::AssetPath, Args::FromStateGuid, Args::FromVariableName });
 		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::DisconnectNodeVariableOutput);
+		RegisterOperation(MoveTemp(Info));
+	}
+
+	{
+		FSMAssistOperationInfo Info;
+		Info.Name = Ops::RuntimeGetState;
+		Info.Description = TEXT("Introspect a running state machine during Play-In-Editor. Resolves the actor in the live PIE world, finds its USMStateMachineComponent, and reports the live instance's active state(s), is_active, and is_in_end_state. Use this for runtime validation instead of editor.run_python.");
+		Info.InputSchema = MakeSchema(
+			{
+				{ Args::ActorIdentifier, MakePropertyObject(TEXT("string"), TEXT("Object name or display label of the actor in the running PIE world.")) },
+				{ Args::ComponentName, MakePropertyObject(TEXT("string"), TEXT("Optional component name; omit to use the first USMStateMachineComponent on the actor.")) },
+				{ Args::IncludeProperties, MakePropertyObject(TEXT("boolean"), TEXT("Include each active state's exposed property values (live runtime values). Default false.")) },
+				{ Args::PieInstance, MakePropertyObject(TEXT("number"), TEXT("Optional PIE world index for multi-client play. Default 0.")) }
+			},
+			{ Args::ActorIdentifier });
+		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::RuntimeGetState);
+		RegisterOperation(MoveTemp(Info));
+	}
+
+	{
+		FSMAssistOperationInfo Info;
+		Info.Name = Ops::SetConduitCondition;
+		Info.Description = TEXT("Set a conduit's default pass condition (its bCanEnterTransition result-pin default), mirroring set_transition_condition. Guidance: a conduit used as an always-true entry gate is better modeled as an empty state (no condition to evaluate, routes purely on transitions); use a conduit for real branch points and leave eval-with-transitions on (configure that via add_conduit or set_node_property).");
+		Info.InputSchema = MakeSchema(
+			{
+				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the SMBlueprint.")) },
+				{ Args::NodeGuid, MakePropertyObject(TEXT("string"), TEXT("Guid of the conduit node.")) },
+				{ Args::Condition, MakePropertyObject(TEXT("boolean"), TEXT("Default evaluation result of the conduit (true = passes by default).")) }
+			},
+			{ Args::AssetPath, Args::NodeGuid, Args::Condition });
+		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::SetConduitCondition);
+		RegisterOperation(MoveTemp(Info));
+	}
+
+	{
+		FSMAssistOperationInfo Info;
+		Info.Name = Ops::SpawnActorContextComponent;
+		Info.Description = TEXT("Author the LD context-to-component reach chain in one call: GetContext -> Cast To <actor class> -> GetComponentByClass(<component class>), in a node-class graph. The state machine's context is cast to the supplied actor class (the context is not itself a component). All three nodes are pure (no exec pins), so this is a self-contained data cluster: wire the typed component from component_output_pin_id into wherever you need it and the chain evaluates on demand.");
+		Info.InputSchema = MakeSchema(
+			{
+				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the node-class blueprint (USMNodeInstance subclass) to author into.")) },
+				{ Args::TargetGraphPath, MakePropertyObject(TEXT("string"), TEXT("Name or full path of the destination graph (e.g. the event graph hosting an OnStateBegin event).")) },
+				{ Args::TargetActorClass, MakePropertyObject(TEXT("string"), TEXT("Class path of the owning actor to cast GetContext() to.")) },
+				{ Args::ComponentClass, MakePropertyObject(TEXT("string"), TEXT("Component class path passed to GetComponentByClass; the returned pin is typed to this class.")) },
+				{ Args::PositionX, MakePropertyObject(TEXT("number"), TEXT("Optional base graph X for the cluster.")) },
+				{ Args::PositionY, MakePropertyObject(TEXT("number"), TEXT("Optional base graph Y for the cluster.")) }
+			},
+			{ Args::AssetPath, Args::TargetGraphPath, Args::TargetActorClass, Args::ComponentClass });
+		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::SpawnActorContextComponent);
+		RegisterOperation(MoveTemp(Info));
+	}
+
+	RegisterGenericFallbackOperations();
+}
+
+void USMAssistSubsystem::RegisterGenericFallbackOperations()
+{
+	using namespace LD::Assist::Private;
+	namespace GOps = LD::Assist::GenericOps::Ops;
+	namespace GArgs = LD::Assist::GenericOps::Args;
+
+	{
+		FSMAssistOperationInfo Info;
+		Info.Name = GOps::ReadProperty;
+		Info.Description = TEXT("FALLBACK ONLY. Alternative to the official engine MCP blueprint.* tools; use only when those cannot express the read (e.g. TMap/TArray element values, or a target object other than self). Reads a property value via reflection from an asset CDO (target=edit) or a live PIE actor (target=runtime).");
+		Info.InputSchema = MakeSchema(
+			{
+				{ GArgs::Object, MakePropertyObject(TEXT("string"), TEXT("target=edit: asset/object path (its CDO is read). target=runtime: PIE actor name or label.")) },
+				{ GArgs::Target, MakePropertyObject(TEXT("string"), TEXT("'edit' (default) reads the asset CDO; 'runtime' reads a live PIE actor.")) },
+				{ GArgs::PropertyPath, MakePropertyObject(TEXT("string"), TEXT("Reflection path: Member, nested Struct.Field, array Arr[3], or map Map[Key] (engine PropertyPathHelpers cannot resolve map elements).")) },
+				{ GArgs::PieInstance, MakePropertyObject(TEXT("number"), TEXT("Optional PIE world index when target=runtime. Default 0.")) }
+			},
+			{ GArgs::Object, GArgs::PropertyPath });
+		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::GenericOps::ReadProperty);
+		RegisterOperation(MoveTemp(Info));
+	}
+
+	{
+		FSMAssistOperationInfo Info;
+		Info.Name = GOps::WriteProperty;
+		Info.Description = TEXT("FALLBACK ONLY. Alternative to the official engine MCP blueprint.* tools; use only when those cannot express the write (e.g. TMap/TArray element values, or a target object other than self). Writes a property value via reflection. 'value' uses UE property-text form (same as sm.set_node_property). Edit-target writes change the CDO/archetype and may need sm.compile to propagate; runtime writes are transient. Arrays are not grown; absent map keys are created.");
+		Info.InputSchema = MakeSchema(
+			{
+				{ GArgs::Object, MakePropertyObject(TEXT("string"), TEXT("target=edit: asset/object path (its CDO is written). target=runtime: PIE actor name or label.")) },
+				{ GArgs::Target, MakePropertyObject(TEXT("string"), TEXT("'edit' (default) writes the asset CDO; 'runtime' writes a live PIE actor.")) },
+				{ GArgs::PropertyPath, MakePropertyObject(TEXT("string"), TEXT("Reflection path: Member, nested Struct.Field, array Arr[3], or map Map[Key].")) },
+				{ GArgs::Value, MakePropertyObject(TEXT("string"), TEXT("New value in UE property-text form (e.g. true, 7, \"hi\", (X=1,Y=2)).")) },
+				{ GArgs::PieInstance, MakePropertyObject(TEXT("number"), TEXT("Optional PIE world index when target=runtime. Default 0.")) }
+			},
+			{ GArgs::Object, GArgs::PropertyPath, GArgs::Value });
+		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::GenericOps::WriteProperty);
+		RegisterOperation(MoveTemp(Info));
+	}
+
+	{
+		FSMAssistOperationInfo Info;
+		Info.Name = GOps::AddDispatcher;
+		Info.Description = TEXT("FALLBACK ONLY. Alternative to the official engine MCP blueprint.add_event_dispatcher; use only when that fails (its dispatchers do not survive compile). Adds a multicast-delegate event dispatcher that survives compilation, with an optional parameter signature.");
+		Info.InputSchema = MakeSchema(
+			{
+				{ GArgs::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the target blueprint.")) },
+				{ GArgs::Name, MakePropertyObject(TEXT("string"), TEXT("Dispatcher name. Must be unique on the blueprint.")) },
+				{ GArgs::Params, MakePropertyObject(TEXT("array"), TEXT("Optional signature: array of {name, type}. type is a terminal token (bool, int, int64, float, name, string, text, vector, or an object/struct path).")) }
+			},
+			{ GArgs::AssetPath, GArgs::Name });
+		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::GenericOps::AddDispatcher);
 		RegisterOperation(MoveTemp(Info));
 	}
 }

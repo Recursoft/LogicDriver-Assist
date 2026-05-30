@@ -50,6 +50,9 @@ public:
 private:
 	void RegisterBuiltInOperations();
 
+	/** Registers the ld_ue.* generic fallback ops. */
+	void RegisterGenericFallbackOperations();
+
 private:
 	TMap<FName, FSMAssistOperationInfo> Operations;
 

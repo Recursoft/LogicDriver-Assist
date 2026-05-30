@@ -47,6 +47,9 @@ namespace LD::Assist::Ops
 	inline constexpr const TCHAR* DisconnectNodeVariableOutput = TEXT("sm.disconnect_node_variable_output");
 	inline constexpr const TCHAR* SplitPin = TEXT("sm.split_pin");
 	inline constexpr const TCHAR* RecombinePin = TEXT("sm.recombine_pin");
+	inline constexpr const TCHAR* RuntimeGetState = TEXT("sm.runtime_get_state");
+	inline constexpr const TCHAR* SetConduitCondition = TEXT("sm.set_conduit_condition");
+	inline constexpr const TCHAR* SpawnActorContextComponent = TEXT("sm.spawn_actor_context_component");
 }
 
 namespace LD::Assist::Args
@@ -225,4 +228,21 @@ namespace LD::Assist::Args
 	inline constexpr const TCHAR* ToStackIndex = TEXT("to_stack_index");
 	inline constexpr const TCHAR* ToVariableName = TEXT("to_variable_name");
 	inline constexpr const TCHAR* ToOwningBlueprintVariable = TEXT("to_owning_blueprint_variable");
+
+	inline constexpr const TCHAR* ActorIdentifier = TEXT("actor_identifier");
+	inline constexpr const TCHAR* PieInstance = TEXT("pie_instance");
+	inline constexpr const TCHAR* IncludeProperties = TEXT("b_include_properties");
+	inline constexpr const TCHAR* Actor = TEXT("actor");
+	inline constexpr const TCHAR* Component = TEXT("component");
+	inline constexpr const TCHAR* IsActive = TEXT("is_active");
+	inline constexpr const TCHAR* IsInEndState = TEXT("is_in_end_state");
+	inline constexpr const TCHAR* SingleActiveState = TEXT("single_active_state");
+	inline constexpr const TCHAR* ActiveStates = TEXT("active_states");
+
+	inline constexpr const TCHAR* TargetActorClass = TEXT("target_actor_class");
+	inline constexpr const TCHAR* ComponentClass = TEXT("component_class");
+	inline constexpr const TCHAR* GetContextNodeGuid = TEXT("get_context_node_guid");
+	inline constexpr const TCHAR* CastNodeGuid = TEXT("cast_node_guid");
+	inline constexpr const TCHAR* GetComponentNodeGuid = TEXT("get_component_node_guid");
+	inline constexpr const TCHAR* ComponentOutputPinId = TEXT("component_output_pin_id");
 }

@@ -87,4 +87,10 @@ namespace LD::Assist
 	FSMAssistOperationResult ConnectNodeVariableOutput(const TSharedRef<FJsonObject>& InArgs);
 
 	FSMAssistOperationResult DisconnectNodeVariableOutput(const TSharedRef<FJsonObject>& InArgs);
+
+	FSMAssistOperationResult RuntimeGetState(const TSharedRef<FJsonObject>& InArgs);
+
+	FSMAssistOperationResult SetConduitCondition(const TSharedRef<FJsonObject>& InArgs);
+
+	FSMAssistOperationResult SpawnActorContextComponent(const TSharedRef<FJsonObject>& InArgs);
 }

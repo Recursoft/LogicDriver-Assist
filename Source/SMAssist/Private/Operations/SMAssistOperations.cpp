@@ -24,7 +24,9 @@
 #include "Graph/Nodes/SMGraphNode_StateNodeBase.h"
 #include "Graph/Nodes/SMGraphNode_TransitionEdge.h"
 #include "Graph/Nodes/PropertyNodes/SMGraphK2Node_PropertyNode_Base.h"
+#include "Graph/Nodes/RootNodes/SMGraphK2Node_ConduitResultNode.h"
 #include "Graph/Nodes/RootNodes/SMGraphK2Node_TransitionResultNode.h"
+#include "Graph/SMConduitGraph.h"
 #include "Graph/SMGraph.h"
 #include "Graph/SMPropertyGraph.h"
 #include "Graph/SMTransitionGraph.h"
@@ -32,6 +34,8 @@
 #include "Properties/SMEditorPropertyUtils.h"
 #include "Properties/SMGraphProperty_Base.h"
 #include "SMConduitInstance.h"
+#include "SMInstance.h"
+#include "SMNodeInstance.h"
 #include "SMStateInstance.h"
 #include "SMStateMachineComponent.h"
 #include "SMStateMachineInstance.h"
@@ -42,14 +46,19 @@
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
 #include "BlueprintEditor.h"
+#include "K2Node_CallFunction.h"
+#include "K2Node_DynamicCast.h"
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
+#include "Components/ActorComponent.h"
 #include "EdGraphNode_Comment.h"
+#include "EdGraph/EdGraph.h"
 #include "EdGraph/EdGraphPin.h"
 #include "EdGraph/EdGraphSchema.h"
 #include "EdGraphSchema_K2.h"
 #include "Editor.h"
 #include "Engine/SCS_Node.h"
+#include "GameFramework/Actor.h"
 #include "Engine/SimpleConstructionScript.h"
 #include "ScopedTransaction.h"
 #include "Framework/Application/SlateApplication.h"
@@ -2031,6 +2040,354 @@ FSMAssistOperationResult LD::Assist::SetTransitionCondition(const TSharedRef<FJs
 	return FSMAssistOperationResult::MakeSuccess(Payload);
 }
 
+FSMAssistOperationResult LD::Assist::RuntimeGetState(const TSharedRef<FJsonObject>& InArgs)
+{
+	FString ActorIdentifier;
+	if (!InArgs->TryGetStringField(Args::ActorIdentifier, ActorIdentifier) || ActorIdentifier.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'actor_identifier'."));
+	}
+
+	int32 PieInstance = 0;
+	InArgs->TryGetNumberField(Args::PieInstance, PieInstance);
+
+	bool bIncludeProperties = false;
+	InArgs->TryGetBoolField(Args::IncludeProperties, bIncludeProperties);
+
+	FString ComponentName;
+	InArgs->TryGetStringField(Args::ComponentName, ComponentName);
+
+	FString WorldError;
+	UWorld* PieWorld = LD::Assist::Utils::GetActivePIEWorld(PieInstance, WorldError);
+	if (!PieWorld)
+	{
+		return FSMAssistOperationResult::MakeError(WorldError);
+	}
+
+	AActor* Actor = LD::Assist::Utils::FindActorByIdentifier(PieWorld, ActorIdentifier);
+	if (!Actor)
+	{
+		return FSMAssistOperationResult::MakeError(
+			FString::Printf(TEXT("No actor matching '%s' in the running PIE world."), *ActorIdentifier));
+	}
+
+	USMStateMachineComponent* Component = nullptr;
+	if (!ComponentName.IsEmpty())
+	{
+		for (UActorComponent* Candidate : Actor->GetComponents())
+		{
+			if (Candidate && Candidate->GetName().Equals(ComponentName, ESearchCase::IgnoreCase))
+			{
+				Component = Cast<USMStateMachineComponent>(Candidate);
+				break;
+			}
+		}
+
+		if (!Component)
+		{
+			return FSMAssistOperationResult::MakeError(
+				FString::Printf(TEXT("Actor '%s' has no USMStateMachineComponent named '%s'."), *ActorIdentifier, *ComponentName));
+		}
+	}
+	else
+	{
+		Component = Actor->FindComponentByClass<USMStateMachineComponent>();
+		if (!Component)
+		{
+			return FSMAssistOperationResult::MakeError(
+				FString::Printf(TEXT("Actor '%s' has no USMStateMachineComponent."), *ActorIdentifier));
+		}
+	}
+
+	USMInstance* Instance = Component->GetInstance();
+	if (!Instance)
+	{
+		return FSMAssistOperationResult::MakeError(
+			FString::Printf(TEXT("Component '%s' on actor '%s' has no live state machine instance (not initialized)."),
+				*Component->GetName(), *ActorIdentifier));
+	}
+
+	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
+	Payload->SetStringField(Args::Actor, Actor->GetActorNameOrLabel());
+	Payload->SetStringField(Args::Component, Component->GetName());
+	Payload->SetBoolField(Args::IsActive, Instance->IsActive());
+	Payload->SetBoolField(Args::IsInEndState, Instance->IsInEndState());
+
+	if (const USMStateInstance_Base* SingleActive = Instance->GetSingleActiveStateInstance())
+	{
+		Payload->SetStringField(Args::SingleActiveState, SingleActive->GetNodeName());
+	}
+
+	TArray<USMStateInstance_Base*> ActiveStates;
+	Instance->GetAllActiveStateInstances(ActiveStates);
+
+	TArray<TSharedPtr<FJsonValue>> ActiveStatesJson;
+	ActiveStatesJson.Reserve(ActiveStates.Num());
+	for (USMStateInstance_Base* StateInstance : ActiveStates)
+	{
+		if (!StateInstance)
+		{
+			continue;
+		}
+
+		const TSharedRef<FJsonObject> StateJson = MakeShared<FJsonObject>();
+		StateJson->SetStringField(Args::StateName, StateInstance->GetNodeName());
+		StateJson->SetStringField(Args::StateGuid, StateInstance->GetGuid().ToString());
+		StateJson->SetStringField(Args::StateClass, StateInstance->GetClass()->GetPathName());
+		StateJson->SetBoolField(Args::IsActive, StateInstance->IsActive());
+
+		if (bIncludeProperties)
+		{
+			TArray<TSharedPtr<FJsonValue>> StateProperties;
+			for (TFieldIterator<FProperty> It(StateInstance->GetClass(), EFieldIteratorFlags::IncludeSuper, EFieldIteratorFlags::ExcludeDeprecated); It; ++It)
+			{
+				FProperty* Property = *It;
+				if (!Property || !Property->HasAnyPropertyFlags(CPF_Edit))
+				{
+					continue;
+				}
+				StateProperties.Add(MakeShared<FJsonValueObject>(LD::Assist::Private::DescribeProperty(Property, StateInstance, StateInstance)));
+			}
+			StateJson->SetArrayField(Args::Properties, StateProperties);
+		}
+
+		ActiveStatesJson.Add(MakeShared<FJsonValueObject>(StateJson));
+	}
+
+	Payload->SetArrayField(Args::ActiveStates, ActiveStatesJson);
+	Payload->SetNumberField(Args::Count, ActiveStatesJson.Num());
+	return FSMAssistOperationResult::MakeSuccess(Payload);
+}
+
+FSMAssistOperationResult LD::Assist::SetConduitCondition(const TSharedRef<FJsonObject>& InArgs)
+{
+	FString AssetPath;
+	if (!InArgs->TryGetStringField(Args::AssetPath, AssetPath) || AssetPath.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'asset_path'."));
+	}
+
+	FString NodeGuidStr;
+	if (!InArgs->TryGetStringField(Args::NodeGuid, NodeGuidStr))
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'node_guid'."));
+	}
+
+	bool bCondition = false;
+	if (!InArgs->TryGetBoolField(Args::Condition, bCondition))
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'condition' (boolean)."));
+	}
+
+	FGuid NodeGuid;
+	if (!FGuid::Parse(NodeGuidStr, NodeGuid))
+	{
+		return FSMAssistOperationResult::MakeError(
+			FString::Printf(TEXT("Invalid 'node_guid' '%s'."), *NodeGuidStr));
+	}
+
+	FString LoadError;
+	USMBlueprint* Blueprint = LD::Assist::Utils::LoadStateMachineBlueprint(AssetPath, LoadError);
+	if (!Blueprint)
+	{
+		return FSMAssistOperationResult::MakeError(LoadError);
+	}
+
+	USMGraphNode_Base* Node = LD::Assist::Utils::FindNodeByGuid(Blueprint, NodeGuid);
+	USMGraphNode_ConduitNode* ConduitNode = Cast<USMGraphNode_ConduitNode>(Node);
+	if (!ConduitNode)
+	{
+		return FSMAssistOperationResult::MakeError(
+			FString::Printf(TEXT("Node '%s' is not a conduit."), *NodeGuidStr));
+	}
+
+	USMConduitGraph* ConduitGraph = Cast<USMConduitGraph>(ConduitNode->GetBoundGraph());
+	if (!ConduitGraph || !ConduitGraph->ResultNode)
+	{
+		return FSMAssistOperationResult::MakeError(
+			FString::Printf(TEXT("Conduit '%s' has no result node to configure."), *NodeGuidStr));
+	}
+
+	UEdGraphPin* EvaluationPin = ConduitGraph->ResultNode->GetTransitionEvaluationPin();
+	if (!EvaluationPin)
+	{
+		return FSMAssistOperationResult::MakeError(
+			FString::Printf(TEXT("Conduit '%s' has no evaluation pin."), *NodeGuidStr));
+	}
+
+	const UEdGraphSchema* Schema = ConduitGraph->GetSchema();
+	if (!Schema)
+	{
+		return FSMAssistOperationResult::MakeError(
+			FString::Printf(TEXT("Conduit '%s' graph has no schema."), *NodeGuidStr));
+	}
+
+	Schema->TrySetDefaultValue(*EvaluationPin, bCondition ? TEXT("True") : TEXT("False"));
+
+	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
+	Payload->SetStringField(Args::NodeGuid, NodeGuidStr);
+	Payload->SetBoolField(Args::Condition, bCondition);
+	return FSMAssistOperationResult::MakeSuccess(Payload);
+}
+
+FSMAssistOperationResult LD::Assist::SpawnActorContextComponent(const TSharedRef<FJsonObject>& InArgs)
+{
+	FString AssetPath;
+	if (!InArgs->TryGetStringField(Args::AssetPath, AssetPath) || AssetPath.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'asset_path'."));
+	}
+
+	FString TargetGraphPath;
+	if (!InArgs->TryGetStringField(Args::TargetGraphPath, TargetGraphPath) || TargetGraphPath.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'target_graph_path'."));
+	}
+
+	FString ActorClassPath;
+	if (!InArgs->TryGetStringField(Args::TargetActorClass, ActorClassPath) || ActorClassPath.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'target_actor_class'."));
+	}
+
+	FString ComponentClassPath;
+	if (!InArgs->TryGetStringField(Args::ComponentClass, ComponentClassPath) || ComponentClassPath.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'component_class'."));
+	}
+
+	FString LoadError;
+	UBlueprint* Blueprint = LD::Assist::Utils::LoadBlueprint(AssetPath, LoadError);
+	if (!Blueprint)
+	{
+		return FSMAssistOperationResult::MakeError(LoadError);
+	}
+
+	UClass* ActorClass = LoadClass<AActor>(nullptr, *ActorClassPath);
+	if (!ActorClass)
+	{
+		return FSMAssistOperationResult::MakeError(
+			FString::Printf(TEXT("Could not load 'target_actor_class' '%s' as an AActor subclass."), *ActorClassPath));
+	}
+
+	UClass* ComponentClass = LoadClass<UActorComponent>(nullptr, *ComponentClassPath);
+	if (!ComponentClass)
+	{
+		return FSMAssistOperationResult::MakeError(
+			FString::Printf(TEXT("Could not load 'component_class' '%s' as a UActorComponent subclass."), *ComponentClassPath));
+	}
+
+	UEdGraph* TargetGraph = nullptr;
+	TArray<UEdGraph*> AllGraphs;
+	Blueprint->GetAllGraphs(AllGraphs);
+	for (UEdGraph* Graph : AllGraphs)
+	{
+		if (Graph && (Graph->GetPathName() == TargetGraphPath || Graph->GetName().Equals(TargetGraphPath, ESearchCase::IgnoreCase)))
+		{
+			TargetGraph = Graph;
+			break;
+		}
+	}
+	if (!TargetGraph)
+	{
+		return FSMAssistOperationResult::MakeError(
+			FString::Printf(TEXT("Could not find graph '%s' on blueprint '%s'."), *TargetGraphPath, *AssetPath));
+	}
+
+	UFunction* GetContextFunction = USMNodeInstance::StaticClass()->FindFunctionByName(TEXT("GetContext"));
+	UFunction* GetComponentFunction = AActor::StaticClass()->FindFunctionByName(TEXT("GetComponentByClass"));
+	if (!GetContextFunction || !GetComponentFunction)
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Could not resolve the GetContext or GetComponentByClass functions."));
+	}
+
+	int32 BaseX = 0;
+	int32 BaseY = 0;
+	InArgs->TryGetNumberField(Args::PositionX, BaseX);
+	InArgs->TryGetNumberField(Args::PositionY, BaseY);
+
+	const UEdGraphSchema_K2* K2Schema = GetDefault<UEdGraphSchema_K2>();
+
+	// GetContext and GetComponentByClass are both const BlueprintCallable with a return value, so UHT promotes them
+	// to BlueprintPure (no exec pins). The whole chain is a pure data cluster; the caller wires the returned
+	// component pin downstream and the chain evaluates on demand.
+	UK2Node_CallFunction* GetContextNode = nullptr;
+	{
+		FGraphNodeCreator<UK2Node_CallFunction> Creator(*TargetGraph);
+		GetContextNode = Creator.CreateNode(false);
+		GetContextNode->SetFromFunction(GetContextFunction);
+		GetContextNode->NodePosX = BaseX;
+		GetContextNode->NodePosY = BaseY;
+		Creator.Finalize();
+	}
+
+	UK2Node_DynamicCast* CastNode = nullptr;
+	{
+		FGraphNodeCreator<UK2Node_DynamicCast> Creator(*TargetGraph);
+		CastNode = Creator.CreateNode(false);
+		CastNode->TargetType = ActorClass;
+		CastNode->SetPurity(true);
+		CastNode->NodePosX = BaseX + 280;
+		CastNode->NodePosY = BaseY + 48;
+		Creator.Finalize();
+	}
+
+	UK2Node_CallFunction* GetComponentNode = nullptr;
+	{
+		FGraphNodeCreator<UK2Node_CallFunction> Creator(*TargetGraph);
+		GetComponentNode = Creator.CreateNode(false);
+		GetComponentNode->SetFromFunction(GetComponentFunction);
+		GetComponentNode->NodePosX = BaseX + 560;
+		GetComponentNode->NodePosY = BaseY;
+		Creator.Finalize();
+	}
+
+	if (UEdGraphPin* ComponentClassPin = GetComponentNode->FindPin(TEXT("ComponentClass"), EGPD_Input))
+	{
+		K2Schema->TrySetDefaultObject(*ComponentClassPin, ComponentClass);
+		GetComponentNode->PinDefaultValueChanged(ComponentClassPin);
+	}
+
+	TArray<FString> WireFailures;
+	const auto Connect = [&](UEdGraphPin* InA, UEdGraphPin* InB, const TCHAR* InLabel)
+	{
+		if (!InA || !InB || !K2Schema->TryCreateConnection(InA, InB))
+		{
+			WireFailures.Add(InLabel);
+		}
+	};
+
+	Connect(GetContextNode->GetReturnValuePin(), CastNode->GetCastSourcePin(), TEXT("GetContext.ReturnValue -> Cast.Source"));
+	Connect(CastNode->GetCastResultPin(), GetComponentNode->FindPin(UEdGraphSchema_K2::PN_Self, EGPD_Input), TEXT("Cast.Result -> GetComponentByClass.Self"));
+
+	// A reach chain whose wires did not connect delivers no value, so roll the cluster back and fail rather than
+	// leave disconnected nodes behind.
+	if (WireFailures.Num() > 0)
+	{
+		FBlueprintEditorUtils::RemoveNode(Blueprint, GetContextNode, true);
+		FBlueprintEditorUtils::RemoveNode(Blueprint, CastNode, true);
+		FBlueprintEditorUtils::RemoveNode(Blueprint, GetComponentNode, true);
+		return FSMAssistOperationResult::MakeError(
+			FString::Printf(TEXT("Could not wire the reach chain (%s); no nodes were created."), *FString::Join(WireFailures, TEXT("; "))));
+	}
+
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+
+	UEdGraphPin* ComponentReturn = GetComponentNode->GetReturnValuePin();
+
+	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
+	Payload->SetStringField(Args::GetContextNodeGuid, GetContextNode->NodeGuid.ToString());
+	Payload->SetStringField(Args::CastNodeGuid, CastNode->NodeGuid.ToString());
+	Payload->SetStringField(Args::GetComponentNodeGuid, GetComponentNode->NodeGuid.ToString());
+	if (ComponentReturn)
+	{
+		Payload->SetStringField(Args::ComponentOutputPinId, ComponentReturn->PinId.ToString());
+	}
+	Payload->SetStringField(Args::TargetGraphPath, TargetGraph->GetPathName());
+
+	return FSMAssistOperationResult::MakeSuccess(Payload);
+}
+
 namespace LD::Assist::Private
 {
 	static FBlueprintEditor* FindOrOpenBlueprintEditor(USMBlueprint* InBlueprint, FString& OutError)
@@ -3684,114 +4041,7 @@ namespace LD::Assist::Private
 {
 	static bool ResolveTerminalType(const FString& InTypeStr, FName& OutCategory, FName& OutSubCategory, UObject*& OutSubCategoryObject)
 	{
-		OutCategory = NAME_None;
-		OutSubCategory = NAME_None;
-		OutSubCategoryObject = nullptr;
-
-		const FString TypeStr = InTypeStr.ToLower();
-
-		if (TypeStr == TEXT("bool") || TypeStr == TEXT("boolean"))
-		{
-			OutCategory = UEdGraphSchema_K2::PC_Boolean;
-			return true;
-		}
-		if (TypeStr == TEXT("byte") || TypeStr == TEXT("uint8"))
-		{
-			OutCategory = UEdGraphSchema_K2::PC_Byte;
-			return true;
-		}
-		if (TypeStr == TEXT("int") || TypeStr == TEXT("int32") || TypeStr == TEXT("integer"))
-		{
-			OutCategory = UEdGraphSchema_K2::PC_Int;
-			return true;
-		}
-		if (TypeStr == TEXT("int64") || TypeStr == TEXT("long"))
-		{
-			OutCategory = UEdGraphSchema_K2::PC_Int64;
-			return true;
-		}
-		// BP UI's "Float" maps to PC_Real + PC_Double in UE 5.x.
-		if (TypeStr == TEXT("float") || TypeStr == TEXT("real") || TypeStr == TEXT("double"))
-		{
-			OutCategory = UEdGraphSchema_K2::PC_Real;
-			OutSubCategory = UEdGraphSchema_K2::PC_Double;
-			return true;
-		}
-		if (TypeStr == TEXT("single") || TypeStr == TEXT("single_precision_float"))
-		{
-			OutCategory = UEdGraphSchema_K2::PC_Real;
-			OutSubCategory = UEdGraphSchema_K2::PC_Float;
-			return true;
-		}
-		if (TypeStr == TEXT("string") || TypeStr == TEXT("fstring"))
-		{
-			OutCategory = UEdGraphSchema_K2::PC_String;
-			return true;
-		}
-		if (TypeStr == TEXT("name") || TypeStr == TEXT("fname"))
-		{
-			OutCategory = UEdGraphSchema_K2::PC_Name;
-			return true;
-		}
-		if (TypeStr == TEXT("text") || TypeStr == TEXT("ftext"))
-		{
-			OutCategory = UEdGraphSchema_K2::PC_Text;
-			return true;
-		}
-
-		UScriptStruct* StructType = nullptr;
-		if (TypeStr == TEXT("vector") || TypeStr == TEXT("fvector"))
-		{
-			StructType = TBaseStructure<FVector>::Get();
-		}
-		else if (TypeStr == TEXT("vector2d") || TypeStr == TEXT("fvector2d"))
-		{
-			StructType = TBaseStructure<FVector2D>::Get();
-		}
-		else if (TypeStr == TEXT("rotator") || TypeStr == TEXT("frotator"))
-		{
-			StructType = TBaseStructure<FRotator>::Get();
-		}
-		else if (TypeStr == TEXT("transform") || TypeStr == TEXT("ftransform"))
-		{
-			StructType = TBaseStructure<FTransform>::Get();
-		}
-		else if (TypeStr == TEXT("linearcolor") || TypeStr == TEXT("flinearcolor"))
-		{
-			StructType = TBaseStructure<FLinearColor>::Get();
-		}
-		else if (TypeStr == TEXT("color") || TypeStr == TEXT("fcolor"))
-		{
-			StructType = TBaseStructure<FColor>::Get();
-		}
-		else if (TypeStr == TEXT("guid") || TypeStr == TEXT("fguid"))
-		{
-			StructType = TBaseStructure<FGuid>::Get();
-		}
-		if (StructType)
-		{
-			OutCategory = UEdGraphSchema_K2::PC_Struct;
-			OutSubCategoryObject = StructType;
-			return true;
-		}
-
-		if (InTypeStr.Contains(TEXT(".")) || InTypeStr.StartsWith(TEXT("/")))
-		{
-			if (UClass* ObjectClass = LoadClass<UObject>(nullptr, *InTypeStr))
-			{
-				OutCategory = UEdGraphSchema_K2::PC_Object;
-				OutSubCategoryObject = ObjectClass;
-				return true;
-			}
-			if (UScriptStruct* ArbitraryStruct = LoadObject<UScriptStruct>(nullptr, *InTypeStr))
-			{
-				OutCategory = UEdGraphSchema_K2::PC_Struct;
-				OutSubCategoryObject = ArbitraryStruct;
-				return true;
-			}
-		}
-
-		return false;
+		return LD::Assist::Utils::ResolveTerminalType(InTypeStr, OutCategory, OutSubCategory, OutSubCategoryObject);
 	}
 
 	static bool ResolveContainerType(const FString& InContainerTypeStr, EPinContainerType& OutContainerType)
