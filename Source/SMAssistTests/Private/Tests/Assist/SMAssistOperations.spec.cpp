@@ -1970,6 +1970,174 @@ void FAssistOperationsSpec::Define()
 			TestTrue("Found StringArray", bFoundStringArray);
 		});
 
+		It("Recurses struct properties when 'max_depth' is set", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString StateGuid = AddStateToBlueprint(
+				AssetPath, TEXT("Recursed"), USMAssistSplitTestState::StaticClass());
+			if (!TestFalse("State guid populated", StateGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("node_guid"), StateGuid);
+			Args->SetNumberField(TEXT("max_depth"), 2);
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.get_node_properties")), Args);
+
+			TestTrue("Result is success", Result.bSuccess);
+			if (!TestTrue("Payload populated", Result.Payload.IsValid()))
+			{
+				return;
+			}
+
+			const TArray<TSharedPtr<FJsonValue>>* Properties = nullptr;
+			if (!TestTrue("Payload has 'properties' array",
+				Result.Payload->TryGetArrayField(TEXT("properties"), Properties)))
+			{
+				return;
+			}
+
+			TSharedPtr<FJsonObject> OurStructObj;
+			for (const TSharedPtr<FJsonValue>& Entry : *Properties)
+			{
+				const TSharedPtr<FJsonObject> Obj = Entry->AsObject();
+				if (!Obj.IsValid())
+				{
+					continue;
+				}
+				FString PropName;
+				Obj->TryGetStringField(TEXT("name"), PropName);
+				if (PropName == TEXT("OurStruct"))
+				{
+					OurStructObj = Obj;
+					break;
+				}
+			}
+
+			if (!TestTrue("OurStruct property present", OurStructObj.IsValid()))
+			{
+				return;
+			}
+
+			TestTrue("OurStruct retains flat 'value' (additive)", OurStructObj->HasField(TEXT("value")));
+
+			const TArray<TSharedPtr<FJsonValue>>* Members = nullptr;
+			if (!TestTrue("OurStruct exposes 'members'", OurStructObj->TryGetArrayField(TEXT("members"), Members)))
+			{
+				return;
+			}
+
+			bool bFoundOuterInt = false;
+			TSharedPtr<FJsonObject> NestedStructObj;
+			for (const TSharedPtr<FJsonValue>& M : *Members)
+			{
+				const TSharedPtr<FJsonObject> MObj = M->AsObject();
+				if (!MObj.IsValid())
+				{
+					continue;
+				}
+				FString MName;
+				MObj->TryGetStringField(TEXT("name"), MName);
+				if (MName == TEXT("OuterInt"))
+				{
+					bFoundOuterInt = true;
+				}
+				else if (MName == TEXT("NestedStruct"))
+				{
+					NestedStructObj = MObj;
+				}
+			}
+			TestTrue("OurStruct.members includes OuterInt", bFoundOuterInt);
+
+			if (TestTrue("OurStruct.members includes NestedStruct", NestedStructObj.IsValid()))
+			{
+				const TArray<TSharedPtr<FJsonValue>>* InnerMembers = nullptr;
+				if (TestTrue("NestedStruct recurses to 'members'",
+					NestedStructObj->TryGetArrayField(TEXT("members"), InnerMembers)))
+				{
+					bool bFoundInnerInt = false;
+					bool bFoundInnerFloat = false;
+					for (const TSharedPtr<FJsonValue>& IM : *InnerMembers)
+					{
+						const TSharedPtr<FJsonObject> IMObj = IM->AsObject();
+						if (!IMObj.IsValid())
+						{
+							continue;
+						}
+						FString IMName;
+						IMObj->TryGetStringField(TEXT("name"), IMName);
+						bFoundInnerInt |= (IMName == TEXT("InnerInt"));
+						bFoundInnerFloat |= (IMName == TEXT("InnerFloat"));
+					}
+					TestTrue("NestedStruct.members includes InnerInt", bFoundInnerInt);
+					TestTrue("NestedStruct.members includes InnerFloat", bFoundInnerFloat);
+				}
+			}
+		});
+
+		It("Does not recurse when 'max_depth' is omitted (back-compat)", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString StateGuid = AddStateToBlueprint(
+				AssetPath, TEXT("Flat"), USMAssistSplitTestState::StaticClass());
+			if (!TestFalse("State guid populated", StateGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("node_guid"), StateGuid);
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.get_node_properties")), Args);
+
+			if (!TestTrue("Result is success", Result.bSuccess) || !TestTrue("Payload populated", Result.Payload.IsValid()))
+			{
+				return;
+			}
+
+			const TArray<TSharedPtr<FJsonValue>>* Properties = nullptr;
+			if (!TestTrue("Payload has 'properties' array",
+				Result.Payload->TryGetArrayField(TEXT("properties"), Properties)))
+			{
+				return;
+			}
+
+			for (const TSharedPtr<FJsonValue>& Entry : *Properties)
+			{
+				const TSharedPtr<FJsonObject> Obj = Entry->AsObject();
+				if (!Obj.IsValid())
+				{
+					continue;
+				}
+				FString PropName;
+				Obj->TryGetStringField(TEXT("name"), PropName);
+				if (PropName == TEXT("OurStruct"))
+				{
+					TestFalse("OurStruct has no 'members' without max_depth", Obj->HasField(TEXT("members")));
+				}
+			}
+		});
+
 		It("Fails when 'node_guid' does not resolve", [this]()
 		{
 			const FString AssetPath = CreateTransientBlueprint();

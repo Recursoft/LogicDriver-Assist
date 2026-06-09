@@ -430,12 +430,13 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::GetNodeProperties;
-		Info.Description = TEXT("List the editable properties on a node template. Returns name, type, category, and current value for each. Supports an optional stack_index.");
+		Info.Description = TEXT("List the editable properties on a node template. Returns name, type, category, and current value for each. With max_depth > 0, struct properties also return a 'members' array and array properties an 'elements' array, recursing one level per unit of depth. Supports an optional stack_index.");
 		Info.InputSchema = MakeSchema(
 			{
 				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the target SMBlueprint.")) },
 				{ Args::NodeGuid, MakePropertyObject(TEXT("string"), TEXT("Guid of the state or transition node.")) },
-				{ Args::StackIndex, MakePropertyObject(TEXT("number"), TEXT("Optional stack template index. Omit to target the node's primary template.")) }
+				{ Args::StackIndex, MakePropertyObject(TEXT("number"), TEXT("Optional stack template index. Omit to target the node's primary template.")) },
+				{ Args::MaxDepth, MakePropertyObject(TEXT("number"), TEXT("Optional recursion depth for struct members and array elements. 0 (default) returns the flat exported value only.")) }
 			},
 			{ Args::AssetPath, Args::NodeGuid });
 		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::GetNodeProperties);
@@ -851,6 +852,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 				{ Args::ActorIdentifier, MakePropertyObject(TEXT("string"), TEXT("Object name or display label of the actor in the running PIE world.")) },
 				{ Args::ComponentName, MakePropertyObject(TEXT("string"), TEXT("Optional component name; omit to use the first USMStateMachineComponent on the actor.")) },
 				{ Args::IncludeProperties, MakePropertyObject(TEXT("boolean"), TEXT("Include each active state's exposed property values (live runtime values). Default false.")) },
+				{ Args::MaxDepth, MakePropertyObject(TEXT("number"), TEXT("Optional recursion depth for struct members and array elements within included property values. 0 (default) returns the flat exported value only.")) },
 				{ Args::PieInstance, MakePropertyObject(TEXT("number"), TEXT("Optional PIE world index for multi-client play. Default 0.")) }
 			},
 			{ Args::ActorIdentifier });

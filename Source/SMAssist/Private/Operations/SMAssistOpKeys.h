@@ -102,6 +102,9 @@ namespace LD::Assist::Args
 	inline constexpr const TCHAR* PropertyPath = TEXT("property_path");
 	inline constexpr const TCHAR* Type = TEXT("type");
 	inline constexpr const TCHAR* Category = TEXT("category");
+	inline constexpr const TCHAR* MaxDepth = TEXT("max_depth");
+	inline constexpr const TCHAR* Members = TEXT("members");
+	inline constexpr const TCHAR* Elements = TEXT("elements");
 	inline constexpr const TCHAR* Condition = TEXT("condition");
 
 	inline constexpr const TCHAR* Kind = TEXT("kind");

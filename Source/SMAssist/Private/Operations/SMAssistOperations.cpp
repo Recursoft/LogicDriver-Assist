@@ -1872,7 +1872,47 @@ FSMAssistOperationResult LD::Assist::AddLinkState(const TSharedRef<FJsonObject>&
 
 namespace LD::Assist::Private
 {
-	static TSharedRef<FJsonObject> DescribeProperty(const FProperty* InProperty, const void* InContainer, const UObject* InOwner)
+	static TSharedRef<FJsonObject> DescribeProperty(const FProperty* InProperty, const void* InContainer, const UObject* InOwner, int32 InMaxDepth);
+
+	// Additive: appends struct 'members' / array 'elements'; the flat exported value is left intact.
+	static void AppendStructuredValue(const TSharedRef<FJsonObject>& InEntry, const FProperty* InProperty, const void* InValuePtr, const UObject* InOwner, int32 InMaxDepth)
+	{
+		if (InMaxDepth <= 0)
+		{
+			return;
+		}
+
+		if (const FStructProperty* StructProperty = CastField<FStructProperty>(InProperty))
+		{
+			TArray<TSharedPtr<FJsonValue>> Members;
+			for (TFieldIterator<FProperty> It(StructProperty->Struct); It; ++It)
+			{
+				Members.Add(MakeShared<FJsonValueObject>(DescribeProperty(*It, InValuePtr, InOwner, InMaxDepth - 1)));
+			}
+			InEntry->SetArrayField(Args::Members, Members);
+		}
+		else if (const FArrayProperty* ArrayProperty = CastField<FArrayProperty>(InProperty))
+		{
+			FScriptArrayHelper Helper(ArrayProperty, InValuePtr);
+			TArray<TSharedPtr<FJsonValue>> Elements;
+			for (int32 Index = 0; Index < Helper.Num(); ++Index)
+			{
+				const void* ElementPtr = Helper.GetRawPtr(Index);
+				const TSharedRef<FJsonObject> Element = MakeShared<FJsonObject>();
+				Element->SetStringField(Args::Type, ArrayProperty->Inner->GetCPPType());
+
+				FString ElementValue;
+				ArrayProperty->Inner->ExportTextItem_Direct(ElementValue, ElementPtr, nullptr, const_cast<UObject*>(InOwner), PPF_None);
+				Element->SetStringField(Args::Value, ElementValue);
+
+				AppendStructuredValue(Element, ArrayProperty->Inner, ElementPtr, InOwner, InMaxDepth - 1);
+				Elements.Add(MakeShared<FJsonValueObject>(Element));
+			}
+			InEntry->SetArrayField(Args::Elements, Elements);
+		}
+	}
+
+	static TSharedRef<FJsonObject> DescribeProperty(const FProperty* InProperty, const void* InContainer, const UObject* InOwner, int32 InMaxDepth)
 	{
 		const TSharedRef<FJsonObject> Entry = MakeShared<FJsonObject>();
 		Entry->SetStringField(Args::Name, InProperty->GetName());
@@ -1884,10 +1924,13 @@ namespace LD::Assist::Private
 			Entry->SetStringField(Args::Category, Category);
 		}
 
-		FString ValueString;
 		const void* ValuePtr = InProperty->ContainerPtrToValuePtr<void>(InContainer);
+
+		FString ValueString;
 		InProperty->ExportTextItem_Direct(ValueString, ValuePtr, nullptr, const_cast<UObject*>(InOwner), PPF_None);
 		Entry->SetStringField(Args::Value, ValueString);
+
+		AppendStructuredValue(Entry, InProperty, ValuePtr, InOwner, InMaxDepth);
 		return Entry;
 	}
 }
@@ -1942,6 +1985,9 @@ FSMAssistOperationResult LD::Assist::GetNodeProperties(const TSharedRef<FJsonObj
 			FString::Printf(TEXT("Node '%s' has no template instance."), *NodeGuidStr));
 	}
 
+	int32 MaxDepth = 0;
+	InArgs->TryGetNumberField(Args::MaxDepth, MaxDepth);
+
 	TArray<TSharedPtr<FJsonValue>> Properties;
 	for (TFieldIterator<FProperty> It(Template->GetClass(), EFieldIteratorFlags::IncludeSuper, EFieldIteratorFlags::ExcludeDeprecated); It; ++It)
 	{
@@ -1954,7 +2000,7 @@ FSMAssistOperationResult LD::Assist::GetNodeProperties(const TSharedRef<FJsonObj
 		{
 			continue;
 		}
-		Properties.Add(MakeShared<FJsonValueObject>(LD::Assist::Private::DescribeProperty(Property, Template, Template)));
+		Properties.Add(MakeShared<FJsonValueObject>(LD::Assist::Private::DescribeProperty(Property, Template, Template, MaxDepth)));
 	}
 
 	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
@@ -2054,6 +2100,9 @@ FSMAssistOperationResult LD::Assist::RuntimeGetState(const TSharedRef<FJsonObjec
 	bool bIncludeProperties = false;
 	InArgs->TryGetBoolField(Args::IncludeProperties, bIncludeProperties);
 
+	int32 MaxDepth = 0;
+	InArgs->TryGetNumberField(Args::MaxDepth, MaxDepth);
+
 	FString ComponentName;
 	InArgs->TryGetStringField(Args::ComponentName, ComponentName);
 
@@ -2146,7 +2195,7 @@ FSMAssistOperationResult LD::Assist::RuntimeGetState(const TSharedRef<FJsonObjec
 				{
 					continue;
 				}
-				StateProperties.Add(MakeShared<FJsonValueObject>(LD::Assist::Private::DescribeProperty(Property, StateInstance, StateInstance)));
+				StateProperties.Add(MakeShared<FJsonValueObject>(LD::Assist::Private::DescribeProperty(Property, StateInstance, StateInstance, MaxDepth)));
 			}
 			StateJson->SetArrayField(Args::Properties, StateProperties);
 		}
