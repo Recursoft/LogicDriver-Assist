@@ -50,6 +50,10 @@ namespace LD::Assist::Ops
 	inline constexpr const TCHAR* RuntimeGetState = TEXT("sm.runtime_get_state");
 	inline constexpr const TCHAR* SetConduitCondition = TEXT("sm.set_conduit_condition");
 	inline constexpr const TCHAR* SpawnActorContextComponent = TEXT("sm.spawn_actor_context_component");
+	inline constexpr const TCHAR* CollapseToStateMachine = TEXT("sm.collapse_to_state_machine");
+	inline constexpr const TCHAR* MergeStates = TEXT("sm.merge_states");
+	inline constexpr const TCHAR* ReplaceNode = TEXT("sm.replace_node");
+	inline constexpr const TCHAR* ConvertToReference = TEXT("sm.convert_to_reference");
 }
 
 namespace LD::Assist::Args
@@ -248,4 +252,10 @@ namespace LD::Assist::Args
 	inline constexpr const TCHAR* CastNodeGuid = TEXT("cast_node_guid");
 	inline constexpr const TCHAR* GetComponentNodeGuid = TEXT("get_component_node_guid");
 	inline constexpr const TCHAR* ComponentOutputPinId = TEXT("component_output_pin_id");
+
+	inline constexpr const TCHAR* NodeGuids = TEXT("node_guids");
+	inline constexpr const TCHAR* DestinationStateGuid = TEXT("destination_state_guid");
+	inline constexpr const TCHAR* SourceStateGuids = TEXT("source_state_guids");
+	inline constexpr const TCHAR* DestroyStates = TEXT("b_destroy_states");
+	inline constexpr const TCHAR* MergedStackTemplateGuids = TEXT("merged_stack_template_guids");
 }

@@ -893,6 +893,68 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 		RegisterOperation(MoveTemp(Info));
 	}
 
+	{
+		FSMAssistOperationInfo Info;
+		Info.Name = Ops::CollapseToStateMachine;
+		Info.Description = TEXT("Collapse a set of state nodes into a new nested state machine in the same root graph, the headless equivalent of the editor's \"Collapse to State Machine\". Boundary transitions (edges crossing the selection) are rewired onto the new container; fully-interior states and edges move into its bound graph. The set must contain at least one state node and every node must belong to the same state machine graph. Reroute waypoints do not count toward the state-node requirement, and transitions between included states are pulled in automatically even if omitted. Returns state_guid (the new container's guid, kind 'state_machine_state') and state_name.");
+		Info.InputSchema = MakeSchema(
+			{
+				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the target SMBlueprint.")) },
+				{ Args::NodeGuids, MakePropertyObject(TEXT("array"), TEXT("Guids of the nodes to collapse (array of strings). Must include at least one state node; every node must belong to the same state machine graph.")) }
+			},
+			{ Args::AssetPath, Args::NodeGuids });
+		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::CollapseToStateMachine);
+		RegisterOperation(MoveTemp(Info));
+	}
+
+	{
+		FSMAssistOperationInfo Info;
+		Info.Name = Ops::MergeStates;
+		Info.Description = TEXT("Merge source states' node-class templates into a destination state's stack, the headless equivalent of the editor's \"Cut and Merge States\" (b_destroy_states=true) / \"Copy and Merge States\" (b_destroy_states=false). Each source contributes its non-default templates as new stack entries on the destination; a source on the default node class with no stack contributes nothing. The cut variant also destroys each source and rewires its transitions onto the destination. Destination and sources must be plain states (USMGraphNode_StateNode) in the same graph; a source equal to the destination is rejected. Returns destination_state_guid, merged_stack_template_guids (the minted stack-template guids; empty when no source contributed a non-default template), and b_destroy_states (echoes the applied mode).");
+		Info.InputSchema = MakeSchema(
+			{
+				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the target SMBlueprint.")) },
+				{ Args::DestinationStateGuid, MakePropertyObject(TEXT("string"), TEXT("Guid of the plain state that receives the merged templates as new stack entries.")) },
+				{ Args::SourceStateGuids, MakePropertyObject(TEXT("array"), TEXT("Guids of the source plain states whose templates are merged into the destination (array of strings). Each must differ from the destination and live in the same graph.")) },
+				{ Args::DestroyStates, MakePropertyObject(TEXT("boolean"), TEXT("When true, destroy each merged source state and rewire its transitions onto the destination (cut). When false (default), leave the sources in place (copy).")) }
+			},
+			{ Args::AssetPath, Args::DestinationStateGuid, Args::SourceStateGuids });
+		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::MergeStates);
+		RegisterOperation(MoveTemp(Info));
+	}
+
+	{
+		FSMAssistOperationInfo Info;
+		Info.Name = Ops::ReplaceNode;
+		Info.Description = TEXT("Replace a node in place with a different kind, the headless equivalent of the editor's \"Replace With ...\" entries. Existing transitions are preserved and the original node is removed; the replacement is a freshly minted node, so the returned node_guid differs from the input. The set of valid target kinds for a given node matches the editor's right-click availability (e.g. a transition cannot be replaced). 'parent' is only valid in a child state machine blueprint whose parent class exposes a state machine to override. Returns node_guid (the replacement node's guid, which differs from the input) and kind (echoes the input).");
+		Info.InputSchema = MakeSchema(
+			{
+				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the target SMBlueprint.")) },
+				{ Args::NodeGuid, MakePropertyObject(TEXT("string"), TEXT("Guid of the node to replace.")) },
+				{ Args::Kind, MakePropertyObject(TEXT("string"), TEXT("Target kind: 'state', 'conduit', 'state_machine' (inline nested), 'reference' (empty state-machine reference), or 'parent' (state-machine parent call).")) }
+			},
+			{ Args::AssetPath, Args::NodeGuid, Args::Kind });
+		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::ReplaceNode);
+		RegisterOperation(MoveTemp(Info));
+	}
+
+	{
+		FSMAssistOperationInfo Info;
+		Info.Name = Ops::ConvertToReference;
+		Info.Description = TEXT("Convert an inline nested state machine node into its own reusable state-machine-reference asset, the headless equivalent of the editor's \"Convert to State Machine Reference\" (no modal dialog). A new SMBlueprint is minted to hold the extracted graph, the node is rebound as a reference to it, and the original inline graph is emptied. The node keeps its guid. The node must be an inline nested state machine (USMGraphNode_StateMachineStateNode that is not already a reference and not a parent node). Returns node_guid (unchanged), reference_asset_path (the minted asset's object path), and name (the minted asset's short name).");
+		Info.InputSchema = MakeSchema(
+			{
+				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the source SMBlueprint that owns the inline nested state machine.")) },
+				{ Args::NodeGuid, MakePropertyObject(TEXT("string"), TEXT("Guid of the inline nested state machine node to convert.")) },
+				{ Args::Name, MakePropertyObject(TEXT("string"), TEXT("Optional. Name for the minted reference asset. Empty derives the name from the node's state name with the project's reference-name prefix.")) },
+				{ Args::Path, MakePropertyObject(TEXT("string"), TEXT("Optional. Package folder for the minted asset. Empty places it alongside the source Blueprint.")) },
+				{ Args::ParentClass, MakePropertyObject(TEXT("string"), TEXT("Optional. Class path for a USMInstance subclass to parent the minted reference Blueprint. Empty uses the factory default.")) }
+			},
+			{ Args::AssetPath, Args::NodeGuid });
+		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::ConvertToReference);
+		RegisterOperation(MoveTemp(Info));
+	}
+
 	RegisterGenericFallbackOperations();
 }
 

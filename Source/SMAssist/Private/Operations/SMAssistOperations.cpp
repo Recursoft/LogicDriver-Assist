@@ -5576,3 +5576,367 @@ FSMAssistOperationResult LD::Assist::DisconnectNodeVariableOutput(const TSharedR
 	Payload->SetBoolField(Args::Applied, bBroke);
 	return FSMAssistOperationResult::MakeSuccess(Payload);
 }
+
+FSMAssistOperationResult LD::Assist::CollapseToStateMachine(const TSharedRef<FJsonObject>& InArgs)
+{
+	FString AssetPath;
+	if (!InArgs->TryGetStringField(Args::AssetPath, AssetPath) || AssetPath.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'asset_path'."));
+	}
+
+	const TArray<TSharedPtr<FJsonValue>>* NodeGuidValues = nullptr;
+	if (!InArgs->TryGetArrayField(Args::NodeGuids, NodeGuidValues) || !NodeGuidValues || NodeGuidValues->Num() == 0)
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'node_guids' (non-empty array of node guids)."));
+	}
+
+	FString LoadError;
+	USMBlueprint* Blueprint = LD::Assist::Utils::LoadStateMachineBlueprint(AssetPath, LoadError);
+	if (!Blueprint)
+	{
+		return FSMAssistOperationResult::MakeError(LoadError);
+	}
+
+	ISMGraphGeneration::FCollapseNodesToStateMachineArgs CollapseArgs;
+	CollapseArgs.Nodes.Reserve(NodeGuidValues->Num());
+	for (const TSharedPtr<FJsonValue>& Value : *NodeGuidValues)
+	{
+		FString NodeGuidStr;
+		if (!Value.IsValid() || !Value->TryGetString(NodeGuidStr) || NodeGuidStr.IsEmpty())
+		{
+			return FSMAssistOperationResult::MakeError(TEXT("'node_guids' must contain non-empty guid strings."));
+		}
+
+		FGuid NodeGuid;
+		if (!FGuid::Parse(NodeGuidStr, NodeGuid))
+		{
+			return FSMAssistOperationResult::MakeError(
+				FString::Printf(TEXT("Invalid node guid '%s' in 'node_guids'."), *NodeGuidStr));
+		}
+
+		USMGraphNode_Base* Node = LD::Assist::Utils::FindNodeByGuid(Blueprint, NodeGuid);
+		if (!Node)
+		{
+			return FSMAssistOperationResult::MakeError(
+				FString::Printf(TEXT("Could not find node with guid '%s'."), *NodeGuidStr));
+		}
+		CollapseArgs.Nodes.Add(Node);
+	}
+
+	FString GraphGenError;
+	ISMGraphGeneration* GraphGen = LD::Assist::Private::GetGraphGeneration(GraphGenError);
+	if (!GraphGen)
+	{
+		return FSMAssistOperationResult::MakeError(GraphGenError);
+	}
+
+	FString OpError;
+	USMGraphNode_StateMachineStateNode* Container = GraphGen->CollapseNodesToStateMachine(CollapseArgs, &OpError);
+	if (!Container)
+	{
+		return FSMAssistOperationResult::MakeError(OpError.IsEmpty() ? TEXT("CollapseNodesToStateMachine failed.") : OpError);
+	}
+
+	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
+	Payload->SetStringField(Args::StateGuid, Container->NodeGuid.ToString());
+	Payload->SetStringField(Args::StateName, Container->GetStateName());
+	return FSMAssistOperationResult::MakeSuccess(Payload);
+}
+
+FSMAssistOperationResult LD::Assist::MergeStates(const TSharedRef<FJsonObject>& InArgs)
+{
+	FString AssetPath;
+	if (!InArgs->TryGetStringField(Args::AssetPath, AssetPath) || AssetPath.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'asset_path'."));
+	}
+
+	FString DestinationGuidStr;
+	if (!InArgs->TryGetStringField(Args::DestinationStateGuid, DestinationGuidStr) || DestinationGuidStr.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'destination_state_guid'."));
+	}
+
+	FGuid DestinationGuid;
+	if (!FGuid::Parse(DestinationGuidStr, DestinationGuid))
+	{
+		return FSMAssistOperationResult::MakeError(
+			FString::Printf(TEXT("Invalid 'destination_state_guid' '%s'."), *DestinationGuidStr));
+	}
+
+	const TArray<TSharedPtr<FJsonValue>>* SourceGuidValues = nullptr;
+	if (!InArgs->TryGetArrayField(Args::SourceStateGuids, SourceGuidValues) || !SourceGuidValues || SourceGuidValues->Num() == 0)
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'source_state_guids' (non-empty array of state guids)."));
+	}
+
+	FString LoadError;
+	USMBlueprint* Blueprint = LD::Assist::Utils::LoadStateMachineBlueprint(AssetPath, LoadError);
+	if (!Blueprint)
+	{
+		return FSMAssistOperationResult::MakeError(LoadError);
+	}
+
+	USMGraphNode_Base* DestinationNode = LD::Assist::Utils::FindNodeByGuid(Blueprint, DestinationGuid);
+	if (!DestinationNode)
+	{
+		return FSMAssistOperationResult::MakeError(
+			FString::Printf(TEXT("Could not find destination node with guid '%s'."), *DestinationGuidStr));
+	}
+
+	USMGraphNode_StateNode* DestinationState = Cast<USMGraphNode_StateNode>(DestinationNode);
+	if (!DestinationState)
+	{
+		return FSMAssistOperationResult::MakeError(
+			FString::Printf(TEXT("Destination node '%s' is not a plain state. merge_states only targets USMGraphNode_StateNode states."), *DestinationGuidStr));
+	}
+
+	ISMGraphGeneration::FMergeStatesArgs MergeArgs;
+	MergeArgs.DestinationState = DestinationState;
+	MergeArgs.SourceStates.Reserve(SourceGuidValues->Num());
+	for (const TSharedPtr<FJsonValue>& Value : *SourceGuidValues)
+	{
+		FString SourceGuidStr;
+		if (!Value.IsValid() || !Value->TryGetString(SourceGuidStr) || SourceGuidStr.IsEmpty())
+		{
+			return FSMAssistOperationResult::MakeError(TEXT("'source_state_guids' must contain non-empty guid strings."));
+		}
+
+		FGuid SourceGuid;
+		if (!FGuid::Parse(SourceGuidStr, SourceGuid))
+		{
+			return FSMAssistOperationResult::MakeError(
+				FString::Printf(TEXT("Invalid source guid '%s' in 'source_state_guids'."), *SourceGuidStr));
+		}
+
+		USMGraphNode_Base* SourceNode = LD::Assist::Utils::FindNodeByGuid(Blueprint, SourceGuid);
+		if (!SourceNode)
+		{
+			return FSMAssistOperationResult::MakeError(
+				FString::Printf(TEXT("Could not find source node with guid '%s'."), *SourceGuidStr));
+		}
+
+		USMGraphNode_StateNode* SourceState = Cast<USMGraphNode_StateNode>(SourceNode);
+		if (!SourceState)
+		{
+			return FSMAssistOperationResult::MakeError(
+				FString::Printf(TEXT("Source node '%s' is not a plain state. merge_states only merges USMGraphNode_StateNode states."), *SourceGuidStr));
+		}
+		MergeArgs.SourceStates.Add(SourceState);
+	}
+
+	InArgs->TryGetBoolField(Args::DestroyStates, MergeArgs.bDestroyStates);
+
+	FString GraphGenError;
+	ISMGraphGeneration* GraphGen = LD::Assist::Private::GetGraphGeneration(GraphGenError);
+	if (!GraphGen)
+	{
+		return FSMAssistOperationResult::MakeError(GraphGenError);
+	}
+
+	ISMGraphGeneration::FMergeStatesResult MergeResult;
+	FString OpError;
+	if (!GraphGen->MergeStates(MergeArgs, MergeResult, &OpError))
+	{
+		return FSMAssistOperationResult::MakeError(OpError.IsEmpty() ? TEXT("MergeStates failed.") : OpError);
+	}
+
+	TArray<TSharedPtr<FJsonValue>> MergedGuids;
+	MergedGuids.Reserve(MergeResult.MergedStackTemplateGuids.Num());
+	for (const FGuid& MergedGuid : MergeResult.MergedStackTemplateGuids)
+	{
+		MergedGuids.Add(MakeShared<FJsonValueString>(MergedGuid.ToString()));
+	}
+
+	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
+	Payload->SetStringField(Args::DestinationStateGuid, DestinationState->NodeGuid.ToString());
+	Payload->SetArrayField(Args::MergedStackTemplateGuids, MergedGuids);
+	Payload->SetBoolField(Args::DestroyStates, MergeArgs.bDestroyStates);
+	return FSMAssistOperationResult::MakeSuccess(Payload);
+}
+
+namespace LD::Assist::Private
+{
+	static bool ParseReplaceNodeKind(const FString& InKind, ISMGraphGeneration::EReplaceNodeKind& OutKind)
+	{
+		if (InKind == TEXT("state"))
+		{
+			OutKind = ISMGraphGeneration::EReplaceNodeKind::State;
+			return true;
+		}
+		if (InKind == TEXT("conduit"))
+		{
+			OutKind = ISMGraphGeneration::EReplaceNodeKind::Conduit;
+			return true;
+		}
+		if (InKind == TEXT("state_machine"))
+		{
+			OutKind = ISMGraphGeneration::EReplaceNodeKind::StateMachine;
+			return true;
+		}
+		if (InKind == TEXT("reference"))
+		{
+			OutKind = ISMGraphGeneration::EReplaceNodeKind::Reference;
+			return true;
+		}
+		if (InKind == TEXT("parent"))
+		{
+			OutKind = ISMGraphGeneration::EReplaceNodeKind::Parent;
+			return true;
+		}
+		return false;
+	}
+}
+
+FSMAssistOperationResult LD::Assist::ReplaceNode(const TSharedRef<FJsonObject>& InArgs)
+{
+	FString AssetPath;
+	if (!InArgs->TryGetStringField(Args::AssetPath, AssetPath) || AssetPath.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'asset_path'."));
+	}
+
+	FString NodeGuidStr;
+	if (!InArgs->TryGetStringField(Args::NodeGuid, NodeGuidStr) || NodeGuidStr.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'node_guid'."));
+	}
+
+	FGuid NodeGuid;
+	if (!FGuid::Parse(NodeGuidStr, NodeGuid))
+	{
+		return FSMAssistOperationResult::MakeError(
+			FString::Printf(TEXT("Invalid 'node_guid' '%s'."), *NodeGuidStr));
+	}
+
+	FString KindStr;
+	if (!InArgs->TryGetStringField(Args::Kind, KindStr) || KindStr.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'kind' (one of: state, conduit, state_machine, reference, parent)."));
+	}
+
+	ISMGraphGeneration::EReplaceNodeKind TargetKind = ISMGraphGeneration::EReplaceNodeKind::State;
+	if (!LD::Assist::Private::ParseReplaceNodeKind(KindStr, TargetKind))
+	{
+		return FSMAssistOperationResult::MakeError(
+			FString::Printf(TEXT("Unknown 'kind' '%s'. Expected one of: state, conduit, state_machine, reference, parent."), *KindStr));
+	}
+
+	FString LoadError;
+	USMBlueprint* Blueprint = LD::Assist::Utils::LoadStateMachineBlueprint(AssetPath, LoadError);
+	if (!Blueprint)
+	{
+		return FSMAssistOperationResult::MakeError(LoadError);
+	}
+
+	USMGraphNode_Base* Node = LD::Assist::Utils::FindNodeByGuid(Blueprint, NodeGuid);
+	if (!Node)
+	{
+		return FSMAssistOperationResult::MakeError(
+			FString::Printf(TEXT("Could not find node with guid '%s'."), *NodeGuidStr));
+	}
+
+	FString GraphGenError;
+	ISMGraphGeneration* GraphGen = LD::Assist::Private::GetGraphGeneration(GraphGenError);
+	if (!GraphGen)
+	{
+		return FSMAssistOperationResult::MakeError(GraphGenError);
+	}
+
+	ISMGraphGeneration::FReplaceNodeArgs ReplaceArgs;
+	ReplaceArgs.Node = Node;
+	ReplaceArgs.TargetKind = TargetKind;
+
+	FString OpError;
+	USMGraphNode_Base* NewNode = GraphGen->ReplaceNode(ReplaceArgs, &OpError);
+	if (!NewNode)
+	{
+		return FSMAssistOperationResult::MakeError(OpError.IsEmpty() ? TEXT("ReplaceNode failed.") : OpError);
+	}
+
+	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
+	Payload->SetStringField(Args::NodeGuid, NewNode->NodeGuid.ToString());
+	Payload->SetStringField(Args::Kind, KindStr);
+	return FSMAssistOperationResult::MakeSuccess(Payload);
+}
+
+FSMAssistOperationResult LD::Assist::ConvertToReference(const TSharedRef<FJsonObject>& InArgs)
+{
+	FString AssetPath;
+	if (!InArgs->TryGetStringField(Args::AssetPath, AssetPath) || AssetPath.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'asset_path'."));
+	}
+
+	FString NodeGuidStr;
+	if (!InArgs->TryGetStringField(Args::NodeGuid, NodeGuidStr) || NodeGuidStr.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'node_guid'."));
+	}
+
+	FGuid NodeGuid;
+	if (!FGuid::Parse(NodeGuidStr, NodeGuid))
+	{
+		return FSMAssistOperationResult::MakeError(
+			FString::Printf(TEXT("Invalid 'node_guid' '%s'."), *NodeGuidStr));
+	}
+
+	FString LoadError;
+	USMBlueprint* Blueprint = LD::Assist::Utils::LoadStateMachineBlueprint(AssetPath, LoadError);
+	if (!Blueprint)
+	{
+		return FSMAssistOperationResult::MakeError(LoadError);
+	}
+
+	USMGraphNode_Base* Node = LD::Assist::Utils::FindNodeByGuid(Blueprint, NodeGuid);
+	if (!Node)
+	{
+		return FSMAssistOperationResult::MakeError(
+			FString::Printf(TEXT("Could not find node with guid '%s'."), *NodeGuidStr));
+	}
+
+	USMGraphNode_StateMachineStateNode* StateMachineNode = Cast<USMGraphNode_StateMachineStateNode>(Node);
+	if (!StateMachineNode)
+	{
+		return FSMAssistOperationResult::MakeError(
+			FString::Printf(TEXT("Node '%s' is not a state-machine node. convert_to_reference only operates on inline nested state machines (USMGraphNode_StateMachineStateNode)."), *NodeGuidStr));
+	}
+
+	ISMGraphGeneration::FConvertStateMachineToReferenceArgs ConvertArgs;
+	ConvertArgs.StateMachineNode = StateMachineNode;
+	InArgs->TryGetStringField(Args::Name, ConvertArgs.AssetName);
+	InArgs->TryGetStringField(Args::Path, ConvertArgs.AssetPath);
+
+	FString ParentClassPath;
+	if (InArgs->TryGetStringField(Args::ParentClass, ParentClassPath) && !ParentClassPath.IsEmpty())
+	{
+		UClass* ParentClass = LoadClass<USMInstance>(nullptr, *ParentClassPath);
+		if (!ParentClass)
+		{
+			return FSMAssistOperationResult::MakeError(
+				FString::Printf(TEXT("Could not load 'parent_class' '%s'."), *ParentClassPath));
+		}
+		ConvertArgs.ParentClass = ParentClass;
+	}
+
+	FString GraphGenError;
+	ISMGraphGeneration* GraphGen = LD::Assist::Private::GetGraphGeneration(GraphGenError);
+	if (!GraphGen)
+	{
+		return FSMAssistOperationResult::MakeError(GraphGenError);
+	}
+
+	FString OpError;
+	USMBlueprint* Reference = GraphGen->ConvertStateMachineToReference(ConvertArgs, &OpError);
+	if (!Reference)
+	{
+		return FSMAssistOperationResult::MakeError(OpError.IsEmpty() ? TEXT("ConvertStateMachineToReference failed.") : OpError);
+	}
+
+	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
+	Payload->SetStringField(Args::NodeGuid, StateMachineNode->NodeGuid.ToString());
+	Payload->SetStringField(Args::ReferenceAssetPath, Reference->GetPathName());
+	Payload->SetStringField(Args::Name, Reference->GetName());
+	return FSMAssistOperationResult::MakeSuccess(Payload);
+}

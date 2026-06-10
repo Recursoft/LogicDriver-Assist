@@ -93,4 +93,12 @@ namespace LD::Assist
 	FSMAssistOperationResult SetConduitCondition(const TSharedRef<FJsonObject>& InArgs);
 
 	FSMAssistOperationResult SpawnActorContextComponent(const TSharedRef<FJsonObject>& InArgs);
+
+	FSMAssistOperationResult CollapseToStateMachine(const TSharedRef<FJsonObject>& InArgs);
+
+	FSMAssistOperationResult MergeStates(const TSharedRef<FJsonObject>& InArgs);
+
+	FSMAssistOperationResult ReplaceNode(const TSharedRef<FJsonObject>& InArgs);
+
+	FSMAssistOperationResult ConvertToReference(const TSharedRef<FJsonObject>& InArgs);
 }

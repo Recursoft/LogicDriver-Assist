@@ -129,6 +129,156 @@ BEGIN_DEFINE_SPEC(FAssistOperationsSpec, "LogicDriver.Assist",
 		return StateGuid;
 	}
 
+	FString AddTransitionBetween(const FString& InAssetPath, const FString& InFromGuid, const FString& InToGuid)
+	{
+		USMAssistSubsystem* Subsystem = GetSubsystem();
+		if (!Subsystem)
+		{
+			return FString();
+		}
+
+		const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+		Args->SetStringField(TEXT("asset_path"), InAssetPath);
+		Args->SetStringField(TEXT("from_state_guid"), InFromGuid);
+		Args->SetStringField(TEXT("to_state_guid"), InToGuid);
+
+		const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+			FName(TEXT("sm.add_transition")), Args);
+		if (!Result.bSuccess || !Result.Payload.IsValid())
+		{
+			return FString();
+		}
+
+		FString TransitionGuid;
+		Result.Payload->TryGetStringField(TEXT("transition_guid"), TransitionGuid);
+		return TransitionGuid;
+	}
+
+	TArray<FString> GetRootStateGuids(const FString& InAssetPath)
+	{
+		TArray<FString> Guids;
+		USMAssistSubsystem* Subsystem = GetSubsystem();
+		if (!Subsystem)
+		{
+			return Guids;
+		}
+
+		const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+		Args->SetStringField(TEXT("asset_path"), InAssetPath);
+		const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+			FName(TEXT("sm.get_asset")), Args);
+		if (!Result.bSuccess || !Result.Payload.IsValid())
+		{
+			return Guids;
+		}
+
+		const TArray<TSharedPtr<FJsonValue>>* States = nullptr;
+		if (Result.Payload->TryGetArrayField(TEXT("states"), States) && States)
+		{
+			for (const TSharedPtr<FJsonValue>& Value : *States)
+			{
+				const TSharedPtr<FJsonObject>* Entry = nullptr;
+				if (Value->TryGetObject(Entry) && Entry->IsValid())
+				{
+					FString Guid;
+					if ((*Entry)->TryGetStringField(TEXT("state_guid"), Guid))
+					{
+						Guids.Add(Guid);
+					}
+				}
+			}
+		}
+		return Guids;
+	}
+
+	FString GetRootStateKind(const FString& InAssetPath, const FString& InStateGuid)
+	{
+		USMAssistSubsystem* Subsystem = GetSubsystem();
+		if (!Subsystem)
+		{
+			return FString();
+		}
+
+		const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+		Args->SetStringField(TEXT("asset_path"), InAssetPath);
+		const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+			FName(TEXT("sm.get_asset")), Args);
+		if (!Result.bSuccess || !Result.Payload.IsValid())
+		{
+			return FString();
+		}
+
+		const TArray<TSharedPtr<FJsonValue>>* States = nullptr;
+		if (Result.Payload->TryGetArrayField(TEXT("states"), States) && States)
+		{
+			for (const TSharedPtr<FJsonValue>& Value : *States)
+			{
+				const TSharedPtr<FJsonObject>* Entry = nullptr;
+				if (Value->TryGetObject(Entry) && Entry->IsValid())
+				{
+					FString Guid;
+					if ((*Entry)->TryGetStringField(TEXT("state_guid"), Guid) && Guid == InStateGuid)
+					{
+						FString Kind;
+						(*Entry)->TryGetStringField(TEXT("kind"), Kind);
+						return Kind;
+					}
+				}
+			}
+		}
+		return FString();
+	}
+
+	FString AddConduitToBlueprint(const FString& InAssetPath, const FString& InConduitName)
+	{
+		USMAssistSubsystem* Subsystem = GetSubsystem();
+		if (!Subsystem)
+		{
+			return FString();
+		}
+
+		const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+		Args->SetStringField(TEXT("asset_path"), InAssetPath);
+		Args->SetStringField(TEXT("state_name"), InConduitName);
+
+		const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+			FName(TEXT("sm.add_conduit")), Args);
+		if (!Result.bSuccess || !Result.Payload.IsValid())
+		{
+			return FString();
+		}
+
+		FString ConduitGuid;
+		Result.Payload->TryGetStringField(TEXT("state_guid"), ConduitGuid);
+		return ConduitGuid;
+	}
+
+	FString AddInlineStateMachine(const FString& InAssetPath, const FString& InStateName)
+	{
+		USMAssistSubsystem* Subsystem = GetSubsystem();
+		if (!Subsystem)
+		{
+			return FString();
+		}
+
+		// sm.add_reference with no reference target mints an inline nested state machine node
+		// (a USMGraphNode_StateMachineStateNode that is not yet a reference), the convertible input.
+		const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+		Args->SetStringField(TEXT("asset_path"), InAssetPath);
+		Args->SetStringField(TEXT("state_name"), InStateName);
+
+		const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+			FName(TEXT("sm.add_reference")), Args);
+		if (!Result.bSuccess || !Result.Payload.IsValid())
+		{
+			return FString();
+		}
+
+		FString StateGuid;
+		Result.Payload->TryGetStringField(TEXT("state_guid"), StateGuid);
+		return StateGuid;
+	}
+
 END_DEFINE_SPEC(FAssistOperationsSpec)
 
 void FAssistOperationsSpec::Define()
@@ -3916,6 +4066,697 @@ void FAssistOperationsSpec::Define()
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error mentions graph node exposure",
 				Result.ErrorMessage.Contains(TEXT("cannot be exposed on the graph node")));
+		});
+	});
+
+	Describe("sm.collapse_to_state_machine", [this]()
+	{
+		It("Collapses a set of states into a nested state machine and returns the container", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString AGuid = AddStateToBlueprint(AssetPath, TEXT("A"));
+			const FString BGuid = AddStateToBlueprint(AssetPath, TEXT("B"));
+			const FString CGuid = AddStateToBlueprint(AssetPath, TEXT("C"));
+			if (!TestFalse("A guid populated", AGuid.IsEmpty())
+				|| !TestFalse("B guid populated", BGuid.IsEmpty())
+				|| !TestFalse("C guid populated", CGuid.IsEmpty()))
+			{
+				return;
+			}
+			TestFalse("A->B transition added", AddTransitionBetween(AssetPath, AGuid, BGuid).IsEmpty());
+			TestFalse("B->C transition added", AddTransitionBetween(AssetPath, BGuid, CGuid).IsEmpty());
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			TArray<TSharedPtr<FJsonValue>> NodeGuids;
+			NodeGuids.Add(MakeShared<FJsonValueString>(BGuid));
+			NodeGuids.Add(MakeShared<FJsonValueString>(CGuid));
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetArrayField(TEXT("node_guids"), NodeGuids);
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.collapse_to_state_machine")), Args);
+
+			TestTrue("Result is success", Result.bSuccess);
+			if (!TestTrue("Payload populated", Result.Payload.IsValid()))
+			{
+				return;
+			}
+
+			FString ContainerGuid;
+			TestTrue("Payload has 'state_guid'",
+				Result.Payload->TryGetStringField(TEXT("state_guid"), ContainerGuid));
+			TestFalse("Container guid non-empty", ContainerGuid.IsEmpty());
+
+			const TArray<FString> RootGuids = GetRootStateGuids(AssetPath);
+			TestTrue("Container is in the root graph", RootGuids.Contains(ContainerGuid));
+			TestTrue("Outer state A stayed in the root graph", RootGuids.Contains(AGuid));
+			TestFalse("Collapsed state B moved inside the container", RootGuids.Contains(BGuid));
+			TestFalse("Collapsed state C moved inside the container", RootGuids.Contains(CGuid));
+			TestEqual("Container kind is a nested state machine",
+				GetRootStateKind(AssetPath, ContainerGuid), FString(TEXT("state_machine_state")));
+		});
+
+		It("Fails when 'node_guids' is missing", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.collapse_to_state_machine")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+		});
+
+		It("Fails when a node guid cannot be found", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			TArray<TSharedPtr<FJsonValue>> NodeGuids;
+			NodeGuids.Add(MakeShared<FJsonValueString>(FGuid::NewGuid().ToString()));
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetArrayField(TEXT("node_guids"), NodeGuids);
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.collapse_to_state_machine")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+		});
+
+		It("Fails when 'node_guids' is empty", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const TArray<TSharedPtr<FJsonValue>> Empty;
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetArrayField(TEXT("node_guids"), Empty);
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.collapse_to_state_machine")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+		});
+	});
+
+	Describe("sm.merge_states", [this]()
+	{
+		It("Copies a source state's template into the destination stack and leaves the source in place", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString DestGuid = AddStateToBlueprint(AssetPath, TEXT("Dest"));
+			const FString SrcGuid = AddStateToBlueprint(AssetPath, TEXT("Src"),
+				USMAssistArrayStateInstance::StaticClass());
+			if (!TestFalse("Dest guid populated", DestGuid.IsEmpty())
+				|| !TestFalse("Src guid populated", SrcGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			TArray<TSharedPtr<FJsonValue>> SourceGuids;
+			SourceGuids.Add(MakeShared<FJsonValueString>(SrcGuid));
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("destination_state_guid"), DestGuid);
+			Args->SetArrayField(TEXT("source_state_guids"), SourceGuids);
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.merge_states")), Args);
+
+			TestTrue("Result is success", Result.bSuccess);
+			if (!TestTrue("Payload populated", Result.Payload.IsValid()))
+			{
+				return;
+			}
+
+			const TArray<TSharedPtr<FJsonValue>>* Merged = nullptr;
+			TestTrue("Payload has 'merged_stack_template_guids'",
+				Result.Payload->TryGetArrayField(TEXT("merged_stack_template_guids"), Merged));
+			if (Merged)
+			{
+				TestEqual("One template merged", Merged->Num(), 1);
+			}
+
+			bool bDestroyEcho = true;
+			TestTrue("Payload echoes 'b_destroy_states'",
+				Result.Payload->TryGetBoolField(TEXT("b_destroy_states"), bDestroyEcho));
+			TestFalse("Copy merge did not destroy sources", bDestroyEcho);
+
+			const TArray<FString> RootGuids = GetRootStateGuids(AssetPath);
+			TestTrue("Copy left the destination in place", RootGuids.Contains(DestGuid));
+			TestTrue("Copy left the source in place", RootGuids.Contains(SrcGuid));
+		});
+
+		It("Destroys the source on a cut merge", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString DestGuid = AddStateToBlueprint(AssetPath, TEXT("Dest"));
+			const FString SrcGuid = AddStateToBlueprint(AssetPath, TEXT("Src"),
+				USMAssistArrayStateInstance::StaticClass());
+			if (!TestFalse("Dest guid populated", DestGuid.IsEmpty())
+				|| !TestFalse("Src guid populated", SrcGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			TArray<TSharedPtr<FJsonValue>> SourceGuids;
+			SourceGuids.Add(MakeShared<FJsonValueString>(SrcGuid));
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("destination_state_guid"), DestGuid);
+			Args->SetArrayField(TEXT("source_state_guids"), SourceGuids);
+			Args->SetBoolField(TEXT("b_destroy_states"), true);
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.merge_states")), Args);
+			TestTrue("Result is success", Result.bSuccess);
+
+			const TArray<FString> RootGuids = GetRootStateGuids(AssetPath);
+			TestTrue("Cut left the destination in place", RootGuids.Contains(DestGuid));
+			TestFalse("Cut destroyed the source state", RootGuids.Contains(SrcGuid));
+		});
+
+		It("Fails when 'destination_state_guid' is missing", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString SrcGuid = AddStateToBlueprint(AssetPath, TEXT("Src"));
+			if (!TestFalse("Src guid populated", SrcGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			TArray<TSharedPtr<FJsonValue>> SourceGuids;
+			SourceGuids.Add(MakeShared<FJsonValueString>(SrcGuid));
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetArrayField(TEXT("source_state_guids"), SourceGuids);
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.merge_states")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+		});
+
+		It("Fails when 'source_state_guids' is missing", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString DestGuid = AddStateToBlueprint(AssetPath, TEXT("Dest"));
+			if (!TestFalse("Dest guid populated", DestGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("destination_state_guid"), DestGuid);
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.merge_states")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+		});
+
+		It("Fails when the destination is not a plain state", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString ConduitGuid = AddConduitToBlueprint(AssetPath, TEXT("Hub"));
+			const FString SrcGuid = AddStateToBlueprint(AssetPath, TEXT("Src"),
+				USMAssistArrayStateInstance::StaticClass());
+			if (!TestFalse("Conduit guid populated", ConduitGuid.IsEmpty())
+				|| !TestFalse("Src guid populated", SrcGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			TArray<TSharedPtr<FJsonValue>> SourceGuids;
+			SourceGuids.Add(MakeShared<FJsonValueString>(SrcGuid));
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("destination_state_guid"), ConduitGuid);
+			Args->SetArrayField(TEXT("source_state_guids"), SourceGuids);
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.merge_states")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+		});
+
+		It("Fails when 'source_state_guids' is empty", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString DestGuid = AddStateToBlueprint(AssetPath, TEXT("Dest"));
+			if (!TestFalse("Dest guid populated", DestGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const TArray<TSharedPtr<FJsonValue>> Empty;
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("destination_state_guid"), DestGuid);
+			Args->SetArrayField(TEXT("source_state_guids"), Empty);
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.merge_states")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+		});
+
+		It("Fails when a source state is not a plain state", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString DestGuid = AddStateToBlueprint(AssetPath, TEXT("Dest"));
+			const FString ConduitGuid = AddConduitToBlueprint(AssetPath, TEXT("SrcHub"));
+			if (!TestFalse("Dest guid populated", DestGuid.IsEmpty())
+				|| !TestFalse("Conduit guid populated", ConduitGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			TArray<TSharedPtr<FJsonValue>> SourceGuids;
+			SourceGuids.Add(MakeShared<FJsonValueString>(ConduitGuid));
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("destination_state_guid"), DestGuid);
+			Args->SetArrayField(TEXT("source_state_guids"), SourceGuids);
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.merge_states")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+		});
+	});
+
+	Describe("sm.replace_node", [this]()
+	{
+		It("Replaces a state with a conduit", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString StateGuid = AddStateToBlueprint(AssetPath, TEXT("ToReplace"));
+			if (!TestFalse("State guid populated", StateGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("node_guid"), StateGuid);
+			Args->SetStringField(TEXT("kind"), TEXT("conduit"));
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.replace_node")), Args);
+
+			TestTrue("Result is success", Result.bSuccess);
+			if (!TestTrue("Payload populated", Result.Payload.IsValid()))
+			{
+				return;
+			}
+
+			FString NewGuid;
+			TestTrue("Payload has 'node_guid'",
+				Result.Payload->TryGetStringField(TEXT("node_guid"), NewGuid));
+			TestFalse("New node guid non-empty", NewGuid.IsEmpty());
+
+			const TArray<FString> RootGuids = GetRootStateGuids(AssetPath);
+			TestTrue("New node is in the root graph", RootGuids.Contains(NewGuid));
+			TestEqual("New node is a conduit",
+				GetRootStateKind(AssetPath, NewGuid), FString(TEXT("conduit")));
+		});
+
+		It("Replaces a state with an inline state machine", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString StateGuid = AddStateToBlueprint(AssetPath, TEXT("ToReplace"));
+			if (!TestFalse("State guid populated", StateGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("node_guid"), StateGuid);
+			Args->SetStringField(TEXT("kind"), TEXT("state_machine"));
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.replace_node")), Args);
+
+			TestTrue("Result is success", Result.bSuccess);
+			if (!TestTrue("Payload populated", Result.Payload.IsValid()))
+			{
+				return;
+			}
+
+			FString NewGuid;
+			Result.Payload->TryGetStringField(TEXT("node_guid"), NewGuid);
+			TestEqual("New node is a nested state machine",
+				GetRootStateKind(AssetPath, NewGuid), FString(TEXT("state_machine_state")));
+		});
+
+		It("Fails when 'kind' is missing", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString StateGuid = AddStateToBlueprint(AssetPath, TEXT("ToReplace"));
+			if (!TestFalse("State guid populated", StateGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("node_guid"), StateGuid);
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.replace_node")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+		});
+
+		It("Fails on an unknown 'kind'", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString StateGuid = AddStateToBlueprint(AssetPath, TEXT("ToReplace"));
+			if (!TestFalse("State guid populated", StateGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("node_guid"), StateGuid);
+			Args->SetStringField(TEXT("kind"), TEXT("banana"));
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.replace_node")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+			TestTrue("Error names the bad kind", Result.ErrorMessage.Contains(TEXT("banana")));
+		});
+
+		It("Fails when the node guid cannot be found", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("node_guid"), FGuid::NewGuid().ToString());
+			Args->SetStringField(TEXT("kind"), TEXT("conduit"));
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.replace_node")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+		});
+
+		It("Fails when 'node_guid' is missing", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("kind"), TEXT("conduit"));
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.replace_node")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+		});
+	});
+
+	Describe("sm.convert_to_reference", [this]()
+	{
+		It("Converts an inline nested state machine into a reference asset and preserves the node guid", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString InlineGuid = AddInlineStateMachine(AssetPath, TEXT("Inline"));
+			if (!TestFalse("Inline state machine guid populated", InlineGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("node_guid"), InlineGuid);
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.convert_to_reference")), Args);
+
+			TestTrue("Result is success", Result.bSuccess);
+			if (!TestTrue("Payload populated", Result.Payload.IsValid()))
+			{
+				return;
+			}
+
+			FString ReferencePath;
+			TestTrue("Payload has 'reference_asset_path'",
+				Result.Payload->TryGetStringField(TEXT("reference_asset_path"), ReferencePath));
+			TestFalse("Minted reference path non-empty", ReferencePath.IsEmpty());
+
+			FString EchoedGuid;
+			TestTrue("Payload echoes 'node_guid'",
+				Result.Payload->TryGetStringField(TEXT("node_guid"), EchoedGuid));
+			TestEqual("Converted node keeps its guid", EchoedGuid, InlineGuid);
+		});
+
+		It("Honors an explicit minted-asset name", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString InlineGuid = AddInlineStateMachine(AssetPath, TEXT("Inline"));
+			if (!TestFalse("Inline state machine guid populated", InlineGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const FString ExplicitName = TEXT("REF_AssistConvert_") + FGuid::NewGuid().ToString();
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("node_guid"), InlineGuid);
+			Args->SetStringField(TEXT("name"), ExplicitName);
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.convert_to_reference")), Args);
+
+			TestTrue("Result is success", Result.bSuccess);
+			if (!TestTrue("Payload populated", Result.Payload.IsValid()))
+			{
+				return;
+			}
+
+			FString MintedName;
+			TestTrue("Payload has 'name'", Result.Payload->TryGetStringField(TEXT("name"), MintedName));
+			TestEqual("Minted asset uses the explicit name", MintedName, ExplicitName);
+		});
+
+		It("Fails when 'node_guid' is missing", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.convert_to_reference")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+		});
+
+		It("Fails when the node is not a state-machine node", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString StateGuid = AddStateToBlueprint(AssetPath, TEXT("PlainState"));
+			if (!TestFalse("State guid populated", StateGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("node_guid"), StateGuid);
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.convert_to_reference")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+		});
+
+		It("Fails when the node guid cannot be found", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("node_guid"), FGuid::NewGuid().ToString());
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.convert_to_reference")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+		});
+
+		It("Fails when 'parent_class' cannot be loaded", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString InlineGuid = AddInlineStateMachine(AssetPath, TEXT("Inline"));
+			if (!TestFalse("Inline state machine guid populated", InlineGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("node_guid"), InlineGuid);
+			Args->SetStringField(TEXT("parent_class"), TEXT("/Script/SMSystem.ThisClassDoesNotExist"));
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.convert_to_reference")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+			TestTrue("Error names parent_class", Result.ErrorMessage.Contains(TEXT("parent_class")));
 		});
 	});
 }
