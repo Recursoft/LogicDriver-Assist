@@ -1,6 +1,6 @@
 # Logic Driver - Assist (`SMAssist`)
 
-Programmatic, headless authoring API for [Logic Driver Pro](https://recursoft.net/logicdriver) state machines. It exposes the editor operations a human performs in the Logic Driver graph editor (create assets, add states/transitions/conduits, set node properties, wire property graphs, lay out graphs, capture screenshots, introspect a running PIE instance) as a registry of named, JSON-in/JSON-out operations that AI assistants and tooling can call.
+Programmatic, headless authoring API for [Logic Driver Pro](https://logicdriver.com) state machines. It exposes the editor operations a human performs in the Logic Driver graph editor (create assets, add states/transitions/conduits, set node properties, wire property graphs, lay out graphs, capture screenshots, introspect a running PIE instance) as a registry of named, JSON-in/JSON-out operations that AI assistants and tooling can call.
 
 The plugin is the substrate that powers MCP-style integrations. It does not talk to any model itself; it registers operations and lets transport bridges (Monolith, the engine ToolsetRegistry) surface them to an MCP client.
 
