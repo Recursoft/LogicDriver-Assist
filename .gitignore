@@ -88,3 +88,9 @@ Documentation/site/*
 Build-Scripts/tasks/*
 Build-Scripts/config/*
 Marketplace/*
+
+# Local authoring/inspection scratch (private authoring aids, kept out of the public repo).
+# Notes/ is append-only slice findings; Patterns/ references private skills/tooling and internal
+# program assets, so it stays local until a sanitized public version is authored deliberately.
+Notes/
+Patterns/
