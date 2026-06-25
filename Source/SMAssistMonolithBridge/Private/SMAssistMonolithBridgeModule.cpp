@@ -14,11 +14,21 @@
 #include "Dom/JsonObject.h"
 #include "Editor.h"
 #include "Misc/CoreDelegates.h"
+#include "Misc/EngineVersionComparison.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSMAssistMonolithBridge, Log, All);
 
 namespace LD::Assist::MonolithBridge::Private
 {
+	static FSimpleMulticastDelegate& GetPostEngineInitDelegate()
+	{
+#if UE_VERSION_OLDER_THAN(5, 8, 0)
+		return FCoreDelegates::OnPostEngineInit;
+#else
+		return FCoreDelegates::GetOnPostEngineInit();
+#endif
+	}
+
 	static FMonolithActionResult ExecuteBridgedOperation(FName InOperationName, const TSharedPtr<FJsonObject>& InParams)
 	{
 		USMAssistSubsystem* Subsystem = GEditor ? GEditor->GetEditorSubsystem<USMAssistSubsystem>() : nullptr;
@@ -47,14 +57,15 @@ void FSMAssistMonolithBridgeModule::StartupModule()
 		return;
 	}
 
-	PostEngineInitHandle = FCoreDelegates::OnPostEngineInit.AddRaw(this, &FSMAssistMonolithBridgeModule::BindToAssist);
+	PostEngineInitHandle = LD::Assist::MonolithBridge::Private::GetPostEngineInitDelegate().AddRaw(
+		this, &FSMAssistMonolithBridgeModule::BindToAssist);
 }
 
 void FSMAssistMonolithBridgeModule::ShutdownModule()
 {
 	if (PostEngineInitHandle.IsValid())
 	{
-		FCoreDelegates::OnPostEngineInit.Remove(PostEngineInitHandle);
+		LD::Assist::MonolithBridge::Private::GetPostEngineInitDelegate().Remove(PostEngineInitHandle);
 		PostEngineInitHandle.Reset();
 	}
 
