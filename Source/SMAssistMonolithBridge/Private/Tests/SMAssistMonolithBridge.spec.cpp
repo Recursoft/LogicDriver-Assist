@@ -2,12 +2,14 @@
 
 #if WITH_MONOLITH
 
+#include "MonolithParamSchema.h"
 #include "MonolithToolRegistry.h"
 #include "Operations/SMAssistOperationInfo.h"
 #include "Operations/SMAssistOperationResult.h"
 #include "SMAssistSubsystem.h"
 
 #include "Dom/JsonObject.h"
+#include "Dom/JsonValue.h"
 #include "Editor.h"
 #include "Misc/AutomationTest.h"
 
@@ -39,6 +41,52 @@ BEGIN_DEFINE_SPEC(FSMAssistMonolithBridgeSpec, "LogicDriver.Assist.MonolithBridg
 		Info.Description = TEXT("Bridge spec fixture.");
 		Info.Handler = FSMAssistOperationHandler::CreateStatic(&FSMAssistMonolithBridgeSpec::EchoHandler);
 		return Info;
+	}
+
+	// SMAssist authors schemas in JSON-Schema form: { "type": "object", "properties": { ... },
+	// "required": [ ... ] }. This fixture mirrors that shape so the bridge's conversion to
+	// Monolith's flat format can be exercised.
+	static FSMAssistOperationInfo MakeInfoWithJsonSchema(FName InName)
+	{
+		const TSharedRef<FJsonObject> AssetPathProp = MakeShared<FJsonObject>();
+		AssetPathProp->SetStringField(TEXT("type"), TEXT("string"));
+		AssetPathProp->SetStringField(TEXT("description"), TEXT("Asset path."));
+
+		const TSharedRef<FJsonObject> StateNameProp = MakeShared<FJsonObject>();
+		StateNameProp->SetStringField(TEXT("type"), TEXT("string"));
+		StateNameProp->SetStringField(TEXT("description"), TEXT("State name."));
+
+		const TSharedRef<FJsonObject> PositionXProp = MakeShared<FJsonObject>();
+		PositionXProp->SetStringField(TEXT("type"), TEXT("number"));
+		PositionXProp->SetStringField(TEXT("description"), TEXT("X position."));
+
+		const TSharedRef<FJsonObject> Properties = MakeShared<FJsonObject>();
+		Properties->SetObjectField(TEXT("asset_path"), AssetPathProp);
+		Properties->SetObjectField(TEXT("state_name"), StateNameProp);
+		Properties->SetObjectField(TEXT("position_x"), PositionXProp);
+
+		const TSharedRef<FJsonObject> Schema = MakeShared<FJsonObject>();
+		Schema->SetStringField(TEXT("type"), TEXT("object"));
+		Schema->SetObjectField(TEXT("properties"), Properties);
+		TArray<TSharedPtr<FJsonValue>> Required;
+		Required.Add(MakeShared<FJsonValueString>(TEXT("asset_path")));
+		Schema->SetArrayField(TEXT("required"), Required);
+
+		FSMAssistOperationInfo Info = MakeInfo(InName);
+		Info.InputSchema = Schema;
+		return Info;
+	}
+
+	static TSharedPtr<FJsonObject> FindActionSchema(const FString& InNamespace, const FString& InAction)
+	{
+		for (const FMonolithActionInfo& Action : FMonolithToolRegistry::Get().GetActions(InNamespace))
+		{
+			if (Action.Action == InAction)
+			{
+				return Action.ParamSchema;
+			}
+		}
+		return nullptr;
 	}
 
 END_DEFINE_SPEC(FSMAssistMonolithBridgeSpec)
@@ -166,6 +214,55 @@ void FSMAssistMonolithBridgeSpec::Define()
 		const TArray<FString> Namespaces = FMonolithToolRegistry::Get().GetNamespaces();
 		TestFalse("No namespace was created",
 			Namespaces.Contains(TEXT("bridgespec_nodot")));
+
+		Subsystem->UnregisterOperation(OpName);
+	});
+
+	It("Translates JSON-Schema input into Monolith's flat param schema", [this]()
+	{
+		USMAssistSubsystem* Subsystem = GetSubsystem();
+		if (!TestNotNull("Assist subsystem available", Subsystem))
+		{
+			return;
+		}
+
+		const FName OpName(TEXT("bridgespec.schema_shape"));
+		Subsystem->RegisterOperation(MakeInfoWithJsonSchema(OpName));
+
+		const TSharedPtr<FJsonObject> Stored = FindActionSchema(TEXT("bridgespec"), TEXT("schema_shape"));
+		if (TestTrue("Bridged action carries a schema", Stored.IsValid()))
+		{
+			// Flat form: real param names are top-level keys; the JSON-Schema wrapper keys are gone.
+			TestTrue("state_name is a top-level schema key", Stored->HasField(TEXT("state_name")));
+			TestTrue("position_x is a top-level schema key", Stored->HasField(TEXT("position_x")));
+			TestFalse("No leftover 'properties' wrapper", Stored->HasField(TEXT("properties")));
+
+			bool bRequired = false;
+			const TSharedPtr<FJsonObject>* AssetPathDef = nullptr;
+			if (TestTrue("asset_path param present", Stored->TryGetObjectField(TEXT("asset_path"), AssetPathDef) && AssetPathDef))
+			{
+				(*AssetPathDef)->TryGetBoolField(TEXT("required"), bRequired);
+				TestTrue("asset_path marked required", bRequired);
+			}
+
+			bool bOptionalRequired = true;
+			const TSharedPtr<FJsonObject>* StateNameDef = nullptr;
+			if (TestTrue("state_name param present", Stored->TryGetObjectField(TEXT("state_name"), StateNameDef) && StateNameDef))
+			{
+				TestTrue("state_name carries a 'required' field",
+					(*StateNameDef)->TryGetBoolField(TEXT("required"), bOptionalRequired));
+				TestFalse("state_name (not in required[]) marked optional", bOptionalRequired);
+			}
+
+			// The reported bug: real params logged as Unknown because validation read the wrapper keys.
+			const TSharedRef<FJsonObject> Params = MakeShared<FJsonObject>();
+			Params->SetStringField(TEXT("asset_path"), TEXT("/Game/Foo.Foo"));
+			Params->SetStringField(TEXT("state_name"), TEXT("Bar"));
+			Params->SetNumberField(TEXT("position_x"), 100.0);
+
+			const TArray<FString> Unknown = FMonolithParamSchema::FindUnknownKeys(Stored, Params);
+			TestEqual("No params reported unknown", Unknown.Num(), 0);
+		}
 
 		Subsystem->UnregisterOperation(OpName);
 	});

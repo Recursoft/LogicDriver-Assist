@@ -101,7 +101,7 @@ BEGIN_DEFINE_SPEC(FAssistOperationsSpec, "LogicDriver.Assist",
 			InParentClass, Package, BPName, BPTYPE_Normal, InBlueprintClass, InGeneratedClass);
 	}
 
-	FString AddStateToBlueprint(const FString& InAssetPath, const FString& InStateName, UClass* InStateClass = nullptr)
+	FString AddStateToBlueprint(const FString& InAssetPath, const FString& InStateName, UClass* InStateClass = nullptr, bool bIsEntry = false)
 	{
 		USMAssistSubsystem* Subsystem = GetSubsystem();
 		if (!Subsystem)
@@ -116,6 +116,10 @@ BEGIN_DEFINE_SPEC(FAssistOperationsSpec, "LogicDriver.Assist",
 		{
 			Args->SetStringField(TEXT("state_class"), InStateClass->GetPathName());
 		}
+		if (bIsEntry)
+		{
+			Args->SetBoolField(TEXT("is_entry"), true);
+		}
 
 		const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
 			FName(TEXT("sm.add_state")), Args);
@@ -127,6 +131,32 @@ BEGIN_DEFINE_SPEC(FAssistOperationsSpec, "LogicDriver.Assist",
 		FString StateGuid;
 		Result.Payload->TryGetStringField(TEXT("state_guid"), StateGuid);
 		return StateGuid;
+	}
+
+	FSMAssistOperationResult CompileAsset(const FString& InAssetPath)
+	{
+		USMAssistSubsystem* Subsystem = GetSubsystem();
+		if (!Subsystem)
+		{
+			return FSMAssistOperationResult::MakeError(TEXT("No subsystem."));
+		}
+
+		const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+		Args->SetStringField(TEXT("asset_path"), InAssetPath);
+		return Subsystem->ExecuteOperation(FName(TEXT("sm.compile")), Args);
+	}
+
+	void CompileExpectingNoErrors(const FString& InAssetPath, const TCHAR* InContext)
+	{
+		const FSMAssistOperationResult Result = CompileAsset(InAssetPath);
+		TestTrue(FString::Printf(TEXT("Compile succeeds with a %s node"), InContext), Result.bSuccess);
+
+		bool bHasErrors = true;
+		if (Result.Payload.IsValid())
+		{
+			Result.Payload->TryGetBoolField(TEXT("has_errors"), bHasErrors);
+		}
+		TestFalse(FString::Printf(TEXT("Compile reports no errors with a %s node"), InContext), bHasErrors);
 	}
 
 	FString AddTransitionBetween(const FString& InAssetPath, const FString& InFromGuid, const FString& InToGuid)
@@ -704,6 +734,111 @@ void FAssistOperationsSpec::Define()
 			TestTrue("Payload has 'state_name'",
 				Result.Payload->TryGetStringField(TEXT("state_name"), StateName));
 			TestEqual("State name matches request", StateName, FString(TEXT("MyFirstState")));
+		});
+	});
+
+	Describe("sm.add_any_state", [this]()
+	{
+		// Regression: Any State has no bound graph, so the default USMStateInstance node class must
+		// not be forwarded to the graph schema action. A regression fires a non-fatal ensure at the
+		// schema-action call site (harness-captured as an error; deduped per call site per session),
+		// AND can leave the node structurally unsound. This test exercises the reported use case end
+		// to end (Any State -> target transition, then compile) so a broken node also surfaces
+		// deterministically through CreateTransitionEdge or the compile gate, independent of the ensure.
+		It("Creates an Any State node, wires an outbound transition, and compiles", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			// Entry-wired so the machine has a valid initial state and compile exercises real work.
+			const FString TargetGuid = AddStateToBlueprint(AssetPath, TEXT("Phase2"), nullptr, /*bIsEntry*/true);
+			if (!TestFalse("Target state created", TargetGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("state_name"), TEXT("AnyHealthThreshold"));
+			Args->SetNumberField(TEXT("position_x"), 200.0);
+			Args->SetNumberField(TEXT("position_y"), -200.0);
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.add_any_state")), Args);
+
+			TestTrue("Result is success", Result.bSuccess);
+			if (!TestTrue("Payload populated", Result.Payload.IsValid()))
+			{
+				return;
+			}
+
+			FString StateGuid;
+			TestTrue("Payload has 'state_guid'",
+				Result.Payload->TryGetStringField(TEXT("state_guid"), StateGuid));
+			TestFalse("State guid is non-empty", StateGuid.IsEmpty());
+
+			TestEqual("Created node reports any_state kind",
+				GetRootStateKind(AssetPath, StateGuid), FString(TEXT("any_state")));
+
+			// The reported scenario: a global "from Any State" transition (e.g. Any State -> Phase2).
+			const FString TransitionGuid = AddTransitionBetween(AssetPath, StateGuid, TargetGuid);
+			TestFalse("Any State outbound transition created", TransitionGuid.IsEmpty());
+
+			CompileExpectingNoErrors(AssetPath, TEXT("Any State"));
+		});
+	});
+
+	Describe("sm.add_link_state", [this]()
+	{
+		// Regression: Link State, like Any State, has no bound graph and must not receive the default
+		// USMStateInstance node class. Same ensure caveat as add_any_state (both trip the same deduped
+		// call site); the compile gate catches a structurally-broken link node independent of it.
+		It("Creates a Link State node and compiles", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			// Entry-wired so the machine has a valid initial state and compile exercises real work.
+			const FString TargetGuid = AddStateToBlueprint(AssetPath, TEXT("LinkTarget"), nullptr, /*bIsEntry*/true);
+			if (!TestFalse("Target state created", TargetGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("link_to_state_name"), TEXT("LinkTarget"));
+			Args->SetNumberField(TEXT("position_x"), 200.0);
+			Args->SetNumberField(TEXT("position_y"), 200.0);
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.add_link_state")), Args);
+
+			TestTrue("Result is success", Result.bSuccess);
+			if (!TestTrue("Payload populated", Result.Payload.IsValid()))
+			{
+				return;
+			}
+
+			FString StateGuid;
+			TestTrue("Payload has 'state_guid'",
+				Result.Payload->TryGetStringField(TEXT("state_guid"), StateGuid));
+			TestFalse("State guid is non-empty", StateGuid.IsEmpty());
+
+			TestEqual("Created node reports link_state kind",
+				GetRootStateKind(AssetPath, StateGuid), FString(TEXT("link_state")));
+
+			CompileExpectingNoErrors(AssetPath, TEXT("Link State"));
 		});
 	});
 

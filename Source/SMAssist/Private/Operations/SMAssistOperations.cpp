@@ -1755,6 +1755,9 @@ FSMAssistOperationResult LD::Assist::AddAnyState(const TSharedRef<FJsonObject>& 
 
 	ISMGraphGeneration::FCreateStateNodeArgs CreateArgs;
 	CreateArgs.GraphNodeClass = USMGraphNode_AnyStateNode::StaticClass();
+	// Any State has no bound graph and takes no node instance class. Leaving the struct
+	// default (USMStateInstance) trips an ensure in FSMGraphSchemaAction_NewNode::PerformAction.
+	CreateArgs.StateInstanceClass = nullptr;
 
 	FString StateName;
 	if (InArgs->TryGetStringField(Args::StateName, StateName))
@@ -1813,6 +1816,9 @@ FSMAssistOperationResult LD::Assist::AddLinkState(const TSharedRef<FJsonObject>&
 
 	ISMGraphGeneration::FCreateStateNodeArgs CreateArgs;
 	CreateArgs.GraphNodeClass = USMGraphNode_LinkStateNode::StaticClass();
+	// Link State has no bound graph and takes no node instance class. Leaving the struct
+	// default (USMStateInstance) trips an ensure in FSMGraphSchemaAction_NewNode::PerformAction.
+	CreateArgs.StateInstanceClass = nullptr;
 
 	if (InArgs->HasField(Args::PositionX) || InArgs->HasField(Args::PositionY))
 	{

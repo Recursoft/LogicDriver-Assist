@@ -12,6 +12,7 @@
 #include "SMAssistSubsystem.h"
 
 #include "Dom/JsonObject.h"
+#include "Dom/JsonValue.h"
 #include "Editor.h"
 #include "Misc/CoreDelegates.h"
 #include "Misc/EngineVersionComparison.h"
@@ -27,6 +28,60 @@ namespace LD::Assist::MonolithBridge::Private
 #else
 		return FCoreDelegates::GetOnPostEngineInit();
 #endif
+	}
+
+	// Monolith's tool registry expects a flat param schema: each top-level key is a
+	// parameter name mapping to its definition object, which carries a bool "required"
+	// field. SMAssist authors schemas in JSON-Schema form ({ "type": "object",
+	// "properties": { ... }, "required": [ ... ] }). Without translation Monolith reads
+	// "type"/"properties"/"required" as the parameter names, so every real param is
+	// reported "unknown" by FMonolithParamSchema::FindUnknownKeys and discovery is misleading.
+	static TSharedPtr<FJsonObject> ConvertSchemaToMonolithFormat(const TSharedPtr<FJsonObject>& InSchema)
+	{
+		const TSharedPtr<FJsonObject>* Properties = nullptr;
+		if (!InSchema.IsValid() || !InSchema->TryGetObjectField(TEXT("properties"), Properties) || !Properties)
+		{
+			// Already flat (or no parameters); pass through untouched.
+			return InSchema;
+		}
+
+		TSet<FString> RequiredNames;
+		const TArray<TSharedPtr<FJsonValue>>* RequiredArray = nullptr;
+		if (InSchema->TryGetArrayField(TEXT("required"), RequiredArray) && RequiredArray)
+		{
+			for (const TSharedPtr<FJsonValue>& Value : *RequiredArray)
+			{
+				FString Name;
+				if (Value.IsValid() && Value->TryGetString(Name))
+				{
+					RequiredNames.Add(Name);
+				}
+			}
+		}
+
+		const TSharedRef<FJsonObject> Flat = MakeShared<FJsonObject>();
+		for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : (*Properties)->Values)
+		{
+			const TSharedPtr<FJsonObject>* PropObject = nullptr;
+			if (!Pair.Value.IsValid() || !Pair.Value->TryGetObject(PropObject) || !PropObject)
+			{
+				UE_LOG(LogSMAssistMonolithBridge, Warning,
+					TEXT("Dropping schema param '%s': its definition is not a JSON object."), *Pair.Key);
+				continue;
+			}
+
+			// Leaf values are shared with InSchema (still served verbatim on other transports).
+			// Every Monolith schema consumer treats the schema as read-only, so the share is safe.
+			const TSharedRef<FJsonObject> ParamDef = MakeShared<FJsonObject>();
+			for (const TPair<FString, TSharedPtr<FJsonValue>>& Field : (*PropObject)->Values)
+			{
+				ParamDef->SetField(Field.Key, Field.Value);
+			}
+			ParamDef->SetBoolField(TEXT("required"), RequiredNames.Contains(Pair.Key));
+			Flat->SetObjectField(Pair.Key, ParamDef);
+		}
+
+		return Flat;
 	}
 
 	static FMonolithActionResult ExecuteBridgedOperation(FName InOperationName, const TSharedPtr<FJsonObject>& InParams)
@@ -152,7 +207,8 @@ void FSMAssistMonolithBridgeModule::HandleOperationRegistered(const FSMAssistOpe
 			return LD::Assist::MonolithBridge::Private::ExecuteBridgedOperation(OperationName, InParams);
 		});
 
-	FMonolithToolRegistry::Get().RegisterAction(Namespace, Action, InInfo.Description, Handler, InInfo.InputSchema);
+	FMonolithToolRegistry::Get().RegisterAction(Namespace, Action, InInfo.Description, Handler,
+		LD::Assist::MonolithBridge::Private::ConvertSchemaToMonolithFormat(InInfo.InputSchema));
 	BridgedNamespaces.Add(Namespace);
 }
 
