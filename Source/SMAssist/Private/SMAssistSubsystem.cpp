@@ -159,15 +159,15 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::AddState;
-		Info.Description = TEXT("Add a state node to an existing state machine blueprint's root graph. Layout convention (graphs must look human-authored): Entry sits at (0, 0) and the main flow runs left-to-right from Entry; place the first state at ~(200, 0) and space subsequent states +250 X. Use position_y only for deliberate parallel/branching rows, and keep >=150 units between rows so transitions never visually cross an unrelated node. Avoid crossing edges: if a new state breaks a linear chain, insert it along the same row rather than offsetting y. Positions set here are authoritative; sm.get_asset reports position_x/position_y back for verification.");
+		Info.Description = TEXT("Add a state node to an existing state machine blueprint's root graph. Layout (graphs must look human-authored): Entry sits at (0, 0) and the main flow runs left-to-right. For greenfield graphs prefer omitting positions and calling sm.layout_states with apply=true after the last node is added; it spaces nodes by their actual width and avoids overlaps. If placing manually, note node width scales with the DisplayName (short nodes are ~130-150px at 1:1 zoom, long names much wider), so a fixed small step overlaps: leave a generous gap (at least ~350 X, more for long names) and keep at least 150 units between parallel rows (position_y). Avoid crossing edges: insert a new state along the same row rather than offsetting y. sm.get_asset reports logical position_x/position_y but does NOT detect visual overlap; verify with layout_states or a graph capture.");
 		Info.InputSchema = MakeSchema(
 			{
 				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the target SMBlueprint.")) },
 				{ Args::StateName, MakePropertyObject(TEXT("string"), TEXT("Optional state name.")) },
 				{ Args::IsEntry, MakePropertyObject(TEXT("boolean"), TEXT("Mark the new state as the entry state.")) },
-				{ Args::PositionX, MakePropertyObject(TEXT("number"), TEXT("Graph X coordinate. Entry is at x=0, so prefer positive values to place the state to the right of Entry (first state typically 200, later states +250 each).")) },
+				{ Args::PositionX, MakePropertyObject(TEXT("number"), TEXT("Graph X coordinate. Entry is at x=0; place states to the right. Prefer sm.layout_states (apply=true) over hand-placing: manual gaps overlap easily because node width grows with the DisplayName. If manual, leave at least ~350 X between nodes (more for long names).")) },
 				{ Args::PositionY, MakePropertyObject(TEXT("number"), TEXT("Graph Y coordinate. 0 aligns horizontally with Entry; use non-zero only for deliberate vertical layout.")) },
-				{ Args::StateClass, MakePropertyObject(TEXT("string"), TEXT("Class path for a USMStateInstance_Base subclass.")) }
+				{ Args::StateClass, MakePropertyObject(TEXT("string"), TEXT("Class path for a USMStateInstance_Base subclass. OMIT for any state that has no custom logic: a state left on the default USMStateInstance creates NO per-node instance at runtime, so assigning an empty custom class is wasted overhead. End states are the common empty case, but this applies to ANY behavior-less state. Only set this when the state has logic or exposed properties.")) }
 			},
 			{ Args::AssetPath });
 		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::AddState);
@@ -183,7 +183,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the target SMBlueprint.")) },
 				{ Args::FromStateGuid, MakePropertyObject(TEXT("string"), TEXT("Guid of the source state node.")) },
 				{ Args::ToStateGuid, MakePropertyObject(TEXT("string"), TEXT("Guid of the destination state node.")) },
-				{ Args::TransitionClass, MakePropertyObject(TEXT("string"), TEXT("Class path for a USMTransitionInstance subclass.")) }
+				{ Args::TransitionClass, MakePropertyObject(TEXT("string"), TEXT("Class path for a USMTransitionInstance subclass. OMIT for an always-true transition, or any condition you can author directly in the transition's graph: the default USMTransitionInstance creates NO per-node instance, so it is cheaper. Only set a custom class when the condition needs instance or C++ logic; never assign a class just to express 'always true'.")) }
 			},
 			{ Args::AssetPath, Args::FromStateGuid, Args::ToStateGuid });
 		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::AddTransition);

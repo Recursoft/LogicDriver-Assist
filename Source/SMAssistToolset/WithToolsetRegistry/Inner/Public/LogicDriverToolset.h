@@ -173,7 +173,7 @@ public:
 	 * @param bIsEntry Whether this state becomes the graph's entry. Default false.
 	 * @param PositionX Canvas X coordinate. Negative sentinel (e.g., -1.0) = SMAssist auto-positions. Prefer the sentinel or a LayoutStates pass over manual placement; coordinates near (0, 0) collide with the editor's Entry-pointer marker and produce a visually broken graph for entry states.
 	 * @param PositionY Canvas Y coordinate. Negative sentinel (e.g., -1.0) = SMAssist auto-positions.
-	 * @param StateClass Full path of a USMStateInstance_Base subclass. Empty = base USMStateInstance.
+	 * @param StateClass Full path of a USMStateInstance_Base subclass. Empty = base USMStateInstance (no per-node instance is created at runtime). OMIT for any behavior-less state (end states especially); an empty custom class is wasted overhead. Only set this when the state has logic or exposed properties.
 	 * @return JSON: { state_guid, state_name }
 	 */
 	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
@@ -286,7 +286,7 @@ public:
 	 * @param Blueprint The blueprint to modify. Required.
 	 * @param FromStateGuid GUID of the source state. Required.
 	 * @param ToStateGuid GUID of the destination state. Required.
-	 * @param TransitionClass Full path of a USMTransitionInstance subclass. Empty = base transition.
+	 * @param TransitionClass Full path of a USMTransitionInstance subclass. Empty = base transition (no per-node instance is created). OMIT for an always-true transition or any rule expressible in the transition's own graph; only set a custom class when the condition needs instance or C++ logic.
 	 * @return JSON: { transition_guid, from_state_guid, to_state_guid }
 	 */
 	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
