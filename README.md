@@ -110,7 +110,14 @@ Because both namespaces ride the same Monolith server, a name-level rule like th
 
 ### ToolsetRegistry (UE 5.8+)
 
-When the engine ships ToolsetRegistry, `ULogicDriverToolset` exposes each operation as an `AICallable` UFUNCTION with typed parameters. A marshal layer converts typed args into the same JSON envelope the subsystem expects, so behavior matches the Monolith path exactly. Convention: every MCP-schema param is required, and C++ sentinel defaults (empty string, `-1`, `-1.0`) mean "use the SMAssist default."
+When the engine ships ToolsetRegistry, `ULogicDriverToolset` exposes each operation as an `AICallable` UFUNCTION with typed parameters. A marshal layer (`SMAssistToolsetMarshal.h`) converts typed args into the same JSON envelope the subsystem expects, so operation *behavior* matches the Monolith path exactly. Only the call mechanics and the outer wire envelope differ:
+
+- **Call mechanics.** The server is UE 5.8's stock `ModelContextProtocol` plugin (default `http://localhost:8000/mcp`). With the default tool-search mode it advertises three meta-tools: `list_toolsets`, `describe_toolset`, and `call_tool`. Invoke an operation with `call_tool` passing `{ "toolset_name": "SMAssistToolset.LogicDriverToolset", "tool_name": "AddState", "arguments": { ... } }` (the `tool_name` omits the toolset prefix). `tools/list` returns plain JSON; `tools/call` returns an SSE stream (`event: message` / `data: {...}`), so parse the last `data:` line.
+- **Every param is required** at the MCP-schema layer (the dispatcher rejects omitted fields regardless of C++ defaults). C++ sentinel defaults (empty string, `-1`, `-1.0`) mean "use the SMAssist default"; the marshal skips sentinels when building the JSON.
+- **Object args need a full object path.** A parameter typed as a UObject (`Blueprint`, and the like) resolves from a full object path such as `/Game/Path/SM_Foo.SM_Foo` (the `asset_path` that `CreateBlueprint` / `GetAsset` return), not the bare package path `/Game/Path/SM_Foo`. A bare path is rejected during argument conversion, before the operation runs, so the call comes back as a parameter error rather than a result.
+- **Result envelope.** Success returns the operation payload serialized as a JSON string under the reply's `returnValue` field (parse it to recover the payload object); there are no `bSuccess` / `error` fields. Failure surfaces as a tool-level MCP error carrying the SMAssist error text.
+
+The **Monolith bridge** (above) carries the identical payload behind a different outer envelope: `FMonolithActionResult` with an explicit `bSuccess` + `ErrorMessage`, its `*_query` dispatcher nests args under a `params` object, and it addresses assets by an `asset_path` string. Both transports share `USMAssistSubsystem::ExecuteOperation`, so keep the two sections in sync.
 
 ### Programmatic (C++)
 

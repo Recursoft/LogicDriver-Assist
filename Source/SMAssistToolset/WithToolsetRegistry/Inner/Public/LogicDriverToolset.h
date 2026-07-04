@@ -83,14 +83,25 @@ struct FSMComponentConfig
  * engine's ToolsetRegistry / Model Context Protocol pipeline. Each UFUNCTION mirrors one
  * SMAssist operation; the marshal layer translates typed args into the JSON envelope that
  * USMAssistSubsystem::ExecuteOperation expects, then returns the resulting payload as a JSON
- * string. Wire envelope into SMAssist matches what SMAssistMonolithBridge produces, so the
- * same SMAssist behavior tests cover both transports.
+ * string.
  *
  * Convention note: every param is required at the MCP schema layer (UE 5.8's dispatcher rejects
  * omitted fields regardless of C++ defaults). C++ default values document the "use SMAssist
  * default" sentinel (empty string for FString, -1 for int32, -1.0 for "auto-layout"
  * positions/gaps and other double fields); the marshal helper skips these sentinels when
- * building the JSON, so SMAssist sees the same omit-vs-pass semantics it sees from Monolith.
+ * building the JSON, so passing a sentinel is equivalent to omitting the field.
+ *
+ * Result envelope: on success a tool returns the operation's payload serialized as a JSON string,
+ * which the engine delivers as the reply's `returnValue` field; parse that string to get the
+ * payload object. There is no success flag or message field. On failure the operation raises a
+ * tool-level MCP error carrying the SMAssist error text. So read a present `returnValue` as
+ * success, and an MCP tool error as failure.
+ *
+ * Object arguments (Blueprint, and any other UObject parameter) resolve from a full object path,
+ * for example "/Game/Path/SM_Foo.SM_Foo" (the asset_path that CreateBlueprint and GetAsset
+ * return), not the bare package path "/Game/Path/SM_Foo". A bare path is rejected during argument
+ * conversion, before the operation runs, so the call comes back as a parameter error rather than a
+ * result.
  *
  * Authoring guidance for AI clients: prefer LayoutStates(apply=true) over manual position_x/y
  * for greenfield graphs. State nodes are roughly 130 to 150 px wide at 1:1 zoom and the editor
