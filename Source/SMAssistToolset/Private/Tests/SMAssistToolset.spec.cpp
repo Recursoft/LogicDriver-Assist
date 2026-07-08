@@ -27,21 +27,30 @@ BEGIN_DEFINE_SPEC(FSMAssistToolsetSpec, "LogicDriver.Assist.Toolset",
 	}
 
 	/**
-	 * Translates a canonical SMAssist op name (e.g. "sm.add_state") into the
-	 * expected static UFUNCTION name on ULogicDriverToolset ("AddState").
-	 * Drops the `sm.` namespace, PascalCases the remaining snake_case parts.
-	 * Returns NAME_None if the op name lacks the `sm.` namespace (unexpected;
-	 * caller treats as a registration drift bug).
+	 * Translates a canonical SMAssist op name (e.g. "sm.add_state" or "ld_ue.read_property") into
+	 * the expected static UFUNCTION name on ULogicDriverToolset ("AddState", "ReadProperty").
+	 * Drops the namespace (`sm.` or `ld_ue.`), PascalCases the remaining snake_case parts.
+	 * Returns NAME_None if the op name carries neither known namespace (unexpected; caller treats
+	 * as a registration drift bug).
 	 */
 	static FName UFunctionNameForOp(FName InOpName)
 	{
 		FString OpString = InOpName.ToString();
-		const FString NamespacePrefix = TEXT("sm.");
-		if (!OpString.StartsWith(NamespacePrefix))
+
+		bool bStripped = false;
+		for (const FString& NamespacePrefix : { FString(TEXT("sm.")), FString(TEXT("ld_ue.")) })
+		{
+			if (OpString.StartsWith(NamespacePrefix))
+			{
+				OpString.RemoveAt(0, NamespacePrefix.Len());
+				bStripped = true;
+				break;
+			}
+		}
+		if (!bStripped)
 		{
 			return NAME_None;
 		}
-		OpString.RemoveAt(0, NamespacePrefix.Len());
 
 		TArray<FString> Parts;
 		OpString.ParseIntoArray(Parts, TEXT("_"), true);

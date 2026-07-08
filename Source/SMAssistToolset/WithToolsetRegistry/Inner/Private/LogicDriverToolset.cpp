@@ -288,12 +288,14 @@ FString ULogicDriverToolset::ResetNodeProperty(
 FString ULogicDriverToolset::GetNodeProperties(
 	USMBlueprint* Blueprint,
 	const FString& NodeGuid,
-	int32 StackIndex)
+	int32 StackIndex,
+	int32 MaxDepth)
 {
 	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
 	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
 	Args->SetStringField(TEXT("node_guid"), NodeGuid);
 	LDA::AddIfNotIndexNone(*Args, TEXT("stack_index"), StackIndex);
+	LDA::AddIfNotIndexNone(*Args, TEXT("max_depth"), MaxDepth);
 	return LDA::Execute(TEXT("sm.get_node_properties"), Args);
 }
 
@@ -722,4 +724,144 @@ FString ULogicDriverToolset::DisconnectNodeVariableOutput(
 	LDA::AddIfNonEmpty(*Args, TEXT("to_variable_name"), ToVarName);
 	LDA::AddIfNonEmpty(*Args, TEXT("to_owning_blueprint_variable"), ToOwningBlueprintVariable);
 	return LDA::Execute(TEXT("sm.disconnect_node_variable_output"), Args);
+}
+
+FString ULogicDriverToolset::SetConduitCondition(
+	USMBlueprint* Blueprint,
+	const FString& NodeGuid,
+	bool bCondition)
+{
+	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
+	Args->SetStringField(TEXT("node_guid"), NodeGuid);
+	LDA::AddBool(*Args, TEXT("condition"), bCondition);
+	return LDA::Execute(TEXT("sm.set_conduit_condition"), Args);
+}
+
+FString ULogicDriverToolset::SpawnActorContextComponent(
+	USMBlueprint* Blueprint,
+	const FString& TargetGraphPath,
+	const FString& TargetActorClass,
+	const FString& ComponentClass,
+	double PositionX,
+	double PositionY)
+{
+	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
+	Args->SetStringField(TEXT("target_graph_path"), TargetGraphPath);
+	Args->SetStringField(TEXT("target_actor_class"), TargetActorClass);
+	Args->SetStringField(TEXT("component_class"), ComponentClass);
+	Args->SetNumberField(TEXT("position_x"), PositionX);
+	Args->SetNumberField(TEXT("position_y"), PositionY);
+	return LDA::Execute(TEXT("sm.spawn_actor_context_component"), Args);
+}
+
+FString ULogicDriverToolset::CollapseToStateMachine(
+	USMBlueprint* Blueprint,
+	const FString& NodeGuidsJson)
+{
+	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
+	LDA::AddJsonValue(*Args, TEXT("node_guids"), NodeGuidsJson);
+	return LDA::Execute(TEXT("sm.collapse_to_state_machine"), Args);
+}
+
+FString ULogicDriverToolset::MergeStates(
+	USMBlueprint* Blueprint,
+	const FString& DestinationStateGuid,
+	const FString& SourceStateGuidsJson,
+	bool bDestroyStates)
+{
+	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
+	Args->SetStringField(TEXT("destination_state_guid"), DestinationStateGuid);
+	LDA::AddJsonValue(*Args, TEXT("source_state_guids"), SourceStateGuidsJson);
+	LDA::AddBool(*Args, TEXT("b_destroy_states"), bDestroyStates);
+	return LDA::Execute(TEXT("sm.merge_states"), Args);
+}
+
+FString ULogicDriverToolset::ReplaceNode(
+	USMBlueprint* Blueprint,
+	const FString& NodeGuid,
+	const FString& Kind)
+{
+	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
+	Args->SetStringField(TEXT("node_guid"), NodeGuid);
+	Args->SetStringField(TEXT("kind"), Kind);
+	return LDA::Execute(TEXT("sm.replace_node"), Args);
+}
+
+FString ULogicDriverToolset::ConvertToReference(
+	USMBlueprint* Blueprint,
+	const FString& NodeGuid,
+	const FString& Name,
+	const FString& Path,
+	const FString& ParentClass)
+{
+	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
+	Args->SetStringField(TEXT("node_guid"), NodeGuid);
+	LDA::AddIfNonEmpty(*Args, TEXT("name"), Name);
+	LDA::AddIfNonEmpty(*Args, TEXT("path"), Path);
+	LDA::AddIfNonEmpty(*Args, TEXT("parent_class"), ParentClass);
+	return LDA::Execute(TEXT("sm.convert_to_reference"), Args);
+}
+
+FString ULogicDriverToolset::RuntimeGetState(
+	const FString& ActorIdentifier,
+	const FString& ComponentName,
+	bool bIncludeProperties,
+	int32 MaxDepth,
+	int32 PieInstance)
+{
+	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+	Args->SetStringField(TEXT("actor_identifier"), ActorIdentifier);
+	LDA::AddIfNonEmpty(*Args, TEXT("component_name"), ComponentName);
+	LDA::AddBool(*Args, TEXT("b_include_properties"), bIncludeProperties);
+	LDA::AddIfNotIndexNone(*Args, TEXT("max_depth"), MaxDepth);
+	LDA::AddIfNotIndexNone(*Args, TEXT("pie_instance"), PieInstance);
+	return LDA::Execute(TEXT("sm.runtime_get_state"), Args);
+}
+
+FString ULogicDriverToolset::ReadProperty(
+	const FString& Object,
+	const FString& PropertyPath,
+	const FString& Target,
+	int32 PieInstance)
+{
+	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+	Args->SetStringField(TEXT("object"), Object);
+	Args->SetStringField(TEXT("property_path"), PropertyPath);
+	LDA::AddIfNonEmpty(*Args, TEXT("target"), Target);
+	LDA::AddIfNotIndexNone(*Args, TEXT("pie_instance"), PieInstance);
+	return LDA::Execute(TEXT("ld_ue.read_property"), Args);
+}
+
+FString ULogicDriverToolset::WriteProperty(
+	const FString& Object,
+	const FString& PropertyPath,
+	const FString& Value,
+	const FString& Target,
+	int32 PieInstance)
+{
+	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+	Args->SetStringField(TEXT("object"), Object);
+	Args->SetStringField(TEXT("property_path"), PropertyPath);
+	Args->SetStringField(TEXT("value"), Value);
+	LDA::AddIfNonEmpty(*Args, TEXT("target"), Target);
+	LDA::AddIfNotIndexNone(*Args, TEXT("pie_instance"), PieInstance);
+	return LDA::Execute(TEXT("ld_ue.write_property"), Args);
+}
+
+FString ULogicDriverToolset::AddDispatcher(
+	UBlueprint* Blueprint,
+	const FString& Name,
+	const FString& ParamsJson)
+{
+	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
+	Args->SetStringField(TEXT("name"), Name);
+	LDA::AddJsonValue(*Args, TEXT("params"), ParamsJson);
+	return LDA::Execute(TEXT("ld_ue.add_dispatcher"), Args);
 }

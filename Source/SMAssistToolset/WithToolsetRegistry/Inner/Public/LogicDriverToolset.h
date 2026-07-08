@@ -204,7 +204,7 @@ public:
 	 * @param PositionX Canvas X coordinate. Negative sentinel (e.g., -1.0) = auto-position. Prefer the sentinel or a LayoutStates pass over manual placement; coordinates near (0, 0) collide with the editor's Entry-pointer marker and produce a visually broken graph for entry states.
 	 * @param PositionY Canvas Y coordinate. Negative sentinel (e.g., -1.0) = auto-position.
 	 * @param StateClass Full path of a USMConduitInstance subclass. Empty = base conduit.
-	 * @param bEvalWithTransitions Whether the conduit evaluates inline with outgoing transitions. Default true.
+	 * @param bEvalWithTransitions Whether the conduit evaluates inline with outgoing transitions. Default true (matches the editor's default configuration for newly placed conduits).
 	 * @return JSON: { state_guid, state_name, state_class? }
 	 */
 	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
@@ -478,13 +478,15 @@ public:
 	 * @param Blueprint The blueprint to inspect. Required.
 	 * @param NodeGuid GUID of the node. Required.
 	 * @param StackIndex Which stacked instance to inspect. -1 = base.
+	 * @param MaxDepth Recursion depth for expanding struct/array member values in the report. Negative sentinel (e.g., -1) = SMAssist default (flat; no member recursion).
 	 * @return JSON: { node_guid, state_class, stack_index?, properties:[{ name, type, category?, value }], count }
 	 */
 	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
 	static FString GetNodeProperties(
 		USMBlueprint* Blueprint,
 		const FString& NodeGuid,
-		int32 StackIndex = -1);
+		int32 StackIndex = -1,
+		int32 MaxDepth = -1);
 
 	/**
 	 * Returns pin-level information for one or all variables on a node (pin id, type, defaults, links).
@@ -682,8 +684,8 @@ public:
 	 * @param StartX Origin X for the layout. Negative sentinel (e.g., -1.0) = SMAssist default origin.
 	 * @param StartY Origin Y for the layout. Negative sentinel (e.g., -1.0) = SMAssist default origin.
 	 * @param PinNodeGuidsJson JSON-encoded array of state GUID strings that should remain pinned at their existing positions. Empty = no pins.
-	 * @param bRespectExistingOrder Whether to preserve existing graph-order hints. Default false.
-	 * @param bSnapToGrid Snap final positions to the editor grid. Default false.
+	 * @param bRespectExistingOrder Whether to preserve existing graph-order hints. Default true.
+	 * @param bSnapToGrid Snap final positions to the editor grid. Default true.
 	 * @return JSON: { asset_path, strategy, scope, applied, graphs:[...] }
 	 */
 	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
@@ -697,8 +699,8 @@ public:
 		double StartX = -1.0,
 		double StartY = -1.0,
 		const FString& PinNodeGuidsJson = TEXT(""),
-		bool bRespectExistingOrder = false,
-		bool bSnapToGrid = false);
+		bool bRespectExistingOrder = true,
+		bool bSnapToGrid = true);
 
 	/**
 	 * Adds a member variable to a state-machine blueprint. Mirrors the editor's My-Blueprint
@@ -1097,4 +1099,177 @@ public:
 		USMBlueprint* Blueprint,
 		const FString& NodeGuid,
 		const FString& TypeIdFilter = TEXT(""));
+
+	/**
+	 * Sets a conduit's condition result (always true / always false) by writing its evaluation pin's
+	 * literal default. The conduit companion to SetTransitionCondition.
+	 * @param Blueprint The blueprint to modify. Required.
+	 * @param NodeGuid GUID of the conduit node. Required.
+	 * @param bCondition Constant condition value. True = always pass; false = always block. Required.
+	 * @return JSON: { node_guid, condition }
+	 */
+	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
+	static FString SetConduitCondition(
+		USMBlueprint* Blueprint,
+		const FString& NodeGuid,
+		bool bCondition);
+
+	/**
+	 * Spawns a "reach chain" of pure K2 nodes into a target graph that fetches a component off the
+	 * state machine's context actor: GetContext -> Cast to the actor class -> GetComponentByClass.
+	 * The three nodes are created and wired together; the returned component pin is left for the
+	 * caller to wire downstream. If any wire fails the whole cluster is rolled back and the op
+	 * errors, so a partial chain is never left behind.
+	 * @param Blueprint The state-machine blueprint that owns the target graph. Required.
+	 * @param TargetGraphPath Path or name of the graph on Blueprint to receive the nodes. Required.
+	 * @param TargetActorClass Full object path of the AActor subclass to cast the context to. Required.
+	 * @param ComponentClass Full object path of the UActorComponent subclass to fetch. Required.
+	 * @param PositionX Graph X for the first node in the chain. Defaults to 0.
+	 * @param PositionY Graph Y for the first node in the chain. Defaults to 0.
+	 * @return JSON: { get_context_node_guid, cast_node_guid, get_component_node_guid, component_output_pin_id }
+	 */
+	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
+	static FString SpawnActorContextComponent(
+		USMBlueprint* Blueprint,
+		const FString& TargetGraphPath,
+		const FString& TargetActorClass,
+		const FString& ComponentClass,
+		double PositionX = 0.0,
+		double PositionY = 0.0);
+
+	/**
+	 * Collapses a set of existing nodes into a nested state-machine container node, mirroring the
+	 * editor's "Collapse to State Machine". Edges crossing the selection boundary are rewired onto
+	 * the new container; fully-interior nodes and edges move inside it.
+	 * @param Blueprint The blueprint to modify. Required.
+	 * @param NodeGuidsJson JSON-encoded non-empty array of node GUID strings to collapse. Required.
+	 * @return JSON: { state_guid, state_name }
+	 */
+	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
+	static FString CollapseToStateMachine(
+		USMBlueprint* Blueprint,
+		const FString& NodeGuidsJson);
+
+	/**
+	 * Merges source states' node-class templates into a destination state's stack, mirroring the
+	 * editor's "Copy and Merge States" (bDestroyStates=false) / "Cut and Merge States"
+	 * (bDestroyStates=true). New stack templates are minted with fresh guids and the owning blueprint
+	 * is recompiled internally. The destination and all sources must be plain states.
+	 * @param Blueprint The blueprint to modify. Required.
+	 * @param DestinationStateGuid GUID of the state receiving the merged templates. Required.
+	 * @param SourceStateGuidsJson JSON-encoded non-empty array of source state GUID strings. Required.
+	 * @param bDestroyStates When true, destroy the sources and rewire their transitions (cut); when false, leave the sources in place (copy). Default false.
+	 * @return JSON: { destination_state_guid, merged_stack_template_guids:[...], b_destroy_states }
+	 */
+	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
+	static FString MergeStates(
+		USMBlueprint* Blueprint,
+		const FString& DestinationStateGuid,
+		const FString& SourceStateGuidsJson,
+		bool bDestroyStates = false);
+
+	/**
+	 * Replaces a node with an equivalent node of a different kind, preserving existing transitions,
+	 * mirroring the editor's "Replace With ..." entries. The original node is removed.
+	 * @param Blueprint The blueprint to modify. Required.
+	 * @param NodeGuid GUID of the node to replace. Required.
+	 * @param Kind Target node kind. One of: "state", "conduit", "state_machine", "reference", "parent". Required.
+	 * @return JSON: { node_guid, kind }
+	 */
+	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
+	static FString ReplaceNode(
+		USMBlueprint* Blueprint,
+		const FString& NodeGuid,
+		const FString& Kind);
+
+	/**
+	 * Extracts an inline nested state machine into its own state-machine reference asset and swaps
+	 * the node to reference it, mirroring the editor's "Convert to Reference". Only operates on an
+	 * inline nested state-machine node (USMGraphNode_StateMachineStateNode).
+	 * @param Blueprint The blueprint that owns the nested state machine. Required.
+	 * @param NodeGuid GUID of the inline nested state-machine node to convert. Required.
+	 * @param Name Asset name for the newly minted reference. Empty = SMAssist default naming.
+	 * @param Path Package path under /Game for the new asset. Empty = SMAssist default location.
+	 * @param ParentClass Full object path of a USMInstance subclass to parent the new asset to. Empty = default.
+	 * @return JSON: { node_guid, reference_asset_path, name }
+	 */
+	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
+	static FString ConvertToReference(
+		USMBlueprint* Blueprint,
+		const FString& NodeGuid,
+		const FString& Name = TEXT(""),
+		const FString& Path = TEXT(""),
+		const FString& ParentClass = TEXT(""));
+
+	/**
+	 * Inspects the live runtime state of a state machine running on an actor in the active PIE
+	 * session. Read-only: a PIE session must be active and the component's instance must be
+	 * initialized.
+	 * @param ActorIdentifier Name or label of the actor in the PIE world to inspect. Required.
+	 * @param ComponentName Name of the USMStateMachineComponent to read. Empty = first USMStateMachineComponent found on the actor.
+	 * @param bIncludeProperties Include each active state's exposed (editable) property values in the report. Default false.
+	 * @param MaxDepth Recursion depth for struct/array member expansion when bIncludeProperties is true. Negative sentinel (e.g., -1) = SMAssist default (flat).
+	 * @param PieInstance Which PIE instance to read. Negative sentinel (e.g., -1) = SMAssist default (0, the first instance).
+	 * @return JSON: { actor, component, is_active, is_in_end_state, single_active_state?, active_states:[...], count }
+	 */
+	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
+	static FString RuntimeGetState(
+		const FString& ActorIdentifier,
+		const FString& ComponentName = TEXT(""),
+		bool bIncludeProperties = false,
+		int32 MaxDepth = -1,
+		int32 PieInstance = -1);
+
+	// The following mirror the ld_ue.* generic-fallback ops: alternatives to the engine's own
+	// blueprint.* / property MCP tools, for use only when those cannot express the operation (for
+	// example TMap / TArray element access). They are not Logic Driver operations.
+
+	/**
+	 * Reads a property value off any resolvable object by property path. Fallback for the engine's
+	 * own property-read tools.
+	 * @param Object Object identifier: a full object path for an edit-time asset, or an actor name/label for a runtime (PIE) object. Required.
+	 * @param PropertyPath Dot-separated property path; container element access via "Member[index]" or "Member[key]". Required.
+	 * @param Target "edit" (or empty) resolves the edit-time object; "runtime" resolves in the active PIE world. Empty = edit.
+	 * @param PieInstance Which PIE instance to resolve against when Target is runtime. Negative sentinel (e.g., -1) = default (0, the first instance).
+	 * @return JSON: { object_resolved, target, property_path, property_type, value }
+	 */
+	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
+	static FString ReadProperty(
+		const FString& Object,
+		const FString& PropertyPath,
+		const FString& Target = TEXT(""),
+		int32 PieInstance = -1);
+
+	/**
+	 * Writes a property value onto any resolvable object by property path. Fallback for the engine's
+	 * own property-write tools.
+	 * @param Object Object identifier: a full object path for an edit-time asset, or an actor name/label for a runtime (PIE) object. Required.
+	 * @param PropertyPath Dot-separated property path; container element access via "Member[index]" or "Member[key]". Required.
+	 * @param Value New value in UE property-text format. Required; may be an empty string to clear a string-like property.
+	 * @param Target "edit" (or empty) resolves the edit-time object; "runtime" resolves in the active PIE world. Empty = edit.
+	 * @param PieInstance Which PIE instance to resolve against when Target is runtime. Negative sentinel (e.g., -1) = default (0, the first instance).
+	 * @return JSON: { object_resolved, target, property_path, property_type, value }
+	 */
+	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
+	static FString WriteProperty(
+		const FString& Object,
+		const FString& PropertyPath,
+		const FString& Value,
+		const FString& Target = TEXT(""),
+		int32 PieInstance = -1);
+
+	/**
+	 * Adds a multicast event dispatcher (delegate member variable + signature graph) to any
+	 * blueprint. Fallback for the engine's own dispatcher tools; unlike some of them, this mints the
+	 * member variable that survives compile.
+	 * @param Blueprint The blueprint to modify (any UBlueprint). Required.
+	 * @param Name Dispatcher name (FName-style; must be unique on the blueprint). Required.
+	 * @param ParamsJson JSON-encoded array of { name, type } parameter descriptors for the delegate signature. Empty = no parameters.
+	 * @return JSON: { asset_path, dispatcher_name, params_applied:[{ name, type }, ...] }
+	 */
+	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
+	static FString AddDispatcher(
+		UBlueprint* Blueprint,
+		const FString& Name,
+		const FString& ParamsJson = TEXT(""));
 };
