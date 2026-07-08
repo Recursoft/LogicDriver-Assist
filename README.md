@@ -4,6 +4,9 @@ Programmatic, headless authoring API for [Logic Driver Pro](https://logicdriver.
 
 The plugin is the substrate that powers MCP-style integrations. It does not talk to any model itself; it registers operations and lets transport bridges (Monolith, the engine ToolsetRegistry) surface them to an MCP client.
 
+> [!IMPORTANT]
+> **Requires Logic Driver Pro 2.11 or newer.** `SMAssist` uses the `ISMGraphGeneration` graph-authoring API that landed in 2.11; older Logic Driver versions will not build against it.
+>
 > **Status: experimental.** `IsExperimentalVersion` is set in the `.uplugin`. The operation surface and payload shapes are still evolving.
 
 ## What it is and isn't
@@ -36,7 +39,7 @@ A single editor subsystem, `USMAssistSubsystem`, owns a registry of `FSMAssistOp
 | `SMAssist` | Editor | Default | Core subsystem, operation registry, all `sm.*` and `ld_ue.*` handlers. Also registers the `LDAssist.Exec` / `LDAssist.List` console commands. |
 | `SMAssistMonolithBridge` | Editor (Optional) | PostEngineInit | Mirrors every registered operation into the [Monolith](https://github.com/Recursoft/monolith) MCP tool registry, keyed by `namespace.action`. No-op stub when Monolith is absent. |
 | `SMAssistToolset` | Editor (Optional) | PostEngineInit | Exposes operations as `UToolsetDefinition` `AICallable` UFUNCTIONs through the engine-bundled experimental `ToolsetRegistry` (UE 5.8+). No-op shell when ToolsetRegistry is absent. |
-| `SMAssistTests` | UncookedOnly | Default | Automation specs covering the operation handlers and the Monolith bridge. |
+| `SMAssistTests` | UncookedOnly | Default | Automation specs covering the operation handlers and the Monolith bridge. Enabled locally only (see [Tests](#tests)); not in the committed `.uplugin`. |
 
 Both bridge modules are independent transports over the same registry, so the same `SMAssist` behavior tests cover both wire paths.
 
@@ -44,7 +47,7 @@ Both bridge modules are independent transports over the same registry, so the sa
 
 Required:
 
-- **Logic Driver Pro** (`SMSystem` + `SMSystemEditor` + `SMAssetTools`). `SMAssist` reaches into `SMSystemEditor/Private`, so it expects the Logic Driver plugin checked out as a sibling at `../LogicDriver` relative to this plugin.
+- **Logic Driver Pro** (`SMSystem` + `SMSystemEditor` + `SMAssetTools`). `SMAssist` routes only through Logic Driver's public editor APIs, so it needs no include paths into the core plugin. `SMAssistTests` still expects Logic Driver checked out as a sibling at `../LogicDriver`, because it reuses core test helpers from `SMTests/Private`.
 
 Optional (each gated, plugin still builds when absent):
 
@@ -159,3 +162,16 @@ The operation descriptions encode layout rules so generated graphs look human-au
 ## Tests
 
 Automation specs live in `Source/SMAssistTests/` (operation handlers, an end-to-end authoring scenario, local-graph discovery) and `Source/SMAssistMonolithBridge/.../Tests` (bridge wiring). Run them through the host project's headless automation runner filtered to the relevant group.
+
+The `SMAssistTests` module is not enabled in the committed `SMAssist.uplugin`. To run the specs, add its module entry to your local `.uplugin` and rebuild:
+
+```json
+{
+  "Name": "SMAssistTests",
+  "Type": "UncookedOnly",
+  "LoadingPhase": "Default",
+  "PlatformAllowList": [ "Win64", "Mac", "Linux" ]
+}
+```
+
+Keep this edit local. The `SMAssistTests` entry must never be committed to `SMAssist.uplugin`.
