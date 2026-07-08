@@ -1,19 +1,29 @@
-# Logic Driver - Assist (`SMAssist`)
+# Logic Driver Assist (`SMAssist`)
 
-Programmatic, headless authoring API for [Logic Driver Pro](https://logicdriver.com) state machines. It exposes the editor operations a human performs in the Logic Driver graph editor (create assets, add states/transitions/conduits, set node properties, wire property graphs, lay out graphs, capture screenshots, introspect a running PIE instance) as a registry of named, JSON-in/JSON-out operations that AI assistants and tooling can call.
-
-The plugin is the substrate that powers MCP-style integrations. It does not talk to any model itself; it registers operations and lets transport bridges (Monolith, the engine ToolsetRegistry) surface them to an MCP client.
+Programmatic, headless authoring API for [Logic Driver Pro](https://logicdriver.com) state machines, built for AI assistants and tooling to drive. It exposes the same editor operations a human performs in the Logic Driver graph editor as a registry of named, JSON-in/JSON-out operations. Those cover creating assets, adding states/transitions/conduits, setting node properties, wiring property graphs, laying out graphs, capturing screenshots, and introspecting a running PIE instance.
 
 > [!IMPORTANT]
 > **Requires Logic Driver Pro 2.11 or newer.** `SMAssist` uses the `ISMGraphGeneration` graph-authoring API that landed in 2.11; older Logic Driver versions will not build against it.
->
-> **Status: experimental.** `IsExperimentalVersion` is set in the `.uplugin`. The operation surface and payload shapes are still evolving.
+
+> [!WARNING]
+> **Experimental.** `IsExperimentalVersion` is set in the `.uplugin`. The operation surface and payload shapes are still evolving.
+
+## Quick start
+
+To get an agent authoring Logic Driver graphs through this plugin:
+
+1. **Place the plugins.** Drop `LogicDriver/` and `LogicDriver-Assist/` into your host project's `Plugins/` folder (plus a transport bridge such as `Monolith/`, if you use one).
+2. **Build** the Development Editor target. The host must be a C++ project. The optional transport modules light up automatically based on which sibling plugins are present.
+3. **Launch the editor.** Every operation registers automatically at startup.
+4. **Connect your MCP client** through whichever transport you run. See [Using the operations](#using-the-operations) for each transport's endpoint and calling convention.
+
+To confirm the plugin loaded before wiring any client, run `LDAssist.List` in the editor console.
 
 ## What it is and isn't
 
 - **Editor-only.** Every module is an editor module. There is no runtime/cooked footprint; the plugin does nothing in a packaged game.
 - **A thin, generic operation layer.** `sm.*` operations route through Logic Driver's own editor APIs (`ISMGraphGeneration`, the graph schema, blueprint utils) so results are identical to a user editing by hand. The layer stays unopinionated: no vertical-specific (dialogue, combat) logic lives here. Verticals are authored *using* these generic operations.
-- **Transport-agnostic.** The same operation registry is reachable from console commands, the Monolith MCP bridge, and the engine ToolsetRegistry. Each transport is a small adapter over one registry.
+- **Transport-agnostic.** The plugin never talks to a model itself. The same operation registry is reachable from console commands, the Monolith MCP bridge, and the engine ToolsetRegistry, each a small adapter over one registry.
 
 ## Architecture
 
@@ -39,7 +49,7 @@ A single editor subsystem, `USMAssistSubsystem`, owns a registry of `FSMAssistOp
 | `SMAssist` | Editor | Default | Core subsystem, operation registry, all `sm.*` and `ld_ue.*` handlers. Also registers the `LDAssist.Exec` / `LDAssist.List` console commands. |
 | `SMAssistMonolithBridge` | Editor (Optional) | PostEngineInit | Mirrors every registered operation into the [Monolith](https://github.com/Recursoft/monolith) MCP tool registry, keyed by `namespace.action`. No-op stub when Monolith is absent. |
 | `SMAssistToolset` | Editor (Optional) | PostEngineInit | Exposes operations as `UToolsetDefinition` `AICallable` UFUNCTIONs through the engine-bundled experimental `ToolsetRegistry` (UE 5.8+). No-op shell when ToolsetRegistry is absent. |
-| `SMAssistTests` | UncookedOnly | Default | Automation specs covering the operation handlers and the Monolith bridge. Enabled locally only (see [Tests](#tests)); not in the committed `.uplugin`. |
+| `SMAssistTests` | UncookedOnly | Default | Automation specs covering the operation handlers and the Monolith bridge. Enabled locally only (see [Tests](#tests)). |
 
 Both bridge modules are independent transports over the same registry, so the same `SMAssist` behavior tests cover both wire paths.
 
@@ -99,6 +109,9 @@ When Monolith is present, each operation registers as `namespace.action` (the do
 
 #### Monolith's native `logicdriver` namespace vs LD-Assist's `sm`
 
+<details>
+<summary>Both surfaces appear at once; prefer <code>sm.*</code>. Expand for why, and the rule that keeps agents on it.</summary>
+
 Monolith ships its own `MonolithLogicDriver` module that registers a native `logicdriver.*` namespace (scaffold helpers like `logicdriver.scaffold_hello_world_sm`, plus `logicdriver.get_dialogue_flow`, `logicdriver.get_text_graph_content`, and so on). That module auto-enables (`WITH_LOGICDRIVER=1`) whenever Logic Driver is present in the project, which is the same condition under which LD-Assist is installed. So an MCP client typically sees **both** surfaces at once (the `sm_query` and `logicdriver_query` tools).
 
 **Prefer the LD-Assist `sm.*` surface.** It is maintained by Recursoft alongside the plugin, tracks the plugin's editor internals, and is the generic, unopinionated primitive set this repo exists to provide. Treat Monolith's native `logicdriver.*` namespace as a fallback only.
@@ -110,6 +123,8 @@ The two can't be cleanly separated at build time: Monolith's native module keys 
 > For Logic Driver authoring, use the `sm.*` namespace (the `sm_query` tool, backed by LD-Assist). Treat Monolith's native `logicdriver.*` namespace (`logicdriver_query`) as a last-resort fallback, and log a one-line note whenever you fall back to it.
 
 Because both namespaces ride the same Monolith server, a name-level rule like this is what reliably keeps the agent on the LD-Assist path; tool descriptions alone don't disambiguate the overlap.
+
+</details>
 
 ### ToolsetRegistry (UE 5.8+)
 
@@ -153,7 +168,7 @@ A small generic-engine surface (`ld_ue.read_property`, `ld_ue.write_property`, `
 
 The operation descriptions encode layout rules so generated graphs look human-authored:
 
-- Entry sits at `(0, 0)`; main flow runs left-to-right with positive X. First state ~`(200, 0)`, subsequent states `+250` X. State nodes are ~130-150 px wide and the editor draws an Entry-pointer marker ~200 px left of the entry state, so entry states near X=0 are visually eclipsed.
+- Entry sits at `(0, 0)`; main flow runs left-to-right with positive X. First state ~`(200, 0)`, subsequent states `+250` X. State nodes are ~130-150 units wide and the editor draws an Entry-pointer marker ~200 units left of the entry state, so entry states near X=0 are visually eclipsed.
 - Use Y only for deliberate parallel/branching rows; keep ≥150 units between rows so transitions never cross unrelated nodes.
 - Prefer `layout_states(apply=true)` over manual coordinates for greenfield graphs.
 - Conduits, references, link states, and any-states must be wired into the flow in the same authoring step; orphan nodes are a layout failure.
@@ -174,4 +189,4 @@ The `SMAssistTests` module is not enabled in the committed `SMAssist.uplugin`. T
 }
 ```
 
-Keep this edit local. The `SMAssistTests` entry must never be committed to `SMAssist.uplugin`.
+Keep this edit local. Don't commit it to `SMAssist.uplugin`.
