@@ -2,11 +2,13 @@
 
 #include "Utilities/SMAssistUtils.h"
 
+#include "ISMAssetToolsModule.h"
+#include "ISMGraphGeneration.h"
+
 #include "Blueprints/SMBlueprint.h"
 #include "Graph/Nodes/SMGraphNode_Base.h"
 #include "Graph/Nodes/SMGraphNode_StateNodeBase.h"
 #include "Graph/SMGraph.h"
-#include "Utilities/SMBlueprintEditorUtils.h"
 
 #include "Editor.h"
 #include "EdGraphSchema_K2.h"
@@ -80,6 +82,17 @@ USMBlueprint* LD::Assist::Utils::LoadStateMachineBlueprint(const FString& InAsse
 	return SMBlueprint;
 }
 
+USMGraph* LD::Assist::Utils::GetRootStateMachineGraph(USMBlueprint* InBlueprint)
+{
+	if (!InBlueprint)
+	{
+		return nullptr;
+	}
+
+	const TSharedPtr<ISMGraphGeneration> GraphGen = ISMAssetToolsModule::Get().GetGraphGenerationInterface();
+	return GraphGen.IsValid() ? GraphGen->GetRootStateMachineGraph(InBlueprint) : nullptr;
+}
+
 USMGraphNode_Base* LD::Assist::Utils::FindNodeByGuid(USMBlueprint* InBlueprint, const FGuid& InGuid)
 {
 	if (!InBlueprint || !InGuid.IsValid())
@@ -87,7 +100,7 @@ USMGraphNode_Base* LD::Assist::Utils::FindNodeByGuid(USMBlueprint* InBlueprint, 
 		return nullptr;
 	}
 
-	USMGraph* RootGraph = FSMBlueprintEditorUtils::GetRootStateMachineGraph(InBlueprint);
+	USMGraph* RootGraph = LD::Assist::Utils::GetRootStateMachineGraph(InBlueprint);
 	if (!RootGraph)
 	{
 		return nullptr;

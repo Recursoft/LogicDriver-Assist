@@ -8,6 +8,7 @@ class AActor;
 class FProperty;
 class UBlueprint;
 class USMBlueprint;
+class USMGraph;
 class USMGraphNode_Base;
 class USMGraphNode_StateNodeBase;
 class UWorld;
@@ -17,6 +18,9 @@ namespace LD::Assist::Utils
 	UBlueprint* LoadBlueprint(const FString& InAssetPath, FString& OutError);
 
 	USMBlueprint* LoadStateMachineBlueprint(const FString& InAssetPath, FString& OutError);
+
+	/** Resolve the root state machine graph of InBlueprint through the asset-tools graph-generation interface. Returns null when InBlueprint is null or the interface is unavailable. */
+	USMGraph* GetRootStateMachineGraph(USMBlueprint* InBlueprint);
 
 	USMGraphNode_Base* FindNodeByGuid(USMBlueprint* InBlueprint, const FGuid& InGuid);
 

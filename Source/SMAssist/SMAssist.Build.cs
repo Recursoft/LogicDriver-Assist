@@ -13,8 +13,7 @@ public class SMAssist : ModuleRules
 		PrivateIncludePaths.AddRange(
 			new string[]
 			{
-				Path.Combine(ModuleDirectory, "Private"),
-				Path.Combine(PluginDirectory, "../LogicDriver/Source/SMSystemEditor/Private")
+				Path.Combine(ModuleDirectory, "Private")
 			});
 
 		PublicDependencyModuleNames.AddRange(

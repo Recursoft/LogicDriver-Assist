@@ -40,7 +40,6 @@
 #include "SMStateMachineComponent.h"
 #include "SMStateMachineInstance.h"
 #include "SMTransitionInstance.h"
-#include "Utilities/SMBlueprintEditorUtils.h"
 
 #include "Algo/Reverse.h"
 #include "AssetRegistry/AssetRegistryModule.h"
@@ -467,7 +466,7 @@ FSMAssistOperationResult LD::Assist::GetAsset(const TSharedRef<FJsonObject>& InA
 		return FSMAssistOperationResult::MakeError(LoadError);
 	}
 
-	USMGraph* RootGraph = FSMBlueprintEditorUtils::GetRootStateMachineGraph(Blueprint);
+	USMGraph* RootGraph = LD::Assist::Utils::GetRootStateMachineGraph(Blueprint);
 	if (!RootGraph)
 	{
 		return FSMAssistOperationResult::MakeError(TEXT("Blueprint has no root state machine graph."));
@@ -2558,7 +2557,7 @@ namespace LD::Assist::Private
 
 	static TSharedPtr<SGraphEditor> OpenAndFocusRootGraph(FBlueprintEditor* InEditor, USMBlueprint* InBlueprint, FString& OutError)
 	{
-		USMGraph* RootGraph = FSMBlueprintEditorUtils::GetRootStateMachineGraph(InBlueprint);
+		USMGraph* RootGraph = LD::Assist::Utils::GetRootStateMachineGraph(InBlueprint);
 		if (!RootGraph)
 		{
 			OutError = TEXT("Blueprint has no root state machine graph.");
@@ -2759,7 +2758,7 @@ FSMAssistOperationResult LD::Assist::GetGraphView(const TSharedRef<FJsonObject>&
 		return FSMAssistOperationResult::MakeError(TEXT("Graph editor has no panel."));
 	}
 
-	USMGraph* RootGraph = FSMBlueprintEditorUtils::GetRootStateMachineGraph(Blueprint);
+	USMGraph* RootGraph = LD::Assist::Utils::GetRootStateMachineGraph(Blueprint);
 	check(RootGraph);
 
 	// Map data nodes to their slate widgets so we can co-iterate. GetAllChildren includes off-viewport nodes,
@@ -3395,7 +3394,7 @@ FSMAssistOperationResult LD::Assist::LayoutStates(const TSharedRef<FJsonObject>&
 		return FSMAssistOperationResult::MakeError(LoadError);
 	}
 
-	USMGraph* RootGraph = FSMBlueprintEditorUtils::GetRootStateMachineGraph(Blueprint);
+	USMGraph* RootGraph = LD::Assist::Utils::GetRootStateMachineGraph(Blueprint);
 	if (!RootGraph)
 	{
 		return FSMAssistOperationResult::MakeError(TEXT("Blueprint has no root state machine graph."));
