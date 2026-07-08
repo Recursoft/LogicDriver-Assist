@@ -14,6 +14,7 @@
 #include "K2Node_FunctionEntry.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Misc/Char.h"
+#include "Misc/ScopeExit.h"
 #include "UObject/Class.h"
 #include "UObject/SoftObjectPath.h"
 #include "UObject/UnrealType.h"
@@ -181,10 +182,12 @@ namespace LD::Assist::GenericOps::Private
 			{
 				return false;
 			}
+			ON_SCOPE_EXIT { FreeMapKey(MapProp, KeyBuffer); };
 
+			// ValuePtr points into the map's value storage (independent of the key buffer), so it stays valid
+			// after the key is freed on scope exit.
 			FScriptMapHelper Helper(MapProp, PropAddr);
 			uint8* ValuePtr = Helper.FindValueFromHash(KeyBuffer);
-			FreeMapKey(MapProp, KeyBuffer);
 
 			if (!ValuePtr)
 			{
@@ -402,7 +405,8 @@ FSMAssistOperationResult LD::Assist::GenericOps::WriteProperty(const TSharedRef<
 
 	if (!Final.bHasSubscript)
 	{
-		if (Prop->ImportText_Direct(*ValueStr, PropAddr, Owner, PPF_None, nullptr) == nullptr)
+		if (!LD::Assist::Utils::IntegerPropertyTextParses(Prop, ValueStr)
+			|| Prop->ImportText_Direct(*ValueStr, PropAddr, Owner, PPF_None, nullptr) == nullptr)
 		{
 			return FSMAssistOperationResult::MakeError(
 				FString::Printf(TEXT("Could not parse 'value' as %s."), *Prop->GetCPPType()));
@@ -425,7 +429,8 @@ FSMAssistOperationResult LD::Assist::GenericOps::WriteProperty(const TSharedRef<
 		}
 
 		LeafType = ArrayProp->Inner->GetCPPType();
-		if (ArrayProp->Inner->ImportText_Direct(*ValueStr, Helper.GetRawPtr(Index), Owner, PPF_None, nullptr) == nullptr)
+		if (!LD::Assist::Utils::IntegerPropertyTextParses(ArrayProp->Inner, ValueStr)
+			|| ArrayProp->Inner->ImportText_Direct(*ValueStr, Helper.GetRawPtr(Index), Owner, PPF_None, nullptr) == nullptr)
 		{
 			return FSMAssistOperationResult::MakeError(
 				FString::Printf(TEXT("Could not parse 'value' as %s."), *LeafType));
@@ -439,6 +444,7 @@ FSMAssistOperationResult LD::Assist::GenericOps::WriteProperty(const TSharedRef<
 		{
 			return FSMAssistOperationResult::MakeError(KeyError);
 		}
+		ON_SCOPE_EXIT { FreeMapKey(MapProp, KeyBuffer); };
 
 		FScriptMapHelper Helper(MapProp, PropAddr);
 		int32 PairIndex = Helper.FindMapPairIndexFromHash(KeyBuffer);
@@ -450,7 +456,9 @@ FSMAssistOperationResult LD::Assist::GenericOps::WriteProperty(const TSharedRef<
 		}
 
 		LeafType = MapProp->ValueProp->GetCPPType();
-		const bool bValueParsed = MapProp->ValueProp->ImportText_Direct(*ValueStr, Helper.GetValuePtr(PairIndex), Owner, PPF_None, nullptr) != nullptr;
+		const bool bValueParsed =
+			LD::Assist::Utils::IntegerPropertyTextParses(MapProp->ValueProp, ValueStr)
+			&& MapProp->ValueProp->ImportText_Direct(*ValueStr, Helper.GetValuePtr(PairIndex), Owner, PPF_None, nullptr) != nullptr;
 		if (bAdded)
 		{
 			// Keep the op atomic: a freshly-added pair whose value failed to parse must not linger.
@@ -460,7 +468,6 @@ FSMAssistOperationResult LD::Assist::GenericOps::WriteProperty(const TSharedRef<
 			}
 			Helper.Rehash();
 		}
-		FreeMapKey(MapProp, KeyBuffer);
 
 		if (!bValueParsed)
 		{

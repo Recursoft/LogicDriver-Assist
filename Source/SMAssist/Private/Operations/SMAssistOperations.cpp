@@ -53,6 +53,7 @@
 #include "Components/ActorComponent.h"
 #include "EdGraphNode_Comment.h"
 #include "EdGraph/EdGraph.h"
+#include "EdGraph/EdGraphNode.h"
 #include "EdGraph/EdGraphPin.h"
 #include "EdGraph/EdGraphSchema.h"
 #include "EdGraphSchema_K2.h"
@@ -92,6 +93,50 @@ namespace LD::Assist::Private
 			return nullptr;
 		}
 		return GraphGen.Get();
+	}
+
+	// The graph-node property write path goes through raw reflection (PropertyUtils::SetPropertyValue), which
+	// can silently corrupt identity or structural state. Refuse the node's identity guid, object-typed fields
+	// (e.g. BoundGraph), and containers (e.g. GraphPropertyGraphs, StateStack); scalar positional, comment,
+	// and similar value fields stay writable.
+	static bool IsWritableGraphNodeProperty(const FProperty* InProperty)
+	{
+		if (!InProperty)
+		{
+			return false;
+		}
+		if (InProperty->GetFName() == GET_MEMBER_NAME_CHECKED(UEdGraphNode, NodeGuid))
+		{
+			return false;
+		}
+		if (CastField<FObjectPropertyBase>(InProperty))
+		{
+			return false;
+		}
+		return CastField<FArrayProperty>(InProperty) == nullptr
+			&& CastField<FMapProperty>(InProperty) == nullptr
+			&& CastField<FSetProperty>(InProperty) == nullptr;
+	}
+
+	// SetPropertyValue returns void and swallows import failures, so a malformed value (e.g. "banana" for an
+	// int position) silently no-ops while the op still reports success. Confirm the value parses first,
+	// mirroring the writer's parser chain (PropertyValueFromString_Direct, then generic ImportText).
+	static bool GraphNodePropertyValueParses(const FProperty* InProperty, const FString& InValue, UObject* InOwner)
+	{
+		// The engine's integer text import can accept garbage depending on process state; see
+		// LD::Assist::Utils::IntegerPropertyTextParses.
+		if (!LD::Assist::Utils::IntegerPropertyTextParses(InProperty, InValue))
+		{
+			return false;
+		}
+		void* Temp = FMemory::Malloc(InProperty->GetSize(), InProperty->GetMinAlignment());
+		InProperty->InitializeValue(Temp);
+		const bool bParsed =
+			FBlueprintEditorUtils::PropertyValueFromString_Direct(InProperty, InValue, static_cast<uint8*>(Temp), InOwner)
+			|| InProperty->ImportText_Direct(*InValue, Temp, InOwner, PPF_SerializedAsImportText, nullptr) != nullptr;
+		InProperty->DestroyValue(Temp);
+		FMemory::Free(Temp);
+		return bParsed;
 	}
 }
 
@@ -451,7 +496,7 @@ FSMAssistOperationResult LD::Assist::GetAsset(const TSharedRef<FJsonObject>& InA
 
 	for (UEdGraphNode* Node : RootGraph->Nodes)
 	{
-		if (Node->IsA<USMGraphNode_StateMachineEntryNode>())
+		if (!Node || Node->IsA<USMGraphNode_StateMachineEntryNode>())
 		{
 			continue;
 		}
@@ -770,6 +815,12 @@ FSMAssistOperationResult LD::Assist::SetNodeProperty(const TSharedRef<FJsonObjec
 		{
 			GraphNodeProperty = nullptr;
 		}
+		if (GraphNodeProperty && !LD::Assist::Private::IsWritableGraphNodeProperty(GraphNodeProperty))
+		{
+			return FSMAssistOperationResult::MakeError(FString::Printf(
+				TEXT("'%s' resolves to an internal graph-node field (node identity, an object reference, or a structural container) and cannot be written via set_node_property."),
+				*PropertyName));
+		}
 		if (GraphNodeProperty)
 		{
 			if (!NormalizedAction.IsEmpty() && NormalizedAction != TEXT("set"))
@@ -794,6 +845,32 @@ FSMAssistOperationResult LD::Assist::SetNodeProperty(const TSharedRef<FJsonObjec
 			{
 				return FSMAssistOperationResult::MakeError(
 					TEXT("'array_index' cannot be combined with an array 'value'; elements are written starting at index 0."));
+			}
+
+			if (StartIndex < 0)
+			{
+				return FSMAssistOperationResult::MakeError(TEXT("'array_index' must be non-negative."));
+			}
+
+			// With containers rejected above, the index addresses a static (C-array) slot; an out-of-range value
+			// asserts inside ContainerPtrToValuePtr. Graph-node properties are almost always scalar (ArrayDim 1),
+			// so this rejects e.g. array_index 1 on NodeComment before it can crash the editor.
+			const int32 HighestWriteIndex = bValueIsArray ? (ValueStrings.Num() - 1) : StartIndex;
+			if (HighestWriteIndex >= GraphNodeProperty->ArrayDim)
+			{
+				return FSMAssistOperationResult::MakeError(FString::Printf(
+					TEXT("Index %d is out of range for graph-node property '%s' (fixed size %d); structural array actions are supported on node-template properties only."),
+					HighestWriteIndex, *PropertyName, GraphNodeProperty->ArrayDim));
+			}
+
+			for (const FString& CandidateValue : ValueStrings)
+			{
+				if (!LD::Assist::Private::GraphNodePropertyValueParses(GraphNodeProperty, CandidateValue, Node))
+				{
+					return FSMAssistOperationResult::MakeError(FString::Printf(
+						TEXT("Could not parse value '%s' as %s for graph-node property '%s'."),
+						*CandidateValue, *GraphNodeProperty->GetCPPType(), *PropertyName));
+				}
 			}
 
 			Node->Modify();
@@ -2918,14 +2995,24 @@ FSMAssistOperationResult LD::Assist::CaptureGraphView(const TSharedRef<FJsonObje
 		return FSMAssistOperationResult::MakeError(TEXT("PNG encoding produced zero bytes."));
 	}
 
+	if (!Prefix.IsEmpty() && !LD::Assist::Utils::IsSafeFileStem(Prefix))
+	{
+		return FSMAssistOperationResult::MakeError(
+			TEXT("'prefix' must be a bare filename with no path separators or '..'."));
+	}
+
 	if (Prefix.IsEmpty())
 	{
 		Prefix = FString::Printf(TEXT("%s_%s"), *Blueprint->GetName(), *FDateTime::Now().ToString(TEXT("%Y-%m-%d_%H-%M-%S")));
 	}
 
 	const FString FileName = Prefix + TEXT(".png");
-	const FString TargetDir = FPaths::ConvertRelativePathToFull(
-		FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Screenshots"), OutputSubdir));
+	FString TargetDir;
+	FString PathError;
+	if (!LD::Assist::Utils::ResolveContainedScreenshotsDir(OutputSubdir, TargetDir, PathError))
+	{
+		return FSMAssistOperationResult::MakeError(PathError);
+	}
 	IFileManager::Get().MakeDirectory(*TargetDir, /*Tree=*/true);
 	const FString TargetPath = FPaths::Combine(TargetDir, FileName);
 
@@ -2958,8 +3045,12 @@ FSMAssistOperationResult LD::Assist::ClearScreenshots(const TSharedRef<FJsonObje
 	bool bDryRun = false;
 	InArgs->TryGetBoolField(Args::DryRun, bDryRun);
 
-	const FString TargetDir = FPaths::ConvertRelativePathToFull(
-		FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Screenshots"), OutputSubdir));
+	FString TargetDir;
+	FString PathError;
+	if (!LD::Assist::Utils::ResolveContainedScreenshotsDir(OutputSubdir, TargetDir, PathError))
+	{
+		return FSMAssistOperationResult::MakeError(PathError);
+	}
 
 	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
 	Payload->SetStringField(Args::Directory, TargetDir);
@@ -4359,6 +4450,19 @@ FSMAssistOperationResult LD::Assist::ConfigureSMComponentOnActor(const TSharedRe
 				TargetNode->ComponentTemplate ? *TargetNode->ComponentTemplate->GetClass()->GetName() : TEXT("null")));
 	}
 
+	// Parse extra_config_json before any mutation so a malformed payload can't leave the component template
+	// half-reconfigured; the promoted-field writes below are applied in place with no rollback.
+	FString ExtraConfigJsonStr;
+	TSharedPtr<FJsonObject> ExtraObj;
+	if (InArgs->TryGetStringField(Args::ExtraConfigJson, ExtraConfigJsonStr) && !ExtraConfigJsonStr.IsEmpty())
+	{
+		TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(ExtraConfigJsonStr);
+		if (!FJsonSerializer::Deserialize(Reader, ExtraObj) || !ExtraObj.IsValid())
+		{
+			return FSMAssistOperationResult::MakeError(TEXT("'extra_config_json' is not valid JSON."));
+		}
+	}
+
 	ActorBP->Modify();
 	Template->Modify();
 
@@ -4421,15 +4525,8 @@ FSMAssistOperationResult LD::Assist::ConfigureSMComponentOnActor(const TSharedRe
 	ApplyEnum(Args::NetworkStateExecution, Template->NetworkStateExecution, TEXT("NetworkStateExecution"));
 	ApplyEnum(Args::NetworkTransitionEnteredConfiguration, Template->NetworkTransitionEnteredConfiguration, TEXT("NetworkTransitionEnteredConfiguration"));
 
-	FString ExtraConfigJsonStr;
-	if (InArgs->TryGetStringField(Args::ExtraConfigJson, ExtraConfigJsonStr) && !ExtraConfigJsonStr.IsEmpty())
+	if (ExtraObj.IsValid())
 	{
-		TSharedPtr<FJsonObject> ExtraObj;
-		TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(ExtraConfigJsonStr);
-		if (!FJsonSerializer::Deserialize(Reader, ExtraObj) || !ExtraObj.IsValid())
-		{
-			return FSMAssistOperationResult::MakeError(TEXT("'extra_config_json' is not valid JSON."));
-		}
 		UClass* TemplateClass = Template->GetClass();
 		for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : ExtraObj->Values)
 		{
@@ -4874,6 +4971,12 @@ FSMAssistOperationResult LD::Assist::ConfigureTransitionEvent(const TSharedRef<F
 	}
 
 	const bool bApplied = GraphGen->ConfigureTransitionEvent(TransitionEdge, ConfigureArgs);
+	if (!bApplied)
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(
+			TEXT("Failed to configure the transition event on transition '%s' (verify delegate_owner_instance / delegate_owner_class / delegate_property_name)."),
+			*TransitionEdge->NodeGuid.ToString()));
+	}
 
 	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
 	Payload->SetStringField(Args::TransitionGuid, TransitionEdge->NodeGuid.ToString());

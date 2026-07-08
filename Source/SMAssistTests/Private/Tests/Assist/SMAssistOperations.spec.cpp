@@ -259,6 +259,44 @@ BEGIN_DEFINE_SPEC(FAssistOperationsSpec, "LogicDriver.Assist",
 		return FString();
 	}
 
+	TOptional<double> GetRootStatePositionX(const FString& InAssetPath, const FString& InStateGuid)
+	{
+		USMAssistSubsystem* Subsystem = GetSubsystem();
+		if (!Subsystem)
+		{
+			return TOptional<double>();
+		}
+
+		const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+		Args->SetStringField(TEXT("asset_path"), InAssetPath);
+		const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+			FName(TEXT("sm.get_asset")), Args);
+		if (!Result.bSuccess || !Result.Payload.IsValid())
+		{
+			return TOptional<double>();
+		}
+
+		const TArray<TSharedPtr<FJsonValue>>* States = nullptr;
+		if (Result.Payload->TryGetArrayField(TEXT("states"), States) && States)
+		{
+			for (const TSharedPtr<FJsonValue>& Value : *States)
+			{
+				const TSharedPtr<FJsonObject>* Entry = nullptr;
+				if (Value->TryGetObject(Entry) && Entry->IsValid())
+				{
+					FString Guid;
+					double PositionX = 0.0;
+					if ((*Entry)->TryGetStringField(TEXT("state_guid"), Guid) && Guid == InStateGuid
+						&& (*Entry)->TryGetNumberField(TEXT("position_x"), PositionX))
+					{
+						return PositionX;
+					}
+				}
+			}
+		}
+		return TOptional<double>();
+	}
+
 	FString AddConduitToBlueprint(const FString& InAssetPath, const FString& InConduitName)
 	{
 		USMAssistSubsystem* Subsystem = GetSubsystem();
@@ -1288,6 +1326,247 @@ void FAssistOperationsSpec::Define()
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error mentions array_index",
 				Result.ErrorMessage.Contains(TEXT("array_index")));
+		});
+
+		It("Rejects an out-of-range array_index on a scalar graph-node property", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString StateGuid = AddStateToBlueprint(AssetPath, TEXT("Solo"));
+			if (!TestFalse("State guid populated", StateGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("node_guid"), StateGuid);
+			Args->SetStringField(TEXT("property_name"), TEXT("NodeComment"));
+			Args->SetStringField(TEXT("value"), TEXT("x"));
+			Args->SetNumberField(TEXT("array_index"), 2);
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.set_node_property")), Args);
+			TestFalse("Result is failure rather than a crash", Result.bSuccess);
+			TestTrue("Error reports the out-of-range index",
+				Result.ErrorMessage.Contains(TEXT("out of range")));
+		});
+
+		It("Rejects writing the node's internal identity guid", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString StateGuid = AddStateToBlueprint(AssetPath, TEXT("Solo"));
+			if (!TestFalse("State guid populated", StateGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("node_guid"), StateGuid);
+			Args->SetStringField(TEXT("property_name"), TEXT("NodeGuid"));
+			Args->SetStringField(TEXT("value"), FGuid::NewGuid().ToString());
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.set_node_property")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+			TestTrue("Error names the internal field",
+				Result.ErrorMessage.Contains(TEXT("internal graph-node field")));
+		});
+
+		It("Rejects writing the node's structural bound-graph reference", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString StateGuid = AddStateToBlueprint(AssetPath, TEXT("Solo"));
+			if (!TestFalse("State guid populated", StateGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("node_guid"), StateGuid);
+			Args->SetStringField(TEXT("property_name"), TEXT("BoundGraph"));
+			Args->SetStringField(TEXT("value"), TEXT("None"));
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.set_node_property")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+			TestTrue("Error names the internal field",
+				Result.ErrorMessage.Contains(TEXT("internal graph-node field")));
+		});
+
+		It("Rejects writing a structural container graph-node property", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString StateGuid = AddStateToBlueprint(AssetPath, TEXT("Solo"));
+			if (!TestFalse("State guid populated", StateGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("node_guid"), StateGuid);
+			Args->SetStringField(TEXT("property_name"), TEXT("GraphPropertyGraphs"));
+			Args->SetStringField(TEXT("value"), TEXT("()"));
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.set_node_property")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+			TestTrue("Error names the internal field",
+				Result.ErrorMessage.Contains(TEXT("internal graph-node field")));
+		});
+
+		It("Rejects writing a dynamic-array graph-node property", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString StateGuid = AddStateToBlueprint(AssetPath, TEXT("Solo"));
+			if (!TestFalse("State guid populated", StateGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("node_guid"), StateGuid);
+			Args->SetStringField(TEXT("property_name"), TEXT("CollectedLogs"));
+			Args->SetStringField(TEXT("value"), TEXT("()"));
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.set_node_property")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+			TestTrue("Error names the internal field",
+				Result.ErrorMessage.Contains(TEXT("internal graph-node field")));
+		});
+
+		It("Rejects an unparseable value on a numeric graph-node property", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString StateGuid = AddStateToBlueprint(AssetPath, TEXT("Solo"));
+			if (!TestFalse("State guid populated", StateGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("node_guid"), StateGuid);
+			Args->SetStringField(TEXT("property_name"), TEXT("NodePosX"));
+			Args->SetStringField(TEXT("value"), TEXT("banana"));
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.set_node_property")), Args);
+			TestFalse("Result is failure rather than a silent no-op success", Result.bSuccess);
+			TestTrue("Error reports the parse failure",
+				Result.ErrorMessage.Contains(TEXT("Could not parse")));
+		});
+
+		It("Writes a valid numeric graph-node property", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString StateGuid = AddStateToBlueprint(AssetPath, TEXT("Solo"));
+			if (!TestFalse("State guid populated", StateGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("node_guid"), StateGuid);
+			Args->SetStringField(TEXT("property_name"), TEXT("NodePosX"));
+			Args->SetStringField(TEXT("value"), TEXT("128"));
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.set_node_property")), Args);
+			TestTrue("Result is success", Result.bSuccess);
+
+			const TOptional<double> PositionX = GetRootStatePositionX(AssetPath, StateGuid);
+			if (TestTrue("Position is readable after the write", PositionX.IsSet()))
+			{
+				TestEqual("Written position is read back", static_cast<int32>(PositionX.GetValue()), 128);
+			}
+		});
+
+		It("Writes a hex value to a numeric graph-node property", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString StateGuid = AddStateToBlueprint(AssetPath, TEXT("Solo"));
+			if (!TestFalse("State guid populated", StateGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("node_guid"), StateGuid);
+			Args->SetStringField(TEXT("property_name"), TEXT("NodePosX"));
+			Args->SetStringField(TEXT("value"), TEXT("0x10"));
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.set_node_property")), Args);
+			TestTrue("Result is success", Result.bSuccess);
+
+			const TOptional<double> PositionX = GetRootStatePositionX(AssetPath, StateGuid);
+			if (TestTrue("Position is readable after the write", PositionX.IsSet()))
+			{
+				TestEqual("Hex value is read back in decimal", static_cast<int32>(PositionX.GetValue()), 16);
+			}
 		});
 
 		It("Supports 'array_action=remove' at the requested index", [this]()
@@ -4892,6 +5171,28 @@ void FAssistOperationsSpec::Define()
 				FName(TEXT("sm.convert_to_reference")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error names parent_class", Result.ErrorMessage.Contains(TEXT("parent_class")));
+		});
+	});
+
+	Describe("sm.clear_screenshots", [this]()
+	{
+		It("Rejects an output_subdir that escapes the screenshots directory", [this]()
+		{
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			if (!TestNotNull("Subsystem available", Subsystem))
+			{
+				return;
+			}
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("output_subdir"), TEXT("../../../../EscapeTarget"));
+			Args->SetBoolField(TEXT("dry_run"), true);
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.clear_screenshots")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+			TestTrue("Error reports the containment rejection",
+				Result.ErrorMessage.Contains(TEXT("outside the screenshots directory")));
 		});
 	});
 }

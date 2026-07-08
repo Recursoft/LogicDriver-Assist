@@ -16,9 +16,11 @@
 #include "EngineUtils.h"
 #include "GameFramework/Actor.h"
 #include "Misc/PackageName.h"
+#include "Misc/Paths.h"
 #include "UObject/Class.h"
 #include "UObject/SoftObjectPath.h"
 #include "UObject/UObjectGlobals.h"
+#include "UObject/UnrealType.h"
 
 UBlueprint* LD::Assist::Utils::LoadBlueprint(const FString& InAssetPath, FString& OutError)
 {
@@ -294,4 +296,85 @@ bool LD::Assist::Utils::ResolveTerminalType(const FString& InTypeStr, FName& Out
 	}
 
 	return false;
+}
+
+bool LD::Assist::Utils::ResolveContainedScreenshotsDir(const FString& InSubdir, FString& OutDir, FString& OutError)
+{
+	const FString Root = FPaths::ConvertRelativePathToFull(
+		FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Screenshots")));
+
+	// ConvertRelativePathToFull collapses any '..' segments, so a comparison against the normalized root
+	// catches every escape (parent traversal or an absolute output_subdir) after normalization.
+	const FString Resolved = FPaths::ConvertRelativePathToFull(FPaths::Combine(Root, InSubdir));
+
+	FString NormRoot = Root;
+	FString NormResolved = Resolved;
+	FPaths::NormalizeDirectoryName(NormRoot);
+	FPaths::NormalizeDirectoryName(NormResolved);
+
+	if (!NormResolved.Equals(NormRoot, ESearchCase::IgnoreCase)
+		&& !NormResolved.StartsWith(NormRoot + TEXT("/"), ESearchCase::IgnoreCase))
+	{
+		OutError = FString::Printf(
+			TEXT("'output_subdir' ('%s') resolves outside the screenshots directory and was rejected."), *InSubdir);
+		return false;
+	}
+
+	OutDir = NormResolved;
+	return true;
+}
+
+bool LD::Assist::Utils::IsSafeFileStem(const FString& InStem)
+{
+	if (InStem.IsEmpty())
+	{
+		return false;
+	}
+	return !InStem.Contains(TEXT("/")) && !InStem.Contains(TEXT("\\")) && !InStem.Contains(TEXT(".."));
+}
+
+bool LD::Assist::Utils::IntegerPropertyTextParses(const FProperty* InProperty, const FString& InValue)
+{
+	const FNumericProperty* NumericProp = CastField<FNumericProperty>(InProperty);
+	if (!NumericProp || NumericProp->IsFloatingPoint() || NumericProp->GetIntPropertyEnum() != nullptr)
+	{
+		return true;
+	}
+
+	const FString Trimmed = InValue.TrimStartAndEnd();
+	const TCHAR* Ch = *Trimmed;
+
+	if (Trimmed.StartsWith(TEXT("0x"), ESearchCase::IgnoreCase))
+	{
+		Ch += 2;
+		if (*Ch == TCHAR('\0'))
+		{
+			return false;
+		}
+		for (; *Ch != TCHAR('\0'); ++Ch)
+		{
+			if (!FChar::IsHexDigit(*Ch))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	if (*Ch == TCHAR('+') || *Ch == TCHAR('-'))
+	{
+		++Ch;
+	}
+	if (*Ch == TCHAR('\0'))
+	{
+		return false;
+	}
+	for (; *Ch != TCHAR('\0'); ++Ch)
+	{
+		if (!FChar::IsDigit(*Ch))
+		{
+			return false;
+		}
+	}
+	return true;
 }
