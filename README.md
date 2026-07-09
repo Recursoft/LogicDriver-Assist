@@ -49,9 +49,9 @@ A single editor subsystem, `USMAssistSubsystem`, owns a registry of `FSMAssistOp
 | `SMAssist` | Editor | Default | Core subsystem, operation registry, all `sm.*` and `ld_ue.*` handlers. Also registers the `LDAssist.Exec` / `LDAssist.List` console commands. |
 | `SMAssistMonolithBridge` | Editor (Optional) | PostEngineInit | Mirrors every registered operation into the [Monolith](https://github.com/Recursoft/monolith) MCP tool registry, keyed by `namespace.action`. No-op stub when Monolith is absent. |
 | `SMAssistToolset` | Editor (Optional) | PostEngineInit | Exposes operations as `UToolsetDefinition` `AICallable` UFUNCTIONs through the engine-bundled experimental `ToolsetRegistry` (UE 5.8+). No-op shell when ToolsetRegistry is absent. |
-| `SMAssistTests` | UncookedOnly | Default | Automation specs covering the operation handlers and the Monolith bridge. Enabled locally only (see [Tests](#tests)). |
+| `SMAssistTests` | UncookedOnly | Default | Automation specs covering the operation handlers and an end-to-end authoring scenario. Enabled locally only (see [Tests](#tests)). |
 
-Both bridge modules are independent transports over the same registry, so the same `SMAssist` behavior tests cover both wire paths.
+Both bridge modules are independent transports over the same registry, so the shared operation-handler tests cover the behavior of both; each transport has its own thin wiring spec.
 
 ### Dependencies
 
@@ -73,8 +73,6 @@ This plugin is a private editor plugin, not a Marketplace install. It is dropped
    - `Plugins/LogicDriver/` — Logic Driver Pro (`SMSystem`).
    - `Plugins/LogicDriver-Assist/` — this plugin.
    - `Plugins/Monolith/` — optional, only if you want the MCP bridge.
-
-   The two plugins are independent checkouts; neither needs to track the host project's branch.
 
 2. **Enable the plugin.** Add `SMAssist` to the host `.uproject` plugin list (or rely on the dependency chain). The `.uplugin` already enables `SMSystem` and optionally `Monolith`, `ToolsetRegistry`, and `ModelContextProtocol`.
 
@@ -176,7 +174,7 @@ The operation descriptions encode layout rules so generated graphs look human-au
 
 ## Tests
 
-Automation specs live in `Source/SMAssistTests/` (operation handlers, an end-to-end authoring scenario, local-graph discovery) and `Source/SMAssistMonolithBridge/.../Tests` (bridge wiring). Run them through the host project's headless automation runner filtered to the relevant group.
+Automation specs live in `Source/SMAssistTests/` (operation handlers, an end-to-end authoring scenario, local-graph discovery), `Source/SMAssistMonolithBridge/.../Tests` (Monolith bridge wiring), and `Source/SMAssistToolset/.../Tests` (ToolsetRegistry wiring). Run them through the host project's headless automation runner filtered to the relevant group.
 
 The `SMAssistTests` module is not enabled in the committed `SMAssist.uplugin`. To run the specs, add its module entry to your local `.uplugin` and rebuild:
 
