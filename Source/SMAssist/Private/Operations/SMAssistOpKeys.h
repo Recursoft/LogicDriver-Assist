@@ -38,6 +38,7 @@ namespace LD::Assist::Ops
 	inline constexpr const TCHAR* SpawnLocalGraphReadNode = TEXT("sm.spawn_local_graph_read_node");
 	inline constexpr const TCHAR* ConfigureReference = TEXT("sm.configure_reference");
 	inline constexpr const TCHAR* SpawnLocalGraphWriteNode = TEXT("sm.spawn_local_graph_write_node");
+	inline constexpr const TCHAR* SpawnLocalGraphEventNode = TEXT("sm.spawn_local_graph_event_node");
 	inline constexpr const TCHAR* ConfigureTransitionEvent = TEXT("sm.configure_transition_event");
 	inline constexpr const TCHAR* FindNodeTypes = TEXT("sm.find_node_types");
 	inline constexpr const TCHAR* AddNodeVariable = TEXT("sm.add_node_variable");
@@ -216,6 +217,7 @@ namespace LD::Assist::Args
 	inline constexpr const TCHAR* AppliedFields = TEXT("applied_fields");
 	inline constexpr const TCHAR* ReadKinds = TEXT("read_kinds");
 	inline constexpr const TCHAR* WriteKinds = TEXT("write_kinds");
+	inline constexpr const TCHAR* EventKinds = TEXT("event_kinds");
 	inline constexpr const TCHAR* EngineNodesHint = TEXT("engine_nodes_hint");
 	inline constexpr const TCHAR* SpawnOp = TEXT("spawn_op");
 	inline constexpr const TCHAR* SpawnType = TEXT("spawn_type");

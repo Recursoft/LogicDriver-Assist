@@ -1016,6 +1016,42 @@ public:
 		bool bDefaultValue = false);
 
 	/**
+	 * Spawns a Logic Driver lifecycle event-entry K2 node into a state's local graph or a transition's /
+	 * conduit's bound graph. These are execution entry points that fire at a node lifecycle moment; wire
+	 * caller logic from the node's output exec pin with BlueprintTools.connect_pins. Equivalent to the
+	 * editor's right-click "Add Event On ..." menu and to what a node class auto-adds when assigned. The
+	 * engine's create_node action menu does not expose these; this endpoint routes through the LD core
+	 * spawner so they are reachable to MCP authoring.
+	 *
+	 * Compatibility, by kind:
+	 *  - OnInitialized, OnShutdown: state, transition, and conduit graphs.
+	 *  - OnStateUpdate (exposes a DeltaSeconds output pin), OnStateEnd: state graphs only.
+	 *  - OnTransitionEntered: transition and conduit graphs. Singleton (fails if already present).
+	 *  - OnTransitionPreEvaluate, OnTransitionPostEvaluate: transition graphs only. Singleton.
+	 *  - OnRootStateMachineStart, OnRootStateMachineStop: state, transition, and conduit graphs. Singleton.
+	 *
+	 * OnStateBegin is not spawnable: its entry node is the always-present container of every state graph.
+	 *
+	 * @param Blueprint The state-machine blueprint. Required.
+	 * @param NodeGuid Guid of the state, transition, or conduit whose bound graph receives the node.
+	 *        Required.
+	 * @param NodeType Event-entry type. Accepts PascalCase ("OnInitialized") or snake_case
+	 *        ("on_initialized"). Full list: OnInitialized, OnShutdown, OnStateUpdate, OnStateEnd,
+	 *        OnTransitionEntered, OnTransitionPreEvaluate, OnTransitionPostEvaluate,
+	 *        OnRootStateMachineStart, OnRootStateMachineStop. Required.
+	 * @param PositionX Local-graph X. Defaults to 0.
+	 * @param PositionY Local-graph Y. Defaults to 0.
+	 * @return JSON: { node_guid, type, target_graph_path }
+	 */
+	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
+	static FString SpawnLocalGraphEventNode(
+		USMBlueprint* Blueprint,
+		const FString& NodeGuid,
+		const FString& NodeType,
+		double PositionX = 0.0,
+		double PositionY = 0.0);
+
+	/**
 	 * Reads the local (bound) graph of any Logic Driver SM graph node: a state's OnStateBegin/Update/End
 	 * graph (a state shares one bound graph across those events), a transition's CanEnterTransition graph,
 	 * or a conduit's graph. This is the primitive that makes bound-graph K2 authoring reachable: Logic

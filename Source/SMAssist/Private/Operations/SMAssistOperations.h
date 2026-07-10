@@ -74,6 +74,8 @@ namespace LD::Assist
 
 	FSMAssistOperationResult SpawnLocalGraphWriteNode(const TSharedRef<FJsonObject>& InArgs);
 
+	FSMAssistOperationResult SpawnLocalGraphEventNode(const TSharedRef<FJsonObject>& InArgs);
+
 	FSMAssistOperationResult ConfigureTransitionEvent(const TSharedRef<FJsonObject>& InArgs);
 
 	FSMAssistOperationResult FindNodeTypes(const TSharedRef<FJsonObject>& InArgs);

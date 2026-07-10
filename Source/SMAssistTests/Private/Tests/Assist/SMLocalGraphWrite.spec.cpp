@@ -618,6 +618,85 @@ void FSMLocalGraphWriteSpec::Define()
 				  { TEXT("from_node_id"), Branch1 }, { TEXT("from_pin"), TEXT("then") }, { TEXT("to_node_id"), Branch2 }, { TEXT("to_pin"), TEXT("Condition") } }));
 		TestFalse(TEXT("incompatible connection rejected"), C.bSuccess);
 	});
+
+	It("spawns an OnInitialized event node into a transition graph and compiles clean", [this]()
+	{
+		const FString Asset = CreateBlueprint();
+		const FString From = AddState(Asset, TEXT("From"));
+		const FString To = AddState(Asset, TEXT("To"));
+		Run(TEXT("sm.set_initial_state"), Obj({ { TEXT("asset_path"), Asset }, { TEXT("state_guid"), From } }));
+		const FString Trans = AddTransition(Asset, From, To);
+		if (!TestTrue(TEXT("transition created"), !Trans.IsEmpty()))
+		{
+			return;
+		}
+
+		const FSMAssistOperationResult Ev = Run(TEXT("sm.spawn_local_graph_event_node"),
+			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans }, { TEXT("type"), TEXT("OnInitialized") } }));
+		if (!TestTrue(TEXT("event node spawned"), Ev.bSuccess))
+		{
+			return;
+		}
+		TestFalse(TEXT("event node returns id"), Str(Ev, TEXT("id")).IsEmpty());
+		TestFalse(TEXT("event node returns node_guid"), Str(Ev, TEXT("node_guid")).IsEmpty());
+
+		const FSMAssistOperationResult Graph = Run(TEXT("sm.get_local_graph"), Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans } }));
+		FString Id;
+		FString Ignore;
+		TestTrue(TEXT("OnTransitionInitialized node present in graph"),
+			FindNodeByClass(Graph.Payload, TEXT("TransitionInitialized"), Id, Ignore));
+
+		const FSMAssistOperationResult Compile = Run(TEXT("sm.compile"), Obj({ { TEXT("asset_path"), Asset } }));
+		if (!TestTrue(TEXT("compile success"), Compile.bSuccess))
+		{
+			return;
+		}
+		bool bHasErrors = true;
+		Compile.Payload->TryGetBoolField(TEXT("has_errors"), bHasErrors);
+		TestFalse(TEXT("event node compiles with no errors"), bHasErrors);
+	});
+
+	It("spawns an OnStateUpdate event node into a state graph via snake_case", [this]()
+	{
+		const FString Asset = CreateBlueprint();
+		const FString State = AddState(Asset, TEXT("Solo"));
+		if (!TestTrue(TEXT("state created"), !State.IsEmpty()))
+		{
+			return;
+		}
+
+		const FSMAssistOperationResult Ev = Run(TEXT("sm.spawn_local_graph_event_node"),
+			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), State }, { TEXT("type"), TEXT("on_state_update") } }));
+		TestTrue(TEXT("OnStateUpdate spawned in state graph"), Ev.bSuccess);
+		TestFalse(TEXT("event node returns id"), Str(Ev, TEXT("id")).IsEmpty());
+	});
+
+	It("spawns an OnRootStateMachineStart event node into a state graph via snake_case", [this]()
+	{
+		const FString Asset = CreateBlueprint();
+		const FString State = AddState(Asset, TEXT("Solo"));
+		if (!TestTrue(TEXT("state created"), !State.IsEmpty()))
+		{
+			return;
+		}
+
+		const FSMAssistOperationResult Ev = Run(TEXT("sm.spawn_local_graph_event_node"),
+			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), State }, { TEXT("type"), TEXT("on_root_state_machine_start") } }));
+		TestTrue(TEXT("OnRootStateMachineStart spawned in state graph"), Ev.bSuccess);
+		TestFalse(TEXT("event node returns id"), Str(Ev, TEXT("id")).IsEmpty());
+	});
+
+	It("rejects an unknown event type", [this]()
+	{
+		const FString Asset = CreateBlueprint();
+		const FString From = AddState(Asset, TEXT("From"));
+		const FString To = AddState(Asset, TEXT("To"));
+		const FString Trans = AddTransition(Asset, From, To);
+
+		const FSMAssistOperationResult Ev = Run(TEXT("sm.spawn_local_graph_event_node"),
+			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans }, { TEXT("type"), TEXT("NotARealEvent") } }));
+		TestFalse(TEXT("unknown event type fails"), Ev.bSuccess);
+	});
 }
 
 #endif

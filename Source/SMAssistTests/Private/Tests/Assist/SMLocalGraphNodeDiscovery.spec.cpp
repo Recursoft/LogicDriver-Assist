@@ -188,6 +188,12 @@ void FSMFindNodeTypesSpec::Define()
 		TestFalse(TEXT("GetTransitionInformation absent in state graph"), PayloadContainsKind(Result.Payload, TEXT("read_kinds"), TEXT("GetTransitionInformation")));
 
 		TestEqual(TEXT("no write kinds in state graph"), PayloadKindCount(Result.Payload, TEXT("write_kinds")), 0);
+
+		TestTrue(TEXT("OnStateUpdate event present"), PayloadContainsKind(Result.Payload, TEXT("event_kinds"), TEXT("OnStateUpdate")));
+		TestTrue(TEXT("OnStateEnd event present"), PayloadContainsKind(Result.Payload, TEXT("event_kinds"), TEXT("OnStateEnd")));
+		TestTrue(TEXT("OnInitialized event present in state graph"), PayloadContainsKind(Result.Payload, TEXT("event_kinds"), TEXT("OnInitialized")));
+		TestTrue(TEXT("OnRootStateMachineStart event present in state graph"), PayloadContainsKind(Result.Payload, TEXT("event_kinds"), TEXT("OnRootStateMachineStart")));
+		TestFalse(TEXT("OnTransitionPreEvaluate event absent in state graph"), PayloadContainsKind(Result.Payload, TEXT("event_kinds"), TEXT("OnTransitionPreEvaluate")));
 	});
 
 	It("returns transition-compatible read and write kinds in a transition graph", [this]()
@@ -221,6 +227,12 @@ void FSMFindNodeTypesSpec::Define()
 
 		TestTrue(TEXT("CanEvaluate write present"), PayloadContainsKind(Result.Payload, TEXT("write_kinds"), TEXT("CanEvaluate")));
 		TestTrue(TEXT("CanEvaluateFromEvent write present"), PayloadContainsKind(Result.Payload, TEXT("write_kinds"), TEXT("CanEvaluateFromEvent")));
+
+		TestTrue(TEXT("OnInitialized event present"), PayloadContainsKind(Result.Payload, TEXT("event_kinds"), TEXT("OnInitialized")));
+		TestTrue(TEXT("OnTransitionPreEvaluate event present"), PayloadContainsKind(Result.Payload, TEXT("event_kinds"), TEXT("OnTransitionPreEvaluate")));
+		TestTrue(TEXT("OnTransitionPostEvaluate event present"), PayloadContainsKind(Result.Payload, TEXT("event_kinds"), TEXT("OnTransitionPostEvaluate")));
+		TestTrue(TEXT("OnRootStateMachineStart event present"), PayloadContainsKind(Result.Payload, TEXT("event_kinds"), TEXT("OnRootStateMachineStart")));
+		TestFalse(TEXT("OnStateUpdate event absent in transition graph"), PayloadContainsKind(Result.Payload, TEXT("event_kinds"), TEXT("OnStateUpdate")));
 	});
 
 	It("rejects CanEvaluateFromEvent write in a conduit graph", [this]()
@@ -245,6 +257,15 @@ void FSMFindNodeTypesSpec::Define()
 
 		TestTrue(TEXT("CanEvaluate write present in conduit"), PayloadContainsKind(Result.Payload, TEXT("write_kinds"), TEXT("CanEvaluate")));
 		TestFalse(TEXT("CanEvaluateFromEvent write absent in conduit"), PayloadContainsKind(Result.Payload, TEXT("write_kinds"), TEXT("CanEvaluateFromEvent")));
+
+		// OnInitialized / OnShutdown are conduit-legal and non-singleton, so they are always reported.
+		TestTrue(TEXT("OnInitialized event present in conduit"), PayloadContainsKind(Result.Payload, TEXT("event_kinds"), TEXT("OnInitialized")));
+		TestTrue(TEXT("OnShutdown event present in conduit"), PayloadContainsKind(Result.Payload, TEXT("event_kinds"), TEXT("OnShutdown")));
+		// This conduit has no node class, so the root state machine start/stop passthrough nodes are not
+		// auto-placed (that only happens on node-class assignment); the singleton stays addable here.
+		TestTrue(TEXT("OnRootStateMachineStart event present in conduit"), PayloadContainsKind(Result.Payload, TEXT("event_kinds"), TEXT("OnRootStateMachineStart")));
+		TestFalse(TEXT("OnStateUpdate event absent in conduit"), PayloadContainsKind(Result.Payload, TEXT("event_kinds"), TEXT("OnStateUpdate")));
+		TestFalse(TEXT("OnTransitionPreEvaluate event absent in conduit"), PayloadContainsKind(Result.Payload, TEXT("event_kinds"), TEXT("OnTransitionPreEvaluate")));
 	});
 
 	It("type_id_filter narrows results case-insensitively", [this]()

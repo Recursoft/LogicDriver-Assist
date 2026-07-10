@@ -550,6 +550,22 @@ FString ULogicDriverToolset::SpawnLocalGraphWriteNode(
 	return LDA::Execute(TEXT("sm.spawn_local_graph_write_node"), Args);
 }
 
+FString ULogicDriverToolset::SpawnLocalGraphEventNode(
+	USMBlueprint* Blueprint,
+	const FString& NodeGuid,
+	const FString& NodeType,
+	double PositionX,
+	double PositionY)
+{
+	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
+	Args->SetStringField(TEXT("node_guid"), NodeGuid);
+	Args->SetStringField(TEXT("type"), NodeType);
+	Args->SetNumberField(TEXT("position_x"), PositionX);
+	Args->SetNumberField(TEXT("position_y"), PositionY);
+	return LDA::Execute(TEXT("sm.spawn_local_graph_event_node"), Args);
+}
+
 FString ULogicDriverToolset::GetLocalGraph(
 	USMBlueprint* Blueprint,
 	const FString& NodeGuid,

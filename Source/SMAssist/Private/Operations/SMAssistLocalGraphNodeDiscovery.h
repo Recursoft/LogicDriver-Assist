@@ -28,9 +28,9 @@ namespace LD::Assist
 	};
 
 	/**
-	 * Result of FindLocalGraphNodeTypes. Read and write kinds are reported separately so the caller
-	 * can route them to the right spawn op (sm.spawn_local_graph_read_node vs
-	 * sm.spawn_local_graph_write_node).
+	 * Result of FindLocalGraphNodeTypes. Read, write, and event-entry kinds are reported separately so
+	 * the caller can route them to the right spawn op (sm.spawn_local_graph_read_node,
+	 * sm.spawn_local_graph_write_node, sm.spawn_local_graph_event_node).
 	 */
 	struct FFindLocalGraphNodeTypesResult
 	{
@@ -39,6 +39,9 @@ namespace LD::Assist
 
 		/** Compatible write kinds. Spawn via ISMGraphGeneration::CreateLocalGraphWriteNode / sm.spawn_local_graph_write_node. */
 		TArray<ISMGraphGeneration::ELocalGraphWriteNodeType> WriteKinds;
+
+		/** Compatible lifecycle event-entry kinds. Spawn via ISMGraphGeneration::CreateLocalGraphEventNode / sm.spawn_local_graph_event_node. */
+		TArray<ISMGraphGeneration::ELocalGraphEventNodeType> EventKinds;
 	};
 
 	/**
@@ -60,4 +63,12 @@ namespace LD::Assist
 	 * @return The compatible read and write kinds, filtered by TypeIdFilter when set. Empty result on null TargetGraph.
 	 */
 	FFindLocalGraphNodeTypesResult FindLocalGraphNodeTypes(USMBlueprint* InBlueprint, const FFindLocalGraphNodeTypesArgs& InArgs);
+
+	namespace Private
+	{
+		/** Canonical wire name for a kind, matching the 'type' each spawn op accepts. */
+		const TCHAR* ReadKindName(ISMGraphGeneration::ELocalGraphReadNodeType InKind);
+		const TCHAR* WriteKindName(ISMGraphGeneration::ELocalGraphWriteNodeType InKind);
+		const TCHAR* EventKindName(ISMGraphGeneration::ELocalGraphEventNodeType InKind);
+	}
 }

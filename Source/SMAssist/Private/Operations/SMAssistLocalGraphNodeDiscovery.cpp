@@ -34,6 +34,23 @@ namespace LD::Assist
 			}
 			return TEXT("");
 		}
+
+		const TCHAR* EventKindName(ISMGraphGeneration::ELocalGraphEventNodeType InKind)
+		{
+			switch (InKind)
+			{
+			case ISMGraphGeneration::ELocalGraphEventNodeType::OnInitialized: return TEXT("OnInitialized");
+			case ISMGraphGeneration::ELocalGraphEventNodeType::OnShutdown: return TEXT("OnShutdown");
+			case ISMGraphGeneration::ELocalGraphEventNodeType::OnStateUpdate: return TEXT("OnStateUpdate");
+			case ISMGraphGeneration::ELocalGraphEventNodeType::OnStateEnd: return TEXT("OnStateEnd");
+			case ISMGraphGeneration::ELocalGraphEventNodeType::OnTransitionEntered: return TEXT("OnTransitionEntered");
+			case ISMGraphGeneration::ELocalGraphEventNodeType::OnTransitionPreEvaluate: return TEXT("OnTransitionPreEvaluate");
+			case ISMGraphGeneration::ELocalGraphEventNodeType::OnTransitionPostEvaluate: return TEXT("OnTransitionPostEvaluate");
+			case ISMGraphGeneration::ELocalGraphEventNodeType::OnRootStateMachineStart: return TEXT("OnRootStateMachineStart");
+			case ISMGraphGeneration::ELocalGraphEventNodeType::OnRootStateMachineStop: return TEXT("OnRootStateMachineStop");
+			}
+			return TEXT("");
+		}
 	}
 
 	FFindLocalGraphNodeTypesResult FindLocalGraphNodeTypes(USMBlueprint* InBlueprint, const FFindLocalGraphNodeTypesArgs& InArgs)
@@ -56,6 +73,9 @@ namespace LD::Assist
 		TArray<ISMGraphGeneration::ELocalGraphWriteNodeType> WriteKinds;
 		GraphGen->GetCompatibleLocalGraphNodeTypes(InArgs.TargetGraph, ReadKinds, WriteKinds);
 
+		TArray<ISMGraphGeneration::ELocalGraphEventNodeType> EventKinds;
+		GraphGen->GetCompatibleLocalGraphEventNodeTypes(InArgs.TargetGraph, EventKinds);
+
 		const FString FilterLower = InArgs.TypeIdFilter.ToLower();
 
 		for (const ISMGraphGeneration::ELocalGraphReadNodeType Kind : ReadKinds)
@@ -71,6 +91,14 @@ namespace LD::Assist
 			if (FilterLower.IsEmpty() || FString(Private::WriteKindName(Kind)).ToLower().Contains(FilterLower))
 			{
 				Result.WriteKinds.Add(Kind);
+			}
+		}
+
+		for (const ISMGraphGeneration::ELocalGraphEventNodeType Kind : EventKinds)
+		{
+			if (FilterLower.IsEmpty() || FString(Private::EventKindName(Kind)).ToLower().Contains(FilterLower))
+			{
+				Result.EventKinds.Add(Kind);
 			}
 		}
 

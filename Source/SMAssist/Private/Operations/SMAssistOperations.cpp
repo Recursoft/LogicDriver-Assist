@@ -4827,6 +4827,118 @@ FSMAssistOperationResult LD::Assist::SpawnLocalGraphWriteNode(const TSharedRef<F
 
 namespace LD::Assist::Private
 {
+	static bool ResolveLocalGraphEventType(const FString& InValue, ISMGraphGeneration::ELocalGraphEventNodeType& OutType)
+	{
+		const FString Key = InValue.ToLower().Replace(TEXT("_"), TEXT(""));
+		if (Key == TEXT("oninitialized") || Key == TEXT("initialized"))
+		{
+			OutType = ISMGraphGeneration::ELocalGraphEventNodeType::OnInitialized;
+			return true;
+		}
+		if (Key == TEXT("onshutdown") || Key == TEXT("shutdown"))
+		{
+			OutType = ISMGraphGeneration::ELocalGraphEventNodeType::OnShutdown;
+			return true;
+		}
+		if (Key == TEXT("onstateupdate") || Key == TEXT("stateupdate"))
+		{
+			OutType = ISMGraphGeneration::ELocalGraphEventNodeType::OnStateUpdate;
+			return true;
+		}
+		if (Key == TEXT("onstateend") || Key == TEXT("stateend"))
+		{
+			OutType = ISMGraphGeneration::ELocalGraphEventNodeType::OnStateEnd;
+			return true;
+		}
+		if (Key == TEXT("ontransitionentered") || Key == TEXT("transitionentered") || Key == TEXT("entered"))
+		{
+			OutType = ISMGraphGeneration::ELocalGraphEventNodeType::OnTransitionEntered;
+			return true;
+		}
+		if (Key == TEXT("ontransitionpreevaluate") || Key == TEXT("transitionpreevaluate") || Key == TEXT("preevaluate"))
+		{
+			OutType = ISMGraphGeneration::ELocalGraphEventNodeType::OnTransitionPreEvaluate;
+			return true;
+		}
+		if (Key == TEXT("ontransitionpostevaluate") || Key == TEXT("transitionpostevaluate") || Key == TEXT("postevaluate"))
+		{
+			OutType = ISMGraphGeneration::ELocalGraphEventNodeType::OnTransitionPostEvaluate;
+			return true;
+		}
+		if (Key == TEXT("onrootstatemachinestart") || Key == TEXT("rootstatemachinestart") || Key == TEXT("statemachinestart"))
+		{
+			OutType = ISMGraphGeneration::ELocalGraphEventNodeType::OnRootStateMachineStart;
+			return true;
+		}
+		if (Key == TEXT("onrootstatemachinestop") || Key == TEXT("rootstatemachinestop") || Key == TEXT("statemachinestop"))
+		{
+			OutType = ISMGraphGeneration::ELocalGraphEventNodeType::OnRootStateMachineStop;
+			return true;
+		}
+		return false;
+	}
+}
+
+FSMAssistOperationResult LD::Assist::SpawnLocalGraphEventNode(const TSharedRef<FJsonObject>& InArgs)
+{
+	FString NodeTypeStr;
+	if (!InArgs->TryGetStringField(Args::Type, NodeTypeStr) || NodeTypeStr.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'type'."));
+	}
+
+	ISMGraphGeneration::ELocalGraphEventNodeType NodeType;
+	if (!LD::Assist::Private::ResolveLocalGraphEventType(NodeTypeStr, NodeType))
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(
+			TEXT("Unrecognized 'type' '%s'. Accepted: OnInitialized, OnShutdown, OnStateUpdate, OnStateEnd, OnTransitionEntered, OnTransitionPreEvaluate, OnTransitionPostEvaluate, OnRootStateMachineStart, OnRootStateMachineStop. Snake_case variants accepted too."),
+			*NodeTypeStr));
+	}
+
+	// Shared resolver so a reroute-waypoint guid normalizes to the primary transition, matching get_local_graph/add/connect.
+	FString Error;
+	LD::Assist::Private::FResolvedLocalGraph Resolved;
+	if (!LD::Assist::Private::ResolveLocalGraph(InArgs, Resolved, Error))
+	{
+		return FSMAssistOperationResult::MakeError(Error);
+	}
+	USMBlueprint* Blueprint = Resolved.Blueprint;
+	UEdGraph* TargetGraph = Resolved.Graph;
+
+	FString GraphGenError;
+	ISMGraphGeneration* GraphGen = LD::Assist::Private::GetGraphGeneration(GraphGenError);
+	if (!GraphGen)
+	{
+		return FSMAssistOperationResult::MakeError(GraphGenError);
+	}
+
+	ISMGraphGeneration::FCreateLocalGraphEventNodeArgs CreateArgs;
+	CreateArgs.NodeType = NodeType;
+	CreateArgs.TargetGraph = TargetGraph;
+
+	double PosX = 0.0;
+	double PosY = 0.0;
+	InArgs->TryGetNumberField(Args::PositionX, PosX);
+	InArgs->TryGetNumberField(Args::PositionY, PosY);
+	CreateArgs.NodePosition = FVector2D(PosX, PosY);
+
+	UEdGraphNode* NewNode = GraphGen->CreateLocalGraphEventNode(Blueprint, CreateArgs);
+	if (!NewNode)
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(
+			TEXT("CreateLocalGraphEventNode failed for type '%s' on graph '%s' (the type is not compatible with the target graph context, or a singleton event kind is already present)."),
+			*NodeTypeStr, *TargetGraph->GetName()));
+	}
+
+	const TSharedRef<FJsonObject> Payload = LD::Assist::Private::LocalGraphNodeToJson(NewNode, true, FString());
+	Payload->SetStringField(Args::NodeGuid, NewNode->NodeGuid.ToString());
+	Payload->SetStringField(Args::Type, NodeTypeStr);
+	Payload->SetStringField(Args::TargetGraphPath, TargetGraph->GetPathName());
+	return FSMAssistOperationResult::MakeSuccess(Payload);
+}
+
+namespace LD::Assist::Private
+{
 	// A reroute waypoint owns no compiled graph. Its condition lives on the primary transition, reached
 	// through a connected transition edge using only exported API (USMGraphNode_RerouteNode is MinimalAPI,
 	// so its own GetPrimaryTransition is not linkable from this module).
@@ -5868,36 +5980,6 @@ FSMAssistOperationResult LD::Assist::ConfigureTransitionEvent(const TSharedRef<F
 	return FSMAssistOperationResult::MakeSuccess(Payload);
 }
 
-namespace LD::Assist::Private
-{
-	static FString GetReadKindName(ISMGraphGeneration::ELocalGraphReadNodeType Kind)
-	{
-		switch (Kind)
-		{
-			case ISMGraphGeneration::ELocalGraphReadNodeType::TimeInState: return TEXT("TimeInState");
-			case ISMGraphGeneration::ELocalGraphReadNodeType::HasStateUpdated: return TEXT("HasStateUpdated");
-			case ISMGraphGeneration::ELocalGraphReadNodeType::CanEvaluate: return TEXT("CanEvaluate");
-			case ISMGraphGeneration::ELocalGraphReadNodeType::CanEvaluateFromEvent: return TEXT("CanEvaluateFromEvent");
-			case ISMGraphGeneration::ELocalGraphReadNodeType::GetStateInformation: return TEXT("GetStateInformation");
-			case ISMGraphGeneration::ELocalGraphReadNodeType::GetTransitionInformation: return TEXT("GetTransitionInformation");
-			case ISMGraphGeneration::ELocalGraphReadNodeType::GetStateMachineReference: return TEXT("GetStateMachineReference");
-			case ISMGraphGeneration::ELocalGraphReadNodeType::GetNodeInstance: return TEXT("GetNodeInstance");
-			case ISMGraphGeneration::ELocalGraphReadNodeType::InEndState: return TEXT("InEndState");
-		}
-		return TEXT("Unknown");
-	}
-
-	static FString GetWriteKindName(ISMGraphGeneration::ELocalGraphWriteNodeType Kind)
-	{
-		switch (Kind)
-		{
-			case ISMGraphGeneration::ELocalGraphWriteNodeType::CanEvaluate: return TEXT("CanEvaluate");
-			case ISMGraphGeneration::ELocalGraphWriteNodeType::CanEvaluateFromEvent: return TEXT("CanEvaluateFromEvent");
-		}
-		return TEXT("Unknown");
-	}
-}
-
 FSMAssistOperationResult LD::Assist::FindNodeTypes(const TSharedRef<FJsonObject>& InArgs)
 {
 	FString AssetPath;
@@ -5954,9 +6036,9 @@ FSMAssistOperationResult LD::Assist::FindNodeTypes(const TSharedRef<FJsonObject>
 	for (ISMGraphGeneration::ELocalGraphReadNodeType Kind : Result.ReadKinds)
 	{
 		const TSharedRef<FJsonObject> KindObj = MakeShared<FJsonObject>();
-		KindObj->SetStringField(Args::Kind, Private::GetReadKindName(Kind));
+		KindObj->SetStringField(Args::Kind, Private::ReadKindName(Kind));
 		KindObj->SetStringField(Args::SpawnOp, Ops::SpawnLocalGraphReadNode);
-		KindObj->SetStringField(Args::SpawnType, Private::GetReadKindName(Kind));
+		KindObj->SetStringField(Args::SpawnType, Private::ReadKindName(Kind));
 		ReadKindsJson.Add(MakeShared<FJsonValueObject>(KindObj));
 	}
 	Payload->SetArrayField(Args::ReadKinds, ReadKindsJson);
@@ -5965,12 +6047,23 @@ FSMAssistOperationResult LD::Assist::FindNodeTypes(const TSharedRef<FJsonObject>
 	for (ISMGraphGeneration::ELocalGraphWriteNodeType Kind : Result.WriteKinds)
 	{
 		const TSharedRef<FJsonObject> KindObj = MakeShared<FJsonObject>();
-		KindObj->SetStringField(Args::Kind, Private::GetWriteKindName(Kind));
+		KindObj->SetStringField(Args::Kind, Private::WriteKindName(Kind));
 		KindObj->SetStringField(Args::SpawnOp, Ops::SpawnLocalGraphWriteNode);
-		KindObj->SetStringField(Args::SpawnType, Private::GetWriteKindName(Kind));
+		KindObj->SetStringField(Args::SpawnType, Private::WriteKindName(Kind));
 		WriteKindsJson.Add(MakeShared<FJsonValueObject>(KindObj));
 	}
 	Payload->SetArrayField(Args::WriteKinds, WriteKindsJson);
+
+	TArray<TSharedPtr<FJsonValue>> EventKindsJson;
+	for (ISMGraphGeneration::ELocalGraphEventNodeType Kind : Result.EventKinds)
+	{
+		const TSharedRef<FJsonObject> KindObj = MakeShared<FJsonObject>();
+		KindObj->SetStringField(Args::Kind, Private::EventKindName(Kind));
+		KindObj->SetStringField(Args::SpawnOp, Ops::SpawnLocalGraphEventNode);
+		KindObj->SetStringField(Args::SpawnType, Private::EventKindName(Kind));
+		EventKindsJson.Add(MakeShared<FJsonValueObject>(KindObj));
+	}
+	Payload->SetArrayField(Args::EventKinds, EventKindsJson);
 
 	Payload->SetStringField(Args::EngineNodesHint,
 		TEXT("Engine K2 nodes (math, function calls, etc.) are not enumerated here. As of UE 5.8, BlueprintTools.find_node_types rejects SM transition/conduit bound graphs with 'Cannot cast type ... to Blueprint'. Workaround: query find_node_types against any non-SM UBlueprint's EventGraph using the same type_id_filter; type_ids are universal across graphs, so the returned strings work in BlueprintTools.create_node when targeting an SM nested graph."));
