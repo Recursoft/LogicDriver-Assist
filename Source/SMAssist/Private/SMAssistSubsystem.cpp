@@ -648,11 +648,11 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::SpawnLocalGraphReadNode;
-		Info.Description = TEXT("Spawn a Logic Driver local-graph-read K2 node into a state's local graph (OnStateBegin/Update/End share one bound graph per state) or a transition's CanEnterTransition graph. Compatibility by type: TimeInState / HasStateUpdated / GetNodeInstance work in state graphs and transition graphs; GetStateInformation is state-only; CanEvaluate / CanEvaluateFromEvent / GetTransitionInformation are transition-only; GetStateMachineReference is the intermediate graph of a state-machine-reference state (USMGraphNode_StateMachineStateNode); InEndState is a transition graph whose source state is a state-machine-reference state. The two sub-SM-only kinds reject plain state and transition graphs with 'is not compatible with graph' — call sm.add_reference first, then pass that state's guid (GetStateMachineReference) or the guid of a transition out of it (InEndState). Engine create_node does not expose these nodes, which is why this op exists.");
+		Info.Description = TEXT("Spawn a Logic Driver local-graph-read K2 node into a state's local graph (OnStateBegin/Update/End share one bound graph per state) or a transition's CanEnterTransition graph. Compatibility by type: TimeInState / HasStateUpdated / GetNodeInstance work in state graphs and transition graphs; GetStateInformation is state-only; CanEvaluate / CanEvaluateFromEvent / GetTransitionInformation are transition-only; GetStateMachineReference is the intermediate graph of a state-machine-reference state (USMGraphNode_StateMachineStateNode); InEndState is a transition graph whose source state is a state-machine-reference state. The two sub-SM-only kinds reject plain state and transition graphs with 'is not compatible with graph'. Call sm.add_reference first, then pass that state's guid (GetStateMachineReference) or the guid of a transition out of it (InEndState). Engine create_node does not expose these nodes, which is why this op exists. Returns the new node's id, node_guid, and pins (matching sm.add_local_graph_node), so you can wire its output straight into a comparison from sm.add_local_graph_node with sm.connect_local_graph_pins, no intervening sm.get_local_graph needed.");
 		Info.InputSchema = MakeSchema(
 			{
 				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the target SMBlueprint.")) },
-				{ Args::NodeGuid, MakePropertyObject(TEXT("string"), TEXT("Guid of the state or transition node whose bound graph receives the read node.")) },
+				{ Args::NodeGuid, MakePropertyObject(TEXT("string"), TEXT("Guid of the state, transition, or reroute node whose bound graph receives the read node (reroutes normalize to the primary transition).")) },
 				{ Args::Type, MakePropertyObject(TEXT("string"), TEXT("Local-graph-read node type. Accepted: TimeInState, HasStateUpdated, CanEvaluate, CanEvaluateFromEvent, GetStateInformation, GetTransitionInformation, GetStateMachineReference, GetNodeInstance, InEndState. Snake_case variants accepted too.")) },
 				{ Args::PositionX, MakePropertyObject(TEXT("number"), TEXT("Local-graph X coordinate. Defaults to 0.")) },
 				{ Args::PositionY, MakePropertyObject(TEXT("number"), TEXT("Local-graph Y coordinate. Defaults to 0.")) },
@@ -695,11 +695,11 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::SpawnLocalGraphWriteNode;
-		Info.Description = TEXT("Spawn a Logic Driver local-graph-write K2 node into a transition's CanEnterTransition graph or a conduit's bound graph. Compatibility by type: CanEvaluate works in transition and conduit graphs and disables/enables evaluation of the enclosing edge; CanEvaluateFromEvent is transition-only and disables/enables event-driven evaluation specifically. Both expose a single boolean input pin (seedable via 'default_value' or wireable to upstream K2 logic via blueprint connect_pins). TransitionEventReturn is intentionally NOT spawnable here: it is auto-placed as a side effect of binding a transition delegate; use sm.configure_transition_event instead. Engine create_node does not expose these nodes, which is why this op exists.");
+		Info.Description = TEXT("Spawn a Logic Driver local-graph-write K2 node into a transition's CanEnterTransition graph or a conduit's bound graph. Compatibility by type: CanEvaluate works in transition and conduit graphs and disables/enables evaluation of the enclosing edge; CanEvaluateFromEvent is transition-only and disables/enables event-driven evaluation specifically. Both expose a single boolean input pin (seedable via 'default_value' or wireable to upstream K2 logic via blueprint connect_pins). TransitionEventReturn is intentionally NOT spawnable here: it is auto-placed as a side effect of binding a transition delegate; use sm.configure_transition_event instead. Engine create_node does not expose these nodes, which is why this op exists. Returns the new node's id, node_guid, and pins (matching sm.add_local_graph_node), so its boolean input pin can be wired with sm.connect_local_graph_pins (or seeded via default_value), no intervening sm.get_local_graph needed.");
 		Info.InputSchema = MakeSchema(
 			{
 				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the target SMBlueprint.")) },
-				{ Args::NodeGuid, MakePropertyObject(TEXT("string"), TEXT("Guid of the transition or conduit node whose bound graph receives the write node.")) },
+				{ Args::NodeGuid, MakePropertyObject(TEXT("string"), TEXT("Guid of the transition, conduit, or reroute node whose bound graph receives the write node (reroutes normalize to the primary transition).")) },
 				{ Args::Type, MakePropertyObject(TEXT("string"), TEXT("Local-graph-write node type. Accepted: CanEvaluate, CanEvaluateFromEvent. Snake_case variants accepted too.")) },
 				{ Args::PositionX, MakePropertyObject(TEXT("number"), TEXT("Local-graph X coordinate. Defaults to 0.")) },
 				{ Args::PositionY, MakePropertyObject(TEXT("number"), TEXT("Local-graph Y coordinate. Defaults to 0.")) },
@@ -707,6 +707,129 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 			},
 			{ Args::AssetPath, Args::NodeGuid, Args::Type });
 		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::SpawnLocalGraphWriteNode);
+		RegisterOperation(MoveTemp(Info));
+	}
+
+	{
+		FSMAssistOperationInfo Info;
+		Info.Name = Ops::GetLocalGraph;
+		Info.Description = TEXT("Read the local (bound) graph of any Logic Driver SM graph node: a state's OnStateBegin/Update/End graph (a state shares one bound graph across those events), a transition's CanEnterTransition graph, or a conduit's graph. This is the primitive that makes bound-graph K2 authoring reachable: Logic Driver owns the node->bound-graph resolution that generic blueprint tools cannot do, because their graph lookup does not recurse into node-owned bound graphs. Returns the graph's addressable identity (graph_name, graph_path, graph_guid) plus its nodes and pins; each node 'id' is the object name and each pin 'connected_to' entry is 'NodeName.PinName', matching the ids generic connect_pins expects, so an agent can read existing logic back and -- where the transport's graph resolver can reach a bound graph -- author into it with generic create_node/connect_pins. node_guid accepts a state, transition, conduit, or reroute node. Reroute waypoints and non-primary rerouted transition segments are normalized to the primary transition that owns the single compiled graph: 'node_guid' in the response is the resolved node and 'is_rerouted' flags the chain. For transition and conduit graphs the response also pins the wire-INTO anchor: result_node_name + result_pin_id + result_pin_name identify the evaluation pin a boolean condition connects to (the same pin sm.set_transition_condition writes a literal to). State graphs expose their entry points as ordinary nodes in the list (look for the state-entry K2 node classes). Read-only.");
+		Info.InputSchema = MakeSchema(
+			{
+				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the target SMBlueprint.")) },
+				{ Args::NodeGuid, MakePropertyObject(TEXT("string"), TEXT("Guid of the SM graph node whose local graph to read: a state, transition (any reroute segment), conduit, or reroute waypoint. Reroutes and non-primary segments resolve to the primary transition; the resolved node's guid is returned as 'node_guid'.")) },
+				{ Args::IncludePins, MakePropertyObject(TEXT("boolean"), TEXT("Include each node's pin array (id, name, direction, type, default_value, connected_to). Defaults to true; pass false for a lighter node-only listing.")) }
+			},
+			{ Args::AssetPath, Args::NodeGuid });
+		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::GetLocalGraph);
+		RegisterOperation(MoveTemp(Info));
+	}
+
+	{
+		FSMAssistOperationInfo Info;
+		Info.Name = Ops::AddLocalGraphNode;
+		Info.Description = TEXT("Place any Blueprint K2 node into the bound (local) graph of an SM node (state OnStateBegin/Update/End graph, transition CanEnterTransition graph, or conduit graph). The bound graph is resolved from node_guid exactly like sm.get_local_graph (reroutes normalize to the primary transition), then the node is spawned directly by Logic Driver Assist -- this does NOT depend on the transport's generic graph resolver, so it works even where blueprint tools cannot address a bound graph by name. node_class accepts ANY UK2Node class: a class name (K2Node_IfThenElse, K2Node_MakeArray), a full class path (/Script/BlueprintGraph.K2Node_Knot), or a friendly alias (call_function, branch, get_variable, set_variable, sequence, cast, self). Reference-bearing nodes take their configuration from extra args: call_function needs function_name (+ function_class when not on KismetMathLibrary/KismetSystemLibrary/the FSM class); get_variable/set_variable need variable_name (a member variable on the FSM blueprint -- compile it first if just added); cast requires target_class. Every other node type spawns with its default pins, ready to wire. Returns the new node's id (object name) + node_guid + pins. For Logic Driver's own read/write specials (TimeInState, HasStateUpdated, CanEvaluate, ...) use sm.spawn_local_graph_read_node / sm.spawn_local_graph_write_node instead. Wire with sm.connect_local_graph_pins, seed literals with sm.set_local_graph_pin_default, then sm.compile.");
+		Info.InputSchema = MakeSchema(
+			{
+				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the target SMBlueprint.")) },
+				{ Args::NodeGuid, MakePropertyObject(TEXT("string"), TEXT("Guid of the SM graph node whose local graph receives the new node (state, transition, conduit, or reroute; reroutes resolve to the primary transition).")) },
+				{ Args::NodeClass, MakePropertyObject(TEXT("string"), TEXT("Any UK2Node class: a class name (K2Node_IfThenElse), a class path (/Script/BlueprintGraph.K2Node_Knot), or a friendly alias (call_function, branch, get_variable, set_variable, sequence, cast, self).")) },
+				{ Args::FunctionName, MakePropertyObject(TEXT("string"), TEXT("For call_function nodes: the UFunction name, e.g. 'Greater_DoubleDouble', 'BooleanAND', 'NotEqual_ObjectObject'.")) },
+				{ Args::FunctionClass, MakePropertyObject(TEXT("string"), TEXT("Optional. Class owning the function, as a path (/Script/Engine.KismetMathLibrary) or name. Omit to search KismetMathLibrary, KismetSystemLibrary, then the FSM class.")) },
+				{ Args::VariableName, MakePropertyObject(TEXT("string"), TEXT("For get_variable/set_variable nodes: a member variable on the FSM blueprint. Compile the blueprint first if the variable was just added.")) },
+				{ Args::TargetClass, MakePropertyObject(TEXT("string"), TEXT("For cast nodes (required): the class (path or name) to cast to.")) },
+				{ Args::PositionX, MakePropertyObject(TEXT("number"), TEXT("Local-graph X coordinate. Defaults to 0.")) },
+				{ Args::PositionY, MakePropertyObject(TEXT("number"), TEXT("Local-graph Y coordinate. Defaults to 0.")) }
+			},
+			{ Args::AssetPath, Args::NodeGuid, Args::NodeClass });
+		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::AddLocalGraphNode);
+		RegisterOperation(MoveTemp(Info));
+	}
+
+	{
+		FSMAssistOperationInfo Info;
+		Info.Name = Ops::ConnectLocalGraphPins;
+		Info.Description = TEXT("Connect two pins within an SM node's bound (local) graph. The graph is resolved from node_guid exactly like sm.get_local_graph. from_node_id/to_node_id accept the node 'id' (object name) returned by sm.get_local_graph or sm.add_local_graph_node, or a node guid; from_pin/to_pin accept a pin name (e.g. 'bCanEnterTransition', 'ReturnValue', 'A') or a pin id. from_pin resolves against the source node's OUTPUT pins and to_pin against the destination's INPUT pins. Routes through the K2 schema's CanCreateConnection/TryCreateConnection (so type-promotion/conversion nodes are inserted when the schema calls for it); a disallowed connection returns the schema's reason. Marks the blueprint structurally modified; call sm.compile when the graph is complete. Example: wire a spawned comparison's ReturnValue into the transition result node's bCanEnterTransition pin (result_node_name / result_pin_name from sm.get_local_graph).");
+		Info.InputSchema = MakeSchema(
+			{
+				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the target SMBlueprint.")) },
+				{ Args::NodeGuid, MakePropertyObject(TEXT("string"), TEXT("Guid of the SM graph node owning the local graph (state, transition, conduit, or reroute).")) },
+				{ Args::FromNodeId, MakePropertyObject(TEXT("string"), TEXT("Source node: the 'id' (object name) from sm.get_local_graph/sm.add_local_graph_node, or a node guid.")) },
+				{ Args::FromPin, MakePropertyObject(TEXT("string"), TEXT("Source output pin name or pin id.")) },
+				{ Args::ToNodeId, MakePropertyObject(TEXT("string"), TEXT("Destination node: the 'id' (object name) or a node guid. Use result_node_name to reach the transition/conduit result node.")) },
+				{ Args::ToPin, MakePropertyObject(TEXT("string"), TEXT("Destination input pin name or pin id. Use result_pin_name (e.g. 'bCanEnterTransition') to feed the condition.")) }
+			},
+			{ Args::AssetPath, Args::NodeGuid, Args::FromNodeId, Args::FromPin, Args::ToNodeId, Args::ToPin });
+		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::ConnectLocalGraphPins);
+		RegisterOperation(MoveTemp(Info));
+	}
+
+	{
+		FSMAssistOperationInfo Info;
+		Info.Name = Ops::SetLocalGraphPinDefault;
+		Info.Description = TEXT("Set the literal default value of an input pin inside an SM node's bound (local) graph, mirroring typing a value into an unconnected pin. The graph is resolved from node_guid like sm.get_local_graph; node_id accepts the node 'id' (object name) or a node guid; pin accepts a pin name or pin id and resolves against the node's INPUT pins. value is UE property-text (e.g. '2.5', 'true', an enum name); routes through the schema's TrySetDefaultValue. Ignored by the compiler if the pin is wired. Use it to seed a comparison threshold (e.g. set pin 'B' of a Greater node to '2.5'). Marks the blueprint structurally modified; call sm.compile when done.");
+		Info.InputSchema = MakeSchema(
+			{
+				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the target SMBlueprint.")) },
+				{ Args::NodeGuid, MakePropertyObject(TEXT("string"), TEXT("Guid of the SM graph node owning the local graph (state, transition, conduit, or reroute).")) },
+				{ Args::NodeId, MakePropertyObject(TEXT("string"), TEXT("Target node: the 'id' (object name) from sm.get_local_graph/sm.add_local_graph_node, or a node guid.")) },
+				{ Args::Pin, MakePropertyObject(TEXT("string"), TEXT("Input pin name or pin id whose literal default to set.")) },
+				{ Args::Value, MakePropertyObject(TEXT("string"), TEXT("Literal value in UE property-text form (e.g. '2.5', 'true', 'None').")) }
+			},
+			{ Args::AssetPath, Args::NodeGuid, Args::NodeId, Args::Pin, Args::Value });
+		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::SetLocalGraphPinDefault);
+		RegisterOperation(MoveTemp(Info));
+	}
+
+	{
+		FSMAssistOperationInfo Info;
+		Info.Name = Ops::RemoveLocalGraphNode;
+		Info.Description = TEXT("Remove a K2 node from an SM node's bound (local) graph. The graph is resolved from node_guid like sm.get_local_graph; node_id accepts the node 'id' (object name) returned by sm.get_local_graph / sm.add_local_graph_node, or a node guid. Structural root nodes (the transition/conduit result node, state entry nodes) cannot be removed -- the op refuses them, matching the editor. Removing a node also breaks its pin links. Marks the blueprint structurally modified; call sm.compile when done. Returns the removed node id and the graph's remaining node_count.");
+		Info.InputSchema = MakeSchema(
+			{
+				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the target SMBlueprint.")) },
+				{ Args::NodeGuid, MakePropertyObject(TEXT("string"), TEXT("Guid of the SM graph node owning the local graph (state, transition, conduit, or reroute).")) },
+				{ Args::NodeId, MakePropertyObject(TEXT("string"), TEXT("The node to remove: its 'id' (object name) from sm.get_local_graph/sm.add_local_graph_node, or a node guid.")) }
+			},
+			{ Args::AssetPath, Args::NodeGuid, Args::NodeId });
+		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::RemoveLocalGraphNode);
+		RegisterOperation(MoveTemp(Info));
+	}
+
+	{
+		FSMAssistOperationInfo Info;
+		Info.Name = Ops::DisconnectLocalGraphPins;
+		Info.Description = TEXT("Break a single connection between two pins in an SM node's bound (local) graph -- the inverse of sm.connect_local_graph_pins, taking the same identifiers. The graph is resolved from node_guid like sm.get_local_graph; node ids accept the get_local_graph 'id' or a node guid; pins accept a name or a pin id. Only the link between the two named pins is broken (other links on those pins are untouched). Note that re-connecting an already-wired input pin auto-breaks the old link, so this op is mainly for detaching a wire without replacing it. Returns disconnected=true when the pins were linked, false when they were not. Marks the blueprint structurally modified.");
+		Info.InputSchema = MakeSchema(
+			{
+				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the target SMBlueprint.")) },
+				{ Args::NodeGuid, MakePropertyObject(TEXT("string"), TEXT("Guid of the SM graph node owning the local graph (state, transition, conduit, or reroute).")) },
+				{ Args::FromNodeId, MakePropertyObject(TEXT("string"), TEXT("One endpoint node: the 'id' (object name) or a node guid.")) },
+				{ Args::FromPin, MakePropertyObject(TEXT("string"), TEXT("Pin name or pin id on the from node.")) },
+				{ Args::ToNodeId, MakePropertyObject(TEXT("string"), TEXT("Other endpoint node: the 'id' (object name) or a node guid.")) },
+				{ Args::ToPin, MakePropertyObject(TEXT("string"), TEXT("Pin name or pin id on the to node.")) }
+			},
+			{ Args::AssetPath, Args::NodeGuid, Args::FromNodeId, Args::FromPin, Args::ToNodeId, Args::ToPin });
+		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::DisconnectLocalGraphPins);
+		RegisterOperation(MoveTemp(Info));
+	}
+
+	{
+		FSMAssistOperationInfo Info;
+		Info.Name = Ops::SetLocalGraphNode;
+		Info.Description = TEXT("Modify an existing K2 node in an SM node's bound (local) graph in place. The graph is resolved from node_guid like sm.get_local_graph; node_id accepts the node 'id' (object name) from sm.get_local_graph / sm.add_local_graph_node, or a node guid. Sets only the fields you supply: position_x / position_y (reposition), comment (node comment; empty string clears it), enabled (false disables the node, true re-enables it). At least one field is required. Position and comment are cosmetic (blueprint marked dirty); enabled feeds compilation (marked structurally modified). Deep reconfiguration such as changing a call node's function is not done here -- remove the node with sm.remove_local_graph_node and add a new one. Returns the node's post-change id, pos, comment, and enabled state.");
+		Info.InputSchema = MakeSchema(
+			{
+				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the target SMBlueprint.")) },
+				{ Args::NodeGuid, MakePropertyObject(TEXT("string"), TEXT("Guid of the SM graph node owning the local graph (state, transition, conduit, or reroute).")) },
+				{ Args::NodeId, MakePropertyObject(TEXT("string"), TEXT("The node to modify: its 'id' (object name) from sm.get_local_graph/sm.add_local_graph_node, or a node guid.")) },
+				{ Args::PositionX, MakePropertyObject(TEXT("number"), TEXT("Optional. New local-graph X coordinate.")) },
+				{ Args::PositionY, MakePropertyObject(TEXT("number"), TEXT("Optional. New local-graph Y coordinate.")) },
+				{ Args::Comment, MakePropertyObject(TEXT("string"), TEXT("Optional. Node comment text; empty string clears it.")) },
+				{ Args::Enabled, MakePropertyObject(TEXT("boolean"), TEXT("Optional. false disables the node (excluded from compilation), true re-enables it.")) }
+			},
+			{ Args::AssetPath, Args::NodeGuid, Args::NodeId });
+		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::SetLocalGraphNode);
 		RegisterOperation(MoveTemp(Info));
 	}
 

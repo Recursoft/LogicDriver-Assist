@@ -45,8 +45,12 @@
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
 #include "BlueprintEditor.h"
+#include "K2Node.h"
 #include "K2Node_CallFunction.h"
 #include "K2Node_DynamicCast.h"
+#include "K2Node_Variable.h"
+#include "Kismet/KismetMathLibrary.h"
+#include "Kismet/KismetSystemLibrary.h"
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
 #include "Components/ActorComponent.h"
@@ -4575,6 +4579,23 @@ FSMAssistOperationResult LD::Assist::ConfigureSMComponentOnActor(const TSharedRe
 
 namespace LD::Assist::Private
 {
+	// Forward decl; defined with the get_local_graph serializers below so spawn read/write return the same node payload.
+	static TSharedRef<FJsonObject> LocalGraphNodeToJson(UEdGraphNode* InNode, bool bIncludePins, const FString& InResultNodeName);
+
+	// The node that owns the compiled bound graph, plus the graph. Shared by every local-graph op so
+	// resolution (including reroute normalization) stays identical between read and write.
+	struct FResolvedLocalGraph
+	{
+		USMBlueprint* Blueprint = nullptr;
+		USMGraphNode_Base* RequestedNode = nullptr;
+		USMGraphNode_Base* OwnerNode = nullptr;
+		UEdGraph* Graph = nullptr;
+		bool bIsRerouted = false;
+	};
+
+	// Defined below; resolves asset_path + node_guid to the bound graph, normalizing reroutes to the primary transition.
+	static bool ResolveLocalGraph(const TSharedRef<FJsonObject>& InArgs, FResolvedLocalGraph& Out, FString& OutError);
+
 	static bool ResolveLocalGraphReadType(const FString& InValue, ISMGraphGeneration::ELocalGraphReadNodeType& OutType)
 	{
 		const FString Lower = InValue.ToLower();
@@ -4629,24 +4650,6 @@ namespace LD::Assist::Private
 
 FSMAssistOperationResult LD::Assist::SpawnLocalGraphReadNode(const TSharedRef<FJsonObject>& InArgs)
 {
-	FString AssetPath;
-	if (!InArgs->TryGetStringField(Args::AssetPath, AssetPath) || AssetPath.IsEmpty())
-	{
-		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'asset_path'."));
-	}
-
-	FString NodeGuidStr;
-	if (!InArgs->TryGetStringField(Args::NodeGuid, NodeGuidStr) || NodeGuidStr.IsEmpty())
-	{
-		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'node_guid' (state or transition guid whose local graph receives the read node)."));
-	}
-
-	FGuid NodeGuid;
-	if (!FGuid::Parse(NodeGuidStr, NodeGuid))
-	{
-		return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("Invalid 'node_guid' '%s'."), *NodeGuidStr));
-	}
-
 	FString NodeTypeStr;
 	if (!InArgs->TryGetStringField(Args::Type, NodeTypeStr) || NodeTypeStr.IsEmpty())
 	{
@@ -4661,24 +4664,15 @@ FSMAssistOperationResult LD::Assist::SpawnLocalGraphReadNode(const TSharedRef<FJ
 			*NodeTypeStr));
 	}
 
-	FString LoadError;
-	USMBlueprint* Blueprint = LD::Assist::Utils::LoadStateMachineBlueprint(AssetPath, LoadError);
-	if (!Blueprint)
+	// Shared resolver so a reroute-waypoint guid normalizes to the primary transition, matching get_local_graph/add/connect.
+	FString Error;
+	LD::Assist::Private::FResolvedLocalGraph Resolved;
+	if (!LD::Assist::Private::ResolveLocalGraph(InArgs, Resolved, Error))
 	{
-		return FSMAssistOperationResult::MakeError(LoadError);
+		return FSMAssistOperationResult::MakeError(Error);
 	}
-
-	USMGraphNode_Base* OwnerNode = LD::Assist::Utils::FindNodeByGuid(Blueprint, NodeGuid);
-	if (!OwnerNode)
-	{
-		return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("No state or transition node with guid '%s' on '%s'."), *NodeGuidStr, *AssetPath));
-	}
-
-	UEdGraph* TargetGraph = OwnerNode->GetBoundGraph();
-	if (!TargetGraph)
-	{
-		return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("Owner node '%s' has no bound graph."), *OwnerNode->GetName()));
-	}
+	USMBlueprint* Blueprint = Resolved.Blueprint;
+	UEdGraph* TargetGraph = Resolved.Graph;
 
 	FString GraphGenError;
 	ISMGraphGeneration* GraphGen = LD::Assist::Private::GetGraphGeneration(GraphGenError);
@@ -4720,7 +4714,7 @@ FSMAssistOperationResult LD::Assist::SpawnLocalGraphReadNode(const TSharedRef<FJ
 			*NodeTypeStr, *TargetGraph->GetName()));
 	}
 
-	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
+	const TSharedRef<FJsonObject> Payload = LD::Assist::Private::LocalGraphNodeToJson(NewNode, true, FString());
 	Payload->SetStringField(Args::NodeGuid, NewNode->NodeGuid.ToString());
 	Payload->SetStringField(Args::Type, NodeTypeStr);
 	Payload->SetStringField(Args::TargetGraphPath, TargetGraph->GetPathName());
@@ -4769,24 +4763,6 @@ namespace LD::Assist::Private
 
 FSMAssistOperationResult LD::Assist::SpawnLocalGraphWriteNode(const TSharedRef<FJsonObject>& InArgs)
 {
-	FString AssetPath;
-	if (!InArgs->TryGetStringField(Args::AssetPath, AssetPath) || AssetPath.IsEmpty())
-	{
-		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'asset_path'."));
-	}
-
-	FString NodeGuidStr;
-	if (!InArgs->TryGetStringField(Args::NodeGuid, NodeGuidStr) || NodeGuidStr.IsEmpty())
-	{
-		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'node_guid' (transition or conduit guid whose local graph receives the write node)."));
-	}
-
-	FGuid NodeGuid;
-	if (!FGuid::Parse(NodeGuidStr, NodeGuid))
-	{
-		return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("Invalid 'node_guid' '%s'."), *NodeGuidStr));
-	}
-
 	FString NodeTypeStr;
 	if (!InArgs->TryGetStringField(Args::Type, NodeTypeStr) || NodeTypeStr.IsEmpty())
 	{
@@ -4801,24 +4777,15 @@ FSMAssistOperationResult LD::Assist::SpawnLocalGraphWriteNode(const TSharedRef<F
 			*NodeTypeStr));
 	}
 
-	FString LoadError;
-	USMBlueprint* Blueprint = LD::Assist::Utils::LoadStateMachineBlueprint(AssetPath, LoadError);
-	if (!Blueprint)
+	// Shared resolver so a reroute-waypoint guid normalizes to the primary transition, matching get_local_graph/add/connect.
+	FString Error;
+	LD::Assist::Private::FResolvedLocalGraph Resolved;
+	if (!LD::Assist::Private::ResolveLocalGraph(InArgs, Resolved, Error))
 	{
-		return FSMAssistOperationResult::MakeError(LoadError);
+		return FSMAssistOperationResult::MakeError(Error);
 	}
-
-	USMGraphNode_Base* OwnerNode = LD::Assist::Utils::FindNodeByGuid(Blueprint, NodeGuid);
-	if (!OwnerNode)
-	{
-		return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("No transition or conduit node with guid '%s' on '%s'."), *NodeGuidStr, *AssetPath));
-	}
-
-	UEdGraph* TargetGraph = OwnerNode->GetBoundGraph();
-	if (!TargetGraph)
-	{
-		return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("Owner node '%s' has no bound graph."), *OwnerNode->GetName()));
-	}
+	USMBlueprint* Blueprint = Resolved.Blueprint;
+	UEdGraph* TargetGraph = Resolved.Graph;
 
 	FString GraphGenError;
 	ISMGraphGeneration* GraphGen = LD::Assist::Private::GetGraphGeneration(GraphGenError);
@@ -4851,10 +4818,920 @@ FSMAssistOperationResult LD::Assist::SpawnLocalGraphWriteNode(const TSharedRef<F
 			*NodeTypeStr, *TargetGraph->GetName()));
 	}
 
-	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
+	const TSharedRef<FJsonObject> Payload = LD::Assist::Private::LocalGraphNodeToJson(NewNode, true, FString());
 	Payload->SetStringField(Args::NodeGuid, NewNode->NodeGuid.ToString());
 	Payload->SetStringField(Args::Type, NodeTypeStr);
 	Payload->SetStringField(Args::TargetGraphPath, TargetGraph->GetPathName());
+	return FSMAssistOperationResult::MakeSuccess(Payload);
+}
+
+namespace LD::Assist::Private
+{
+	// A reroute waypoint owns no compiled graph. Its condition lives on the primary transition, reached
+	// through a connected transition edge using only exported API (USMGraphNode_RerouteNode is MinimalAPI,
+	// so its own GetPrimaryTransition is not linkable from this module).
+	static USMGraphNode_TransitionEdge* FindTransitionEdgeFromReroute(const USMGraphNode_RerouteNode* InReroute)
+	{
+		if (!InReroute)
+		{
+			return nullptr;
+		}
+		for (const UEdGraphPin* Pin : InReroute->Pins)
+		{
+			if (!Pin)
+			{
+				continue;
+			}
+			for (const UEdGraphPin* Linked : Pin->LinkedTo)
+			{
+				if (!Linked)
+				{
+					continue;
+				}
+				if (USMGraphNode_TransitionEdge* Edge = Cast<USMGraphNode_TransitionEdge>(Linked->GetOwningNode()))
+				{
+					return Edge;
+				}
+			}
+		}
+		return nullptr;
+	}
+
+	static bool ResolveLocalGraph(const TSharedRef<FJsonObject>& InArgs, FResolvedLocalGraph& Out, FString& OutError)
+	{
+		FString AssetPath;
+		if (!InArgs->TryGetStringField(Args::AssetPath, AssetPath) || AssetPath.IsEmpty())
+		{
+			OutError = TEXT("Missing required arg 'asset_path'.");
+			return false;
+		}
+
+		FString NodeGuidStr;
+		if (!InArgs->TryGetStringField(Args::NodeGuid, NodeGuidStr) || NodeGuidStr.IsEmpty())
+		{
+			OutError = TEXT("Missing required arg 'node_guid' (state, transition, conduit, or reroute node whose local graph to target).");
+			return false;
+		}
+
+		FGuid NodeGuid;
+		if (!FGuid::Parse(NodeGuidStr, NodeGuid))
+		{
+			OutError = FString::Printf(TEXT("Invalid 'node_guid' '%s'."), *NodeGuidStr);
+			return false;
+		}
+
+		Out.Blueprint = LD::Assist::Utils::LoadStateMachineBlueprint(AssetPath, OutError);
+		if (!Out.Blueprint)
+		{
+			return false;
+		}
+
+		Out.RequestedNode = LD::Assist::Utils::FindNodeByGuid(Out.Blueprint, NodeGuid);
+		if (!Out.RequestedNode)
+		{
+			OutError = FString::Printf(TEXT("No SM graph node with guid '%s' on '%s'."), *NodeGuidStr, *AssetPath);
+			return false;
+		}
+
+		// Normalize to the node that owns the compiled local graph. Reroute waypoints and non-primary
+		// rerouted transition segments delegate their single graph to the primary transition.
+		Out.OwnerNode = Out.RequestedNode;
+		if (USMGraphNode_RerouteNode* Reroute = Cast<USMGraphNode_RerouteNode>(Out.RequestedNode))
+		{
+			USMGraphNode_TransitionEdge* Edge = FindTransitionEdgeFromReroute(Reroute);
+			if (!Edge)
+			{
+				OutError = FString::Printf(TEXT("Reroute waypoint '%s' is not connected to a transition, so it owns no local graph. Pass the transition's guid instead."), *NodeGuidStr);
+				return false;
+			}
+			USMGraphNode_TransitionEdge* Primary = Edge->GetPrimaryReroutedTransition();
+			Out.OwnerNode = Primary ? Primary : Edge;
+			Out.bIsRerouted = true;
+		}
+		else if (USMGraphNode_TransitionEdge* Edge = Cast<USMGraphNode_TransitionEdge>(Out.RequestedNode))
+		{
+			Out.bIsRerouted = Edge->IsRerouted();
+			if (USMGraphNode_TransitionEdge* Primary = Edge->GetPrimaryReroutedTransition())
+			{
+				Out.OwnerNode = Primary;
+			}
+		}
+
+		Out.Graph = Out.OwnerNode->GetBoundGraph();
+		if (!Out.Graph)
+		{
+			OutError = FString::Printf(
+				TEXT("Node '%s' (%s) owns no local graph. Any State, Link State, and entry nodes have no editable local graph."),
+				*Out.OwnerNode->GetName(), *Out.OwnerNode->GetClass()->GetName());
+			return false;
+		}
+		return true;
+	}
+
+	// Locate a node in a graph by its serialized 'id' (object name from get_local_graph) or by its NodeGuid
+	// (as returned by the spawn ops), so the write ops compose with either identifier.
+	static UEdGraphNode* FindNodeInGraphByIdOrGuid(UEdGraph* InGraph, const FString& InIdOrGuid)
+	{
+		if (!InGraph || InIdOrGuid.IsEmpty())
+		{
+			return nullptr;
+		}
+		for (UEdGraphNode* Node : InGraph->Nodes)
+		{
+			if (Node && Node->GetName() == InIdOrGuid)
+			{
+				return Node;
+			}
+		}
+		FGuid AsGuid;
+		if (FGuid::Parse(InIdOrGuid, AsGuid))
+		{
+			for (UEdGraphNode* Node : InGraph->Nodes)
+			{
+				if (Node && Node->NodeGuid == AsGuid)
+				{
+					return Node;
+				}
+			}
+		}
+		return nullptr;
+	}
+
+	static UEdGraphPin* FindPinByNameOrId(UEdGraphNode* InNode, const FString& InNameOrId, EEdGraphPinDirection InDir)
+	{
+		if (!InNode || InNameOrId.IsEmpty())
+		{
+			return nullptr;
+		}
+		FGuid AsPinId;
+		const bool bIsPinId = FGuid::Parse(InNameOrId, AsPinId);
+		for (UEdGraphPin* PinIt : InNode->Pins)
+		{
+			if (!PinIt || (InDir != EGPD_MAX && PinIt->Direction != InDir))
+			{
+				continue;
+			}
+			if (bIsPinId ? (PinIt->PinId == AsPinId) : (PinIt->PinName.ToString() == InNameOrId))
+			{
+				return PinIt;
+			}
+		}
+		if (bIsPinId)
+		{
+			return nullptr;
+		}
+		for (UEdGraphPin* PinIt : InNode->Pins)
+		{
+			if (!PinIt || (InDir != EGPD_MAX && PinIt->Direction != InDir))
+			{
+				continue;
+			}
+			if (PinIt->PinName.ToString().Equals(InNameOrId, ESearchCase::IgnoreCase))
+			{
+				return PinIt;
+			}
+		}
+		return nullptr;
+	}
+
+	static FString AvailablePinNames(const UEdGraphNode* InNode)
+	{
+		TArray<FString> Names;
+		for (const UEdGraphPin* PinIt : InNode->Pins)
+		{
+			if (PinIt && !PinIt->bHidden)
+			{
+				Names.Add(FString::Printf(TEXT("%s(%s)"), *PinIt->PinName.ToString(), PinIt->Direction == EGPD_Input ? TEXT("in") : TEXT("out")));
+			}
+		}
+		return Names.Num() > 0 ? FString::Join(Names, TEXT(", ")) : TEXT("(none)");
+	}
+
+	// Resolve a UFunction for a CallFunction node. When function_class is given it is authoritative. Otherwise
+	// the common Kismet libraries and the owning FSM class are searched so simple math/utility calls just work.
+	static UFunction* ResolveLocalGraphFunction(const FString& InFuncName, const FString& InClass, UBlueprint* InBlueprint)
+	{
+		if (InFuncName.IsEmpty())
+		{
+			return nullptr;
+		}
+		const FName FuncName(*InFuncName);
+
+		if (!InClass.IsEmpty())
+		{
+			UClass* OwnerClass = nullptr;
+			if (InClass.Contains(TEXT("/")) || InClass.Contains(TEXT(".")))
+			{
+				OwnerClass = FindObject<UClass>(nullptr, *InClass);
+				if (!OwnerClass)
+				{
+					OwnerClass = LoadObject<UClass>(nullptr, *InClass);
+				}
+			}
+			if (!OwnerClass)
+			{
+				OwnerClass = FindFirstObject<UClass>(*InClass, EFindFirstObjectOptions::NativeFirst);
+			}
+			return OwnerClass ? OwnerClass->FindFunctionByName(FuncName) : nullptr;
+		}
+
+		TArray<UClass*> Candidates;
+		Candidates.Add(UKismetMathLibrary::StaticClass());
+		Candidates.Add(UKismetSystemLibrary::StaticClass());
+		if (InBlueprint && InBlueprint->GeneratedClass)
+		{
+			Candidates.Add(InBlueprint->GeneratedClass);
+		}
+		for (UClass* Candidate : Candidates)
+		{
+			if (Candidate)
+			{
+				if (UFunction* Found = Candidate->FindFunctionByName(FuncName))
+				{
+					return Found;
+				}
+			}
+		}
+		return nullptr;
+	}
+
+	// Resolve a UClass from a path (/Script/Engine.Actor, /Game/Foo/BP_Bar) or a bare name.
+	static UClass* ResolveClassSpec(const FString& InSpec)
+	{
+		if (InSpec.IsEmpty())
+		{
+			return nullptr;
+		}
+		UClass* Resolved = nullptr;
+		if (InSpec.Contains(TEXT("/")) || InSpec.Contains(TEXT(".")))
+		{
+			Resolved = FindObject<UClass>(nullptr, *InSpec);
+			if (!Resolved)
+			{
+				Resolved = LoadObject<UClass>(nullptr, *InSpec);
+			}
+			// Blueprint asset path -> the generated class is <path>.<leaf>_C.
+			if (!Resolved && !InSpec.EndsWith(TEXT("_C")))
+			{
+				int32 LastSlash = INDEX_NONE;
+				if (InSpec.FindLastChar(TEXT('/'), LastSlash))
+				{
+					const FString Leaf = InSpec.Mid(LastSlash + 1);
+					Resolved = LoadObject<UClass>(nullptr, *FString::Printf(TEXT("%s.%s_C"), *InSpec, *Leaf));
+				}
+			}
+		}
+		if (!Resolved)
+		{
+			Resolved = FindFirstObject<UClass>(*InSpec, EFindFirstObjectOptions::NativeFirst);
+		}
+		return Resolved;
+	}
+
+	// Resolve the K2 node class to spawn from a class name, a class path, or a friendly alias.
+	static UClass* ResolveGraphNodeClass(const FString& InSpec)
+	{
+		const FString Lower = InSpec.ToLower();
+		FString ClassName = InSpec;
+		if (Lower == TEXT("call_function") || Lower == TEXT("callfunction") || Lower == TEXT("function"))
+		{
+			ClassName = TEXT("K2Node_CallFunction");
+		}
+		else if (Lower == TEXT("branch") || Lower == TEXT("if") || Lower == TEXT("ifthenelse") || Lower == TEXT("if_then_else"))
+		{
+			ClassName = TEXT("K2Node_IfThenElse");
+		}
+		else if (Lower == TEXT("get_variable") || Lower == TEXT("variable_get") || Lower == TEXT("variableget") || Lower == TEXT("get"))
+		{
+			ClassName = TEXT("K2Node_VariableGet");
+		}
+		else if (Lower == TEXT("set_variable") || Lower == TEXT("variable_set") || Lower == TEXT("variableset") || Lower == TEXT("set"))
+		{
+			ClassName = TEXT("K2Node_VariableSet");
+		}
+		else if (Lower == TEXT("sequence") || Lower == TEXT("execution_sequence") || Lower == TEXT("executionsequence"))
+		{
+			ClassName = TEXT("K2Node_ExecutionSequence");
+		}
+		else if (Lower == TEXT("cast") || Lower == TEXT("dynamic_cast") || Lower == TEXT("dynamiccast"))
+		{
+			ClassName = TEXT("K2Node_DynamicCast");
+		}
+		else if (Lower == TEXT("self") || Lower == TEXT("get_self"))
+		{
+			ClassName = TEXT("K2Node_Self");
+		}
+
+		UClass* Resolved = ResolveClassSpec(ClassName);
+		if (!Resolved && !ClassName.StartsWith(TEXT("K2Node_")) && !ClassName.Contains(TEXT("/")) && !ClassName.Contains(TEXT(".")))
+		{
+			Resolved = ResolveClassSpec(FString(TEXT("K2Node_")) + ClassName);
+		}
+		return Resolved;
+	}
+
+	static TSharedRef<FJsonObject> LocalGraphPinToJson(const UEdGraphPin* InPin)
+	{
+		const TSharedRef<FJsonObject> Obj = MakeShared<FJsonObject>();
+		Obj->SetStringField(TEXT("id"), InPin->PinId.ToString());
+		Obj->SetStringField(TEXT("name"), InPin->PinName.ToString());
+		Obj->SetStringField(TEXT("direction"), InPin->Direction == EGPD_Input ? TEXT("input") : TEXT("output"));
+		Obj->SetStringField(TEXT("type"), PinTypeToShortString(InPin->PinType));
+		if (!InPin->DefaultValue.IsEmpty())
+		{
+			Obj->SetStringField(TEXT("default_value"), InPin->DefaultValue);
+		}
+		if (InPin->DefaultObject)
+		{
+			Obj->SetStringField(TEXT("default_object"), InPin->DefaultObject->GetPathName());
+		}
+
+		// Mirror Monolith's "NodeName.PinName" reference form so connect-pin ids line up across transports.
+		TArray<TSharedPtr<FJsonValue>> Connected;
+		for (const UEdGraphPin* Linked : InPin->LinkedTo)
+		{
+			if (!Linked || !Linked->GetOwningNode())
+			{
+				continue;
+			}
+			Connected.Add(MakeShared<FJsonValueString>(FString::Printf(TEXT("%s.%s"),
+				*Linked->GetOwningNode()->GetName(), *Linked->PinName.ToString())));
+		}
+		Obj->SetArrayField(TEXT("connected_to"), Connected);
+		return Obj;
+	}
+
+	static TSharedRef<FJsonObject> LocalGraphNodeToJson(UEdGraphNode* InNode, bool bIncludePins, const FString& InResultNodeName)
+	{
+		const TSharedRef<FJsonObject> Obj = MakeShared<FJsonObject>();
+		Obj->SetStringField(TEXT("id"), InNode->GetName());
+		Obj->SetStringField(TEXT("class"), InNode->GetClass()->GetName());
+		Obj->SetStringField(TEXT("title"), InNode->GetNodeTitle(ENodeTitleType::ListView).ToString());
+
+		TArray<TSharedPtr<FJsonValue>> Pos;
+		Pos.Add(MakeShared<FJsonValueNumber>(InNode->NodePosX));
+		Pos.Add(MakeShared<FJsonValueNumber>(InNode->NodePosY));
+		Obj->SetArrayField(TEXT("pos"), Pos);
+
+		if (!InNode->NodeComment.IsEmpty())
+		{
+			Obj->SetStringField(TEXT("comment"), InNode->NodeComment);
+		}
+		if (const UK2Node_CallFunction* CallNode = Cast<UK2Node_CallFunction>(InNode))
+		{
+			Obj->SetStringField(TEXT("function"), CallNode->FunctionReference.GetMemberName().ToString());
+		}
+		if (!InResultNodeName.IsEmpty() && InNode->GetName() == InResultNodeName)
+		{
+			Obj->SetBoolField(TEXT("is_result"), true);
+		}
+
+		if (bIncludePins)
+		{
+			TArray<TSharedPtr<FJsonValue>> Pins;
+			for (const UEdGraphPin* Pin : InNode->Pins)
+			{
+				if (!Pin || Pin->bHidden)
+				{
+					continue;
+				}
+				Pins.Add(MakeShared<FJsonValueObject>(LocalGraphPinToJson(Pin)));
+			}
+			Obj->SetArrayField(TEXT("pins"), Pins);
+		}
+		return Obj;
+	}
+}
+
+FSMAssistOperationResult LD::Assist::GetLocalGraph(const TSharedRef<FJsonObject>& InArgs)
+{
+	bool bIncludePins = true;
+	InArgs->TryGetBoolField(Args::IncludePins, bIncludePins);
+
+	FString Error;
+	LD::Assist::Private::FResolvedLocalGraph Resolved;
+	if (!LD::Assist::Private::ResolveLocalGraph(InArgs, Resolved, Error))
+	{
+		return FSMAssistOperationResult::MakeError(Error);
+	}
+
+	USMBlueprint* Blueprint = Resolved.Blueprint;
+	USMGraphNode_Base* OwnerNode = Resolved.OwnerNode;
+	UEdGraph* Graph = Resolved.Graph;
+	const bool bIsRerouted = Resolved.bIsRerouted;
+
+	FString NodeGuidStr;
+	InArgs->TryGetStringField(Args::NodeGuid, NodeGuidStr);
+
+	// For condition-style graphs (transition / conduit) surface the wire-INTO anchor: the evaluation
+	// pin a boolean condition connects to (the same pin sm.set_transition_condition writes a literal to).
+	FString ResultNodeName;
+	UEdGraphPin* ResultPin = nullptr;
+	if (USMTransitionGraph* TransitionGraph = Cast<USMTransitionGraph>(Graph))
+	{
+		if (TransitionGraph->ResultNode)
+		{
+			ResultNodeName = TransitionGraph->ResultNode->GetName();
+			ResultPin = TransitionGraph->ResultNode->GetTransitionEvaluationPin();
+		}
+	}
+	else if (USMConduitGraph* ConduitGraph = Cast<USMConduitGraph>(Graph))
+	{
+		if (ConduitGraph->ResultNode)
+		{
+			ResultNodeName = ConduitGraph->ResultNode->GetName();
+			ResultPin = ConduitGraph->ResultNode->GetTransitionEvaluationPin();
+		}
+	}
+
+	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
+	Payload->SetStringField(Args::AssetPath, Blueprint->GetPathName());
+	Payload->SetStringField(Args::RequestedNodeGuid, NodeGuidStr);
+	Payload->SetStringField(Args::NodeGuid, OwnerNode->NodeGuid.ToString());
+	Payload->SetStringField(Args::NodeClass, OwnerNode->GetClass()->GetName());
+	Payload->SetStringField(Args::NodeKind, OwnerNode->GetFriendlyNodeName().ToString());
+	Payload->SetBoolField(Args::IsRerouted, bIsRerouted);
+	Payload->SetStringField(Args::GraphName, Graph->GetName());
+	Payload->SetStringField(Args::GraphPath, Graph->GetPathName());
+	Payload->SetStringField(Args::GraphGuid, Graph->GraphGuid.ToString());
+	if (!ResultNodeName.IsEmpty())
+	{
+		Payload->SetStringField(Args::ResultNodeName, ResultNodeName);
+	}
+	if (ResultPin)
+	{
+		Payload->SetStringField(Args::ResultPinId, ResultPin->PinId.ToString());
+		Payload->SetStringField(Args::ResultPinName, ResultPin->PinName.ToString());
+	}
+
+	TArray<TSharedPtr<FJsonValue>> Nodes;
+	for (UEdGraphNode* Node : Graph->Nodes)
+	{
+		if (!Node)
+		{
+			continue;
+		}
+		Nodes.Add(MakeShared<FJsonValueObject>(LD::Assist::Private::LocalGraphNodeToJson(Node, bIncludePins, ResultNodeName)));
+	}
+	Payload->SetNumberField(Args::NodeCount, Nodes.Num());
+	Payload->SetArrayField(Args::Nodes, Nodes);
+
+	return FSMAssistOperationResult::MakeSuccess(Payload);
+}
+
+FSMAssistOperationResult LD::Assist::AddLocalGraphNode(const TSharedRef<FJsonObject>& InArgs)
+{
+	FString Error;
+	LD::Assist::Private::FResolvedLocalGraph Resolved;
+	if (!LD::Assist::Private::ResolveLocalGraph(InArgs, Resolved, Error))
+	{
+		return FSMAssistOperationResult::MakeError(Error);
+	}
+	UEdGraph* Graph = Resolved.Graph;
+	USMBlueprint* Blueprint = Resolved.Blueprint;
+
+	// 'node_class' is the generic spec (any K2 node class or a friendly alias). 'kind' is an accepted synonym.
+	FString NodeSpec;
+	if ((!InArgs->TryGetStringField(Args::NodeClass, NodeSpec) || NodeSpec.IsEmpty())
+		&& (!InArgs->TryGetStringField(Args::Kind, NodeSpec) || NodeSpec.IsEmpty()))
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'node_class' (any K2 node class such as K2Node_IfThenElse or K2Node_CallFunction, or a friendly alias: call_function, branch, get_variable, set_variable, sequence, cast, self)."));
+	}
+
+	UClass* NodeClass = LD::Assist::Private::ResolveGraphNodeClass(NodeSpec);
+	if (!NodeClass)
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(
+			TEXT("Could not resolve node class '%s'. Pass a UK2Node class name (e.g. K2Node_MakeArray), a full class path, or a friendly alias."), *NodeSpec));
+	}
+	if (!NodeClass->IsChildOf(UK2Node::StaticClass()))
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("'%s' resolves to '%s', which is not a UK2Node class."), *NodeSpec, *NodeClass->GetName()));
+	}
+	if (NodeClass->HasAnyClassFlags(CLASS_Abstract))
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("Node class '%s' is abstract and cannot be spawned."), *NodeClass->GetName()));
+	}
+
+	// Validate the reference-bearing node kinds before creating anything, so a bad request leaves no orphan.
+	UFunction* CallTarget = nullptr;
+	FProperty* VarProperty = nullptr;
+	FString VarName;
+	UClass* CastTarget = nullptr;
+
+	if (NodeClass->IsChildOf(UK2Node_CallFunction::StaticClass()))
+	{
+		FString FuncName;
+		if (!InArgs->TryGetStringField(Args::FunctionName, FuncName) || FuncName.IsEmpty())
+		{
+			return FSMAssistOperationResult::MakeError(TEXT("A call_function node requires 'function_name'."));
+		}
+		FString FuncClass;
+		InArgs->TryGetStringField(Args::FunctionClass, FuncClass);
+		CallTarget = LD::Assist::Private::ResolveLocalGraphFunction(FuncName, FuncClass, Blueprint);
+		if (!CallTarget)
+		{
+			return FSMAssistOperationResult::MakeError(FString::Printf(
+				TEXT("Could not resolve function '%s'%s. Supply 'function_class' (e.g. /Script/Engine.KismetMathLibrary) when it is not on KismetMathLibrary, KismetSystemLibrary, or the FSM class."),
+				*FuncName, FuncClass.IsEmpty() ? TEXT("") : *FString::Printf(TEXT(" on class '%s'"), *FuncClass)));
+		}
+	}
+	else if (NodeClass->IsChildOf(UK2Node_Variable::StaticClass()))
+	{
+		if (!InArgs->TryGetStringField(Args::VariableName, VarName) || VarName.IsEmpty())
+		{
+			return FSMAssistOperationResult::MakeError(TEXT("A variable get/set node requires 'variable_name' (a member variable on the FSM blueprint)."));
+		}
+		const FName VarFName(*VarName);
+		if (Blueprint->SkeletonGeneratedClass)
+		{
+			VarProperty = FindFProperty<FProperty>(Blueprint->SkeletonGeneratedClass, VarFName);
+		}
+		if (!VarProperty && Blueprint->GeneratedClass)
+		{
+			VarProperty = FindFProperty<FProperty>(Blueprint->GeneratedClass, VarFName);
+		}
+		if (!VarProperty)
+		{
+			return FSMAssistOperationResult::MakeError(FString::Printf(
+				TEXT("Variable '%s' was not found on the FSM blueprint. Add it with sm.add_sm_variable and sm.compile before referencing it."), *VarName));
+		}
+	}
+	else if (NodeClass->IsChildOf(UK2Node_DynamicCast::StaticClass()))
+	{
+		FString TargetClassStr;
+		if (!InArgs->TryGetStringField(Args::TargetClass, TargetClassStr) || TargetClassStr.IsEmpty())
+		{
+			return FSMAssistOperationResult::MakeError(TEXT("A cast node requires 'target_class' (the class to cast to; there is no separate op to set it afterward)."));
+		}
+		CastTarget = LD::Assist::Private::ResolveClassSpec(TargetClassStr);
+		if (!CastTarget)
+		{
+			return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("Could not resolve cast 'target_class' '%s'."), *TargetClassStr));
+		}
+	}
+
+	double PosX = 0.0;
+	double PosY = 0.0;
+	InArgs->TryGetNumberField(Args::PositionX, PosX);
+	InArgs->TryGetNumberField(Args::PositionY, PosY);
+
+	// Spawn generically, mirroring UEdGraph::CreateNode: RF_Transactional so the node is undo-recordable,
+	// RF_Transient propagated from a transient graph, and the reference configured before pins allocate.
+	UEdGraphNode* NewNode = NewObject<UEdGraphNode>(Graph, NodeClass, NAME_None, RF_Transactional);
+	if (Graph->HasAnyFlags(RF_Transient))
+	{
+		NewNode->SetFlags(RF_Transient);
+	}
+	if (UK2Node_CallFunction* CallNode = Cast<UK2Node_CallFunction>(NewNode))
+	{
+		CallNode->SetFromFunction(CallTarget);
+	}
+	else if (UK2Node_Variable* VarNode = Cast<UK2Node_Variable>(NewNode))
+	{
+		VarNode->SetFromProperty(VarProperty, true, nullptr);
+	}
+	else if (UK2Node_DynamicCast* CastNode = Cast<UK2Node_DynamicCast>(NewNode))
+	{
+		CastNode->TargetType = CastTarget;
+	}
+
+	Graph->AddNode(NewNode, false, false);
+	NewNode->CreateNewGuid();
+	NewNode->PostPlacedNewNode();
+	if (NewNode->Pins.Num() == 0)
+	{
+		NewNode->AllocateDefaultPins();
+	}
+	NewNode->NodePosX = static_cast<int32>(PosX);
+	NewNode->NodePosY = static_cast<int32>(PosY);
+
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+
+	const TSharedRef<FJsonObject> Payload = LD::Assist::Private::LocalGraphNodeToJson(NewNode, true, FString());
+	Payload->SetStringField(Args::AssetPath, Blueprint->GetPathName());
+	Payload->SetStringField(Args::NodeGuid, NewNode->NodeGuid.ToString());
+	Payload->SetStringField(Args::NodeClass, NewNode->GetClass()->GetName());
+	Payload->SetStringField(Args::GraphName, Graph->GetName());
+	Payload->SetStringField(Args::GraphPath, Graph->GetPathName());
+	return FSMAssistOperationResult::MakeSuccess(Payload);
+}
+
+FSMAssistOperationResult LD::Assist::ConnectLocalGraphPins(const TSharedRef<FJsonObject>& InArgs)
+{
+	FString Error;
+	LD::Assist::Private::FResolvedLocalGraph Resolved;
+	if (!LD::Assist::Private::ResolveLocalGraph(InArgs, Resolved, Error))
+	{
+		return FSMAssistOperationResult::MakeError(Error);
+	}
+	UEdGraph* Graph = Resolved.Graph;
+
+	FString FromNodeId;
+	FString FromPinStr;
+	FString ToNodeId;
+	FString ToPinStr;
+	if (!InArgs->TryGetStringField(Args::FromNodeId, FromNodeId) || FromNodeId.IsEmpty()
+		|| !InArgs->TryGetStringField(Args::FromPin, FromPinStr) || FromPinStr.IsEmpty()
+		|| !InArgs->TryGetStringField(Args::ToNodeId, ToNodeId) || ToNodeId.IsEmpty()
+		|| !InArgs->TryGetStringField(Args::ToPin, ToPinStr) || ToPinStr.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Requires 'from_node_id', 'from_pin', 'to_node_id', 'to_pin'. Node ids and pins accept the values from sm.get_local_graph (or a node guid / pin id)."));
+	}
+
+	UEdGraphNode* FromNode = LD::Assist::Private::FindNodeInGraphByIdOrGuid(Graph, FromNodeId);
+	if (!FromNode)
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("No node '%s' in local graph '%s'."), *FromNodeId, *Graph->GetName()));
+	}
+	UEdGraphNode* ToNode = LD::Assist::Private::FindNodeInGraphByIdOrGuid(Graph, ToNodeId);
+	if (!ToNode)
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("No node '%s' in local graph '%s'."), *ToNodeId, *Graph->GetName()));
+	}
+
+	UEdGraphPin* SourcePin = LD::Assist::Private::FindPinByNameOrId(FromNode, FromPinStr, EGPD_Output);
+	if (!SourcePin)
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("No output pin '%s' on node '%s'. Available: %s."),
+			*FromPinStr, *FromNodeId, *LD::Assist::Private::AvailablePinNames(FromNode)));
+	}
+	UEdGraphPin* DestPin = LD::Assist::Private::FindPinByNameOrId(ToNode, ToPinStr, EGPD_Input);
+	if (!DestPin)
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("No input pin '%s' on node '%s'. Available: %s."),
+			*ToPinStr, *ToNodeId, *LD::Assist::Private::AvailablePinNames(ToNode)));
+	}
+
+	const UEdGraphSchema* Schema = Graph->GetSchema();
+	if (!Schema)
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Local graph has no schema."));
+	}
+
+	// TryCreateConnection can reconstruct nodes (wildcard/promotion/MakeArray split pins), freeing the pin
+	// objects, so snapshot the display refs before wiring.
+	const FString SourceRef = FString::Printf(TEXT("%s.%s"), *FromNode->GetName(), *SourcePin->PinName.ToString());
+	const FString DestRef = FString::Printf(TEXT("%s.%s"), *ToNode->GetName(), *DestPin->PinName.ToString());
+
+	const FPinConnectionResponse Response = Schema->CanCreateConnection(SourcePin, DestPin);
+	if (Response.Response == CONNECT_RESPONSE_DISALLOW)
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("Cannot connect %s -> %s: %s"),
+			*SourceRef, *DestRef, *Response.Message.ToString()));
+	}
+	if (!Schema->TryCreateConnection(SourcePin, DestPin))
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("Connection failed for %s -> %s."), *SourceRef, *DestRef));
+	}
+
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Resolved.Blueprint);
+
+	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
+	Payload->SetStringField(Args::AssetPath, Resolved.Blueprint->GetPathName());
+	Payload->SetStringField(Args::GraphName, Graph->GetName());
+	Payload->SetStringField(Args::FromNodeId, SourceRef);
+	Payload->SetStringField(Args::ToNodeId, DestRef);
+	Payload->SetBoolField(Args::Connected, true);
+	return FSMAssistOperationResult::MakeSuccess(Payload);
+}
+
+FSMAssistOperationResult LD::Assist::SetLocalGraphPinDefault(const TSharedRef<FJsonObject>& InArgs)
+{
+	FString Error;
+	LD::Assist::Private::FResolvedLocalGraph Resolved;
+	if (!LD::Assist::Private::ResolveLocalGraph(InArgs, Resolved, Error))
+	{
+		return FSMAssistOperationResult::MakeError(Error);
+	}
+	UEdGraph* Graph = Resolved.Graph;
+
+	FString NodeId;
+	FString PinStr;
+	if (!InArgs->TryGetStringField(Args::NodeId, NodeId) || NodeId.IsEmpty()
+		|| !InArgs->TryGetStringField(Args::Pin, PinStr) || PinStr.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Requires 'node_id' and 'pin'."));
+	}
+	FString Value;
+	if (!InArgs->TryGetStringField(Args::Value, Value))
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Requires 'value' (the literal to set on the input pin)."));
+	}
+
+	UEdGraphNode* Node = LD::Assist::Private::FindNodeInGraphByIdOrGuid(Graph, NodeId);
+	if (!Node)
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("No node '%s' in local graph '%s'."), *NodeId, *Graph->GetName()));
+	}
+	UEdGraphPin* TargetPin = LD::Assist::Private::FindPinByNameOrId(Node, PinStr, EGPD_Input);
+	if (!TargetPin)
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("No input pin '%s' on node '%s'. Available: %s."),
+			*PinStr, *NodeId, *LD::Assist::Private::AvailablePinNames(Node)));
+	}
+
+	const UEdGraphSchema* Schema = Graph->GetSchema();
+	if (!Schema)
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Local graph has no schema."));
+	}
+
+	Schema->TrySetDefaultValue(*TargetPin, Value);
+	Node->PinDefaultValueChanged(TargetPin);
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Resolved.Blueprint);
+
+	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
+	Payload->SetStringField(Args::AssetPath, Resolved.Blueprint->GetPathName());
+	Payload->SetStringField(Args::NodeId, Node->GetName());
+	Payload->SetStringField(Args::Pin, TargetPin->PinName.ToString());
+	Payload->SetStringField(Args::Value, TargetPin->DefaultValue);
+	return FSMAssistOperationResult::MakeSuccess(Payload);
+}
+
+FSMAssistOperationResult LD::Assist::RemoveLocalGraphNode(const TSharedRef<FJsonObject>& InArgs)
+{
+	FString Error;
+	LD::Assist::Private::FResolvedLocalGraph Resolved;
+	if (!LD::Assist::Private::ResolveLocalGraph(InArgs, Resolved, Error))
+	{
+		return FSMAssistOperationResult::MakeError(Error);
+	}
+	UEdGraph* Graph = Resolved.Graph;
+
+	FString NodeId;
+	if (!InArgs->TryGetStringField(Args::NodeId, NodeId) || NodeId.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Requires 'node_id' (the node id from sm.get_local_graph, or a node guid)."));
+	}
+
+	UEdGraphNode* Node = LD::Assist::Private::FindNodeInGraphByIdOrGuid(Graph, NodeId);
+	if (!Node)
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("No node '%s' in local graph '%s'."), *NodeId, *Graph->GetName()));
+	}
+
+	// The transition/conduit result node and state entry nodes are structural roots. The editor forbids
+	// deleting them, and so do we (removing them would break the bound graph).
+	if (!Node->CanUserDeleteNode())
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(
+			TEXT("Node '%s' (%s) is a required root node (e.g. the transition result or a state entry node) and cannot be removed."),
+			*Node->GetName(), *Node->GetClass()->GetName()));
+	}
+
+	const FString RemovedName = Node->GetName();
+	FBlueprintEditorUtils::RemoveNode(Resolved.Blueprint, Node, true);
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Resolved.Blueprint);
+
+	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
+	Payload->SetStringField(Args::AssetPath, Resolved.Blueprint->GetPathName());
+	Payload->SetStringField(Args::GraphName, Graph->GetName());
+	Payload->SetStringField(Args::NodeId, RemovedName);
+	Payload->SetBoolField(TEXT("removed"), true);
+	Payload->SetNumberField(Args::NodeCount, Graph->Nodes.Num());
+	return FSMAssistOperationResult::MakeSuccess(Payload);
+}
+
+FSMAssistOperationResult LD::Assist::DisconnectLocalGraphPins(const TSharedRef<FJsonObject>& InArgs)
+{
+	FString Error;
+	LD::Assist::Private::FResolvedLocalGraph Resolved;
+	if (!LD::Assist::Private::ResolveLocalGraph(InArgs, Resolved, Error))
+	{
+		return FSMAssistOperationResult::MakeError(Error);
+	}
+	UEdGraph* Graph = Resolved.Graph;
+
+	FString FromNodeId;
+	FString FromPinStr;
+	FString ToNodeId;
+	FString ToPinStr;
+	if (!InArgs->TryGetStringField(Args::FromNodeId, FromNodeId) || FromNodeId.IsEmpty()
+		|| !InArgs->TryGetStringField(Args::FromPin, FromPinStr) || FromPinStr.IsEmpty()
+		|| !InArgs->TryGetStringField(Args::ToNodeId, ToNodeId) || ToNodeId.IsEmpty()
+		|| !InArgs->TryGetStringField(Args::ToPin, ToPinStr) || ToPinStr.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Requires 'from_node_id', 'from_pin', 'to_node_id', 'to_pin' (the same identifiers sm.connect_local_graph_pins uses)."));
+	}
+
+	UEdGraphNode* FromNode = LD::Assist::Private::FindNodeInGraphByIdOrGuid(Graph, FromNodeId);
+	if (!FromNode)
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("No node '%s' in local graph '%s'."), *FromNodeId, *Graph->GetName()));
+	}
+	UEdGraphNode* ToNode = LD::Assist::Private::FindNodeInGraphByIdOrGuid(Graph, ToNodeId);
+	if (!ToNode)
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("No node '%s' in local graph '%s'."), *ToNodeId, *Graph->GetName()));
+	}
+
+	UEdGraphPin* SourcePin = LD::Assist::Private::FindPinByNameOrId(FromNode, FromPinStr, EGPD_MAX);
+	if (!SourcePin)
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("No pin '%s' on node '%s'. Available: %s."),
+			*FromPinStr, *FromNodeId, *LD::Assist::Private::AvailablePinNames(FromNode)));
+	}
+	UEdGraphPin* DestPin = LD::Assist::Private::FindPinByNameOrId(ToNode, ToPinStr, EGPD_MAX);
+	if (!DestPin)
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("No pin '%s' on node '%s'. Available: %s."),
+			*ToPinStr, *ToNodeId, *LD::Assist::Private::AvailablePinNames(ToNode)));
+	}
+
+	const UEdGraphSchema* Schema = Graph->GetSchema();
+	if (!Schema)
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Local graph has no schema."));
+	}
+
+	// BreakSinglePinLink can reconstruct nodes (e.g. MakeArray split pins), freeing the pin objects, so
+	// snapshot the linked state and display refs before breaking.
+	const bool bWereLinked = SourcePin->LinkedTo.Contains(DestPin);
+	const FString SourceRef = FString::Printf(TEXT("%s.%s"), *FromNode->GetName(), *SourcePin->PinName.ToString());
+	const FString DestRef = FString::Printf(TEXT("%s.%s"), *ToNode->GetName(), *DestPin->PinName.ToString());
+	Schema->BreakSinglePinLink(SourcePin, DestPin);
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Resolved.Blueprint);
+
+	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
+	Payload->SetStringField(Args::AssetPath, Resolved.Blueprint->GetPathName());
+	Payload->SetStringField(Args::GraphName, Graph->GetName());
+	Payload->SetStringField(Args::FromNodeId, SourceRef);
+	Payload->SetStringField(Args::ToNodeId, DestRef);
+	Payload->SetBoolField(TEXT("disconnected"), bWereLinked);
+	return FSMAssistOperationResult::MakeSuccess(Payload);
+}
+
+FSMAssistOperationResult LD::Assist::SetLocalGraphNode(const TSharedRef<FJsonObject>& InArgs)
+{
+	FString Error;
+	LD::Assist::Private::FResolvedLocalGraph Resolved;
+	if (!LD::Assist::Private::ResolveLocalGraph(InArgs, Resolved, Error))
+	{
+		return FSMAssistOperationResult::MakeError(Error);
+	}
+	UEdGraph* Graph = Resolved.Graph;
+
+	FString NodeId;
+	if (!InArgs->TryGetStringField(Args::NodeId, NodeId) || NodeId.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Requires 'node_id' (the node id from sm.get_local_graph, or a node guid)."));
+	}
+
+	UEdGraphNode* Node = LD::Assist::Private::FindNodeInGraphByIdOrGuid(Graph, NodeId);
+	if (!Node)
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("No node '%s' in local graph '%s'."), *NodeId, *Graph->GetName()));
+	}
+
+	bool bAny = false;
+	bool bStructural = false;
+
+	double PosX = 0.0;
+	if (InArgs->TryGetNumberField(Args::PositionX, PosX))
+	{
+		Node->NodePosX = static_cast<int32>(PosX);
+		bAny = true;
+	}
+	double PosY = 0.0;
+	if (InArgs->TryGetNumberField(Args::PositionY, PosY))
+	{
+		Node->NodePosY = static_cast<int32>(PosY);
+		bAny = true;
+	}
+	FString Comment;
+	if (InArgs->TryGetStringField(Args::Comment, Comment))
+	{
+		Node->NodeComment = Comment;
+		bAny = true;
+	}
+	bool bEnabled = true;
+	if (InArgs->TryGetBoolField(Args::Enabled, bEnabled))
+	{
+		Node->SetEnabledState(bEnabled ? ENodeEnabledState::Enabled : ENodeEnabledState::Disabled, true);
+		bAny = true;
+		bStructural = true;
+	}
+
+	if (!bAny)
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Requires at least one field to change: 'position_x', 'position_y', 'comment', or 'enabled'."));
+	}
+
+	// Enabled state feeds compilation. Position and comment are cosmetic and only need the blueprint dirtied.
+	if (bStructural)
+	{
+		FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Resolved.Blueprint);
+	}
+	else
+	{
+		FBlueprintEditorUtils::MarkBlueprintAsModified(Resolved.Blueprint);
+	}
+
+	const TSharedRef<FJsonObject> Payload = LD::Assist::Private::LocalGraphNodeToJson(Node, false, FString());
+	Payload->SetStringField(Args::AssetPath, Resolved.Blueprint->GetPathName());
+	Payload->SetStringField(Args::GraphName, Graph->GetName());
+	Payload->SetBoolField(Args::Enabled, Node->IsNodeEnabled());
 	return FSMAssistOperationResult::MakeSuccess(Payload);
 }
 

@@ -550,6 +550,138 @@ FString ULogicDriverToolset::SpawnLocalGraphWriteNode(
 	return LDA::Execute(TEXT("sm.spawn_local_graph_write_node"), Args);
 }
 
+FString ULogicDriverToolset::GetLocalGraph(
+	USMBlueprint* Blueprint,
+	const FString& NodeGuid,
+	bool bIncludePins)
+{
+	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
+	Args->SetStringField(TEXT("node_guid"), NodeGuid);
+	LDA::AddBool(*Args, TEXT("include_pins"), bIncludePins);
+	return LDA::Execute(TEXT("sm.get_local_graph"), Args);
+}
+
+FString ULogicDriverToolset::AddLocalGraphNode(
+	USMBlueprint* Blueprint,
+	const FString& NodeGuid,
+	const FString& NodeClass,
+	const FString& FunctionName,
+	const FString& FunctionClass,
+	const FString& VariableName,
+	const FString& TargetClass,
+	double PositionX,
+	double PositionY)
+{
+	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
+	Args->SetStringField(TEXT("node_guid"), NodeGuid);
+	LDA::AddIfNonEmpty(*Args, TEXT("node_class"), NodeClass);
+	LDA::AddIfNonEmpty(*Args, TEXT("function_name"), FunctionName);
+	LDA::AddIfNonEmpty(*Args, TEXT("function_class"), FunctionClass);
+	LDA::AddIfNonEmpty(*Args, TEXT("variable_name"), VariableName);
+	LDA::AddIfNonEmpty(*Args, TEXT("target_class"), TargetClass);
+	Args->SetNumberField(TEXT("position_x"), PositionX);
+	Args->SetNumberField(TEXT("position_y"), PositionY);
+	return LDA::Execute(TEXT("sm.add_local_graph_node"), Args);
+}
+
+FString ULogicDriverToolset::ConnectLocalGraphPins(
+	USMBlueprint* Blueprint,
+	const FString& NodeGuid,
+	const FString& FromNodeId,
+	const FString& FromPin,
+	const FString& ToNodeId,
+	const FString& ToPin)
+{
+	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
+	Args->SetStringField(TEXT("node_guid"), NodeGuid);
+	Args->SetStringField(TEXT("from_node_id"), FromNodeId);
+	Args->SetStringField(TEXT("from_pin"), FromPin);
+	Args->SetStringField(TEXT("to_node_id"), ToNodeId);
+	Args->SetStringField(TEXT("to_pin"), ToPin);
+	return LDA::Execute(TEXT("sm.connect_local_graph_pins"), Args);
+}
+
+FString ULogicDriverToolset::SetLocalGraphPinDefault(
+	USMBlueprint* Blueprint,
+	const FString& NodeGuid,
+	const FString& NodeId,
+	const FString& Pin,
+	const FString& Value)
+{
+	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
+	Args->SetStringField(TEXT("node_guid"), NodeGuid);
+	Args->SetStringField(TEXT("node_id"), NodeId);
+	Args->SetStringField(TEXT("pin"), Pin);
+	Args->SetStringField(TEXT("value"), Value);
+	return LDA::Execute(TEXT("sm.set_local_graph_pin_default"), Args);
+}
+
+FString ULogicDriverToolset::RemoveLocalGraphNode(
+	USMBlueprint* Blueprint,
+	const FString& NodeGuid,
+	const FString& NodeId)
+{
+	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
+	Args->SetStringField(TEXT("node_guid"), NodeGuid);
+	Args->SetStringField(TEXT("node_id"), NodeId);
+	return LDA::Execute(TEXT("sm.remove_local_graph_node"), Args);
+}
+
+FString ULogicDriverToolset::DisconnectLocalGraphPins(
+	USMBlueprint* Blueprint,
+	const FString& NodeGuid,
+	const FString& FromNodeId,
+	const FString& FromPin,
+	const FString& ToNodeId,
+	const FString& ToPin)
+{
+	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
+	Args->SetStringField(TEXT("node_guid"), NodeGuid);
+	Args->SetStringField(TEXT("from_node_id"), FromNodeId);
+	Args->SetStringField(TEXT("from_pin"), FromPin);
+	Args->SetStringField(TEXT("to_node_id"), ToNodeId);
+	Args->SetStringField(TEXT("to_pin"), ToPin);
+	return LDA::Execute(TEXT("sm.disconnect_local_graph_pins"), Args);
+}
+
+FString ULogicDriverToolset::SetLocalGraphNode(
+	USMBlueprint* Blueprint,
+	const FString& NodeGuid,
+	const FString& NodeId,
+	bool bUpdatePosition,
+	double PositionX,
+	double PositionY,
+	bool bUpdateComment,
+	const FString& Comment,
+	bool bUpdateEnabled,
+	bool bEnabled)
+{
+	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
+	Args->SetStringField(TEXT("node_guid"), NodeGuid);
+	Args->SetStringField(TEXT("node_id"), NodeId);
+	if (bUpdatePosition)
+	{
+		Args->SetNumberField(TEXT("position_x"), PositionX);
+		Args->SetNumberField(TEXT("position_y"), PositionY);
+	}
+	if (bUpdateComment)
+	{
+		Args->SetStringField(TEXT("comment"), Comment);
+	}
+	if (bUpdateEnabled)
+	{
+		LDA::AddBool(*Args, TEXT("enabled"), bEnabled);
+	}
+	return LDA::Execute(TEXT("sm.set_local_graph_node"), Args);
+}
+
 FString ULogicDriverToolset::ConfigureTransitionEvent(
 	USMBlueprint* Blueprint,
 	const FString& TransitionGuid,

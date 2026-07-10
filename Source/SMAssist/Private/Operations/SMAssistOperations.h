@@ -101,4 +101,18 @@ namespace LD::Assist
 	FSMAssistOperationResult ReplaceNode(const TSharedRef<FJsonObject>& InArgs);
 
 	FSMAssistOperationResult ConvertToReference(const TSharedRef<FJsonObject>& InArgs);
+
+	FSMAssistOperationResult GetLocalGraph(const TSharedRef<FJsonObject>& InArgs);
+
+	FSMAssistOperationResult AddLocalGraphNode(const TSharedRef<FJsonObject>& InArgs);
+
+	FSMAssistOperationResult ConnectLocalGraphPins(const TSharedRef<FJsonObject>& InArgs);
+
+	FSMAssistOperationResult SetLocalGraphPinDefault(const TSharedRef<FJsonObject>& InArgs);
+
+	FSMAssistOperationResult RemoveLocalGraphNode(const TSharedRef<FJsonObject>& InArgs);
+
+	FSMAssistOperationResult DisconnectLocalGraphPins(const TSharedRef<FJsonObject>& InArgs);
+
+	FSMAssistOperationResult SetLocalGraphNode(const TSharedRef<FJsonObject>& InArgs);
 }

@@ -1016,6 +1016,206 @@ public:
 		bool bDefaultValue = false);
 
 	/**
+	 * Reads the local (bound) graph of any Logic Driver SM graph node: a state's OnStateBegin/Update/End
+	 * graph (a state shares one bound graph across those events), a transition's CanEnterTransition graph,
+	 * or a conduit's graph. This is the primitive that makes bound-graph K2 authoring reachable: Logic
+	 * Driver owns the node -> bound-graph resolution that generic blueprint tools cannot do, because their
+	 * graph lookup does not recurse into node-owned bound graphs.
+	 *
+	 * Returns the graph's addressable identity (graph_name, graph_path, graph_guid) plus its nodes and
+	 * pins. Each node "id" is the object name and each pin "connected_to" entry is "NodeName.PinName",
+	 * matching the ids generic connect_pins expects, so callers read existing logic back and -- where the
+	 * transport's graph resolver can reach a bound graph -- author into it with generic create_node /
+	 * connect_pins.
+	 *
+	 * NodeGuid accepts a state, transition, conduit, or reroute node. Reroute waypoints and non-primary
+	 * rerouted transition segments are normalized to the primary transition that owns the single compiled
+	 * graph: "node_guid" in the response is the resolved node and "is_rerouted" flags the chain.
+	 *
+	 * For transition and conduit graphs the response also pins the wire-INTO anchor: result_node_name +
+	 * result_pin_id + result_pin_name identify the evaluation pin a boolean condition connects to (the same
+	 * pin SetTransitionCondition writes a literal to). State graphs expose their entry points as ordinary
+	 * nodes in the list. Read-only.
+	 *
+	 * @param Blueprint The state-machine blueprint. Required.
+	 * @param NodeGuid Guid of the state, transition (any reroute segment), conduit, or reroute waypoint
+	 *        whose local graph to read. Reroutes resolve to the primary transition. Required.
+	 * @param bIncludePins Include each node's pin array. Defaults to true; pass false for a lighter
+	 *        node-only listing.
+	 * @return JSON: { asset_path, requested_node_guid, node_guid, node_class, node_kind, is_rerouted,
+	 *                 graph_name, graph_path, graph_guid, [result_node_name, result_pin_id,
+	 *                 result_pin_name], node_count, nodes:[ { id, class, title, pos, [comment], [function],
+	 *                 [is_result], [pins] } ] }
+	 */
+	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
+	static FString GetLocalGraph(
+		USMBlueprint* Blueprint,
+		const FString& NodeGuid,
+		bool bIncludePins = true);
+
+	/**
+	 * Places any Blueprint K2 node into an SM node's bound (local) graph -- a state's
+	 * OnStateBegin/Update/End graph, a transition's CanEnterTransition graph, or a conduit's graph. The
+	 * graph is resolved from NodeGuid exactly like GetLocalGraph (reroutes normalize to the primary
+	 * transition), then the node is spawned directly by Logic Driver Assist, so it does NOT depend on the
+	 * transport's generic graph resolver.
+	 *
+	 * NodeClass accepts any UK2Node class: a class name (K2Node_IfThenElse, K2Node_MakeArray), a full
+	 * class path (/Script/BlueprintGraph.K2Node_Knot), or a friendly alias (call_function, branch,
+	 * get_variable, set_variable, sequence, cast, self). Reference-bearing nodes take config from the
+	 * extra args: call_function needs FunctionName (+ FunctionClass when not on KismetMathLibrary /
+	 * KismetSystemLibrary / the FSM class); get_variable/set_variable need VariableName (a member on the
+	 * FSM blueprint -- compile first if just added); cast requires TargetClass. Any other node
+	 * type spawns with its default pins. For Logic Driver's own read/write specials (TimeInState,
+	 * CanEvaluate, ...) use SpawnLocalGraphReadNode / SpawnLocalGraphWriteNode. Wire with
+	 * ConnectLocalGraphPins, seed literals with SetLocalGraphPinDefault, then Compile.
+	 *
+	 * @param Blueprint The state-machine blueprint. Required.
+	 * @param NodeGuid Guid of the state/transition/conduit/reroute node whose local graph receives the node. Required.
+	 * @param NodeClass Any UK2Node class name, class path, or friendly alias. Required.
+	 * @param FunctionName For call_function nodes: the UFunction name (e.g. "Greater_DoubleDouble").
+	 * @param FunctionClass Optional owning class (path or name); empty searches the common libraries and FSM class.
+	 * @param VariableName For get_variable/set_variable nodes: a member variable on the FSM blueprint.
+	 * @param TargetClass For cast nodes (required): the class (path or name) to cast to.
+	 * @param PositionX Local-graph X. Defaults to 0.
+	 * @param PositionY Local-graph Y. Defaults to 0.
+	 * @return JSON: { asset_path, id, node_guid, node_class, class, title, pos, pins, graph_name, graph_path }
+	 */
+	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
+	static FString AddLocalGraphNode(
+		USMBlueprint* Blueprint,
+		const FString& NodeGuid,
+		const FString& NodeClass = TEXT(""),
+		const FString& FunctionName = TEXT(""),
+		const FString& FunctionClass = TEXT(""),
+		const FString& VariableName = TEXT(""),
+		const FString& TargetClass = TEXT(""),
+		double PositionX = 0.0,
+		double PositionY = 0.0);
+
+	/**
+	 * Connects two pins within an SM node's bound (local) graph. The graph is resolved from NodeGuid like
+	 * GetLocalGraph. FromNodeId/ToNodeId accept the node "id" (object name) returned by GetLocalGraph or
+	 * AddLocalGraphNode, or a node guid; FromPin/ToPin accept a pin name (e.g. "bCanEnterTransition",
+	 * "ReturnValue", "A") or a pin id. FromPin resolves against the source node's OUTPUT pins, ToPin against
+	 * the destination's INPUT pins. Routes through the K2 schema (type-promotion/conversion nodes inserted
+	 * when the schema calls for it); a disallowed connection returns the schema's reason.
+	 *
+	 * @param Blueprint The state-machine blueprint. Required.
+	 * @param NodeGuid Guid of the node owning the local graph. Required.
+	 * @param FromNodeId Source node id (object name) or node guid. Required.
+	 * @param FromPin Source output pin name or pin id. Required.
+	 * @param ToNodeId Destination node id (object name) or node guid; use result_node_name for the result node. Required.
+	 * @param ToPin Destination input pin name or pin id; use result_pin_name (e.g. "bCanEnterTransition"). Required.
+	 * @return JSON: { asset_path, graph_name, from_node_id, to_node_id, connected }
+	 */
+	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
+	static FString ConnectLocalGraphPins(
+		USMBlueprint* Blueprint,
+		const FString& NodeGuid,
+		const FString& FromNodeId,
+		const FString& FromPin,
+		const FString& ToNodeId,
+		const FString& ToPin);
+
+	/**
+	 * Sets the literal default value of an input pin inside an SM node's bound (local) graph, mirroring
+	 * typing a value into an unconnected pin. The graph is resolved from NodeGuid like GetLocalGraph;
+	 * NodeId accepts the node "id" (object name) or a node guid; Pin accepts a pin name or pin id and
+	 * resolves against the node's INPUT pins. Value is UE property-text ("2.5", "true", an enum name).
+	 * Ignored by the compiler if the pin is wired.
+	 *
+	 * @param Blueprint The state-machine blueprint. Required.
+	 * @param NodeGuid Guid of the node owning the local graph. Required.
+	 * @param NodeId Target node id (object name) or node guid. Required.
+	 * @param Pin Input pin name or pin id. Required.
+	 * @param Value Literal value in UE property-text form. Required.
+	 * @return JSON: { asset_path, node_id, pin, value }
+	 */
+	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
+	static FString SetLocalGraphPinDefault(
+		USMBlueprint* Blueprint,
+		const FString& NodeGuid,
+		const FString& NodeId,
+		const FString& Pin,
+		const FString& Value);
+
+	/**
+	 * Removes a K2 node from an SM node's bound (local) graph. The graph is resolved from NodeGuid like
+	 * GetLocalGraph; NodeId accepts the node "id" (object name) from GetLocalGraph / AddLocalGraphNode, or
+	 * a node guid. Structural root nodes (the transition/conduit result node, state entry nodes) cannot be
+	 * removed -- the op refuses them, matching the editor. Removing a node also breaks its pin links.
+	 *
+	 * @param Blueprint The state-machine blueprint. Required.
+	 * @param NodeGuid Guid of the node owning the local graph. Required.
+	 * @param NodeId The node to remove: its id (object name) or a node guid. Required.
+	 * @return JSON: { asset_path, graph_name, node_id, removed, node_count }
+	 */
+	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
+	static FString RemoveLocalGraphNode(
+		USMBlueprint* Blueprint,
+		const FString& NodeGuid,
+		const FString& NodeId);
+
+	/**
+	 * Breaks a single connection between two pins in an SM node's bound (local) graph -- the inverse of
+	 * ConnectLocalGraphPins, taking the same identifiers. The graph is resolved from NodeGuid like
+	 * GetLocalGraph; node ids accept the GetLocalGraph "id" or a node guid; pins accept a name or a pin id.
+	 * Only the link between the two named pins is broken. Re-connecting an already-wired input auto-breaks
+	 * the old link, so this is mainly for detaching a wire without replacing it.
+	 *
+	 * @param Blueprint The state-machine blueprint. Required.
+	 * @param NodeGuid Guid of the node owning the local graph. Required.
+	 * @param FromNodeId One endpoint node id (object name) or node guid. Required.
+	 * @param FromPin Pin name or pin id on the from node. Required.
+	 * @param ToNodeId Other endpoint node id (object name) or node guid. Required.
+	 * @param ToPin Pin name or pin id on the to node. Required.
+	 * @return JSON: { asset_path, graph_name, from_node_id, to_node_id, disconnected }
+	 */
+	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
+	static FString DisconnectLocalGraphPins(
+		USMBlueprint* Blueprint,
+		const FString& NodeGuid,
+		const FString& FromNodeId,
+		const FString& FromPin,
+		const FString& ToNodeId,
+		const FString& ToPin);
+
+	/**
+	 * Modifies an existing K2 node in an SM node's bound (local) graph in place. The graph is resolved
+	 * from NodeGuid like GetLocalGraph; NodeId accepts the node "id" (object name) from GetLocalGraph /
+	 * AddLocalGraphNode, or a node guid. Each change is gated by its bUpdate* flag (positions can be
+	 * negative and booleans have no natural sentinel): set bUpdatePosition to reposition, bUpdateComment to
+	 * set/clear the comment, bUpdateEnabled to enable/disable the node. Position and comment are cosmetic;
+	 * enabled feeds compilation. Deep reconfiguration (e.g. changing a call node's function) is not done
+	 * here -- use RemoveLocalGraphNode + AddLocalGraphNode.
+	 *
+	 * @param Blueprint The state-machine blueprint. Required.
+	 * @param NodeGuid Guid of the node owning the local graph. Required.
+	 * @param NodeId The node to modify: its id (object name) or a node guid. Required.
+	 * @param bUpdatePosition When true, apply PositionX/PositionY.
+	 * @param PositionX New local-graph X coordinate.
+	 * @param PositionY New local-graph Y coordinate.
+	 * @param bUpdateComment When true, apply Comment.
+	 * @param Comment Node comment text; empty string clears it.
+	 * @param bUpdateEnabled When true, apply bEnabled.
+	 * @param bEnabled false disables the node (excluded from compilation), true re-enables it.
+	 * @return JSON: { asset_path, graph_name, id, class, title, pos, comment, enabled }
+	 */
+	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
+	static FString SetLocalGraphNode(
+		USMBlueprint* Blueprint,
+		const FString& NodeGuid,
+		const FString& NodeId,
+		bool bUpdatePosition = false,
+		double PositionX = 0.0,
+		double PositionY = 0.0,
+		bool bUpdateComment = false,
+		const FString& Comment = TEXT(""),
+		bool bUpdateEnabled = false,
+		bool bEnabled = true);
+
+	/**
 	 * Binds, rebinds, or clears the auto-bound event on a transition edge, and/or updates its
 	 * trigger flags. Mirrors a user edit in the transition's Details panel exactly: each set field
 	 * is applied via PreEditChange/PostEditChangeProperty so cascading resets and downstream

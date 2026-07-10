@@ -54,6 +54,13 @@ namespace LD::Assist::Ops
 	inline constexpr const TCHAR* MergeStates = TEXT("sm.merge_states");
 	inline constexpr const TCHAR* ReplaceNode = TEXT("sm.replace_node");
 	inline constexpr const TCHAR* ConvertToReference = TEXT("sm.convert_to_reference");
+	inline constexpr const TCHAR* GetLocalGraph = TEXT("sm.get_local_graph");
+	inline constexpr const TCHAR* AddLocalGraphNode = TEXT("sm.add_local_graph_node");
+	inline constexpr const TCHAR* ConnectLocalGraphPins = TEXT("sm.connect_local_graph_pins");
+	inline constexpr const TCHAR* SetLocalGraphPinDefault = TEXT("sm.set_local_graph_pin_default");
+	inline constexpr const TCHAR* RemoveLocalGraphNode = TEXT("sm.remove_local_graph_node");
+	inline constexpr const TCHAR* DisconnectLocalGraphPins = TEXT("sm.disconnect_local_graph_pins");
+	inline constexpr const TCHAR* SetLocalGraphNode = TEXT("sm.set_local_graph_node");
 }
 
 namespace LD::Assist::Args
@@ -227,8 +234,26 @@ namespace LD::Assist::Args
 	inline constexpr const TCHAR* BucketIndex = TEXT("bucket_index");
 	inline constexpr const TCHAR* ElementType = TEXT("element_type");
 	inline constexpr const TCHAR* ResultPin = TEXT("result_pin");
+	inline constexpr const TCHAR* ResultPinId = TEXT("result_pin_id");
 	inline constexpr const TCHAR* IncludePinTree = TEXT("include_pin_tree");
 	inline constexpr const TCHAR* Enable = TEXT("b_enable");
+
+	inline constexpr const TCHAR* RequestedNodeGuid = TEXT("requested_node_guid");
+	inline constexpr const TCHAR* NodeClass = TEXT("node_class");
+	inline constexpr const TCHAR* NodeKind = TEXT("node_kind");
+	inline constexpr const TCHAR* IsRerouted = TEXT("is_rerouted");
+	inline constexpr const TCHAR* NodeCount = TEXT("node_count");
+	inline constexpr const TCHAR* NodeId = TEXT("node_id");
+	inline constexpr const TCHAR* FunctionName = TEXT("function_name");
+	inline constexpr const TCHAR* FunctionClass = TEXT("function_class");
+	inline constexpr const TCHAR* FromNodeId = TEXT("from_node_id");
+	inline constexpr const TCHAR* FromPin = TEXT("from_pin");
+	inline constexpr const TCHAR* ToNodeId = TEXT("to_node_id");
+	inline constexpr const TCHAR* ToPin = TEXT("to_pin");
+	inline constexpr const TCHAR* Pin = TEXT("pin");
+	inline constexpr const TCHAR* Connected = TEXT("connected");
+	inline constexpr const TCHAR* TargetClass = TEXT("target_class");
+	inline constexpr const TCHAR* Enabled = TEXT("enabled");
 
 	inline constexpr const TCHAR* FromStackIndex = TEXT("from_stack_index");
 	inline constexpr const TCHAR* FromVariableName = TEXT("from_variable_name");
