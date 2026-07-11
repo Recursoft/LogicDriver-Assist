@@ -104,6 +104,26 @@ BEGIN_DEFINE_SPEC(FSMGetLocalGraphSpec, "LogicDriver.Assist.GetLocalGraph",
 		return RerouteGuid;
 	}
 
+	FString CollapseToStateMachine(const FString& InAssetPath, const TArray<FString>& InNodeGuids)
+	{
+		const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+		Args->SetStringField(TEXT("asset_path"), InAssetPath);
+		TArray<TSharedPtr<FJsonValue>> GuidValues;
+		for (const FString& Guid : InNodeGuids)
+		{
+			GuidValues.Add(MakeShared<FJsonValueString>(Guid));
+		}
+		Args->SetArrayField(TEXT("node_guids"), GuidValues);
+
+		const FSMAssistOperationResult Result = GetSubsystem()->ExecuteOperation(FName(TEXT("sm.collapse_to_state_machine")), Args);
+		FString StateGuid;
+		if (Result.bSuccess && Result.Payload.IsValid())
+		{
+			Result.Payload->TryGetStringField(TEXT("state_guid"), StateGuid);
+		}
+		return StateGuid;
+	}
+
 	FSMAssistOperationResult RunGetLocalGraph(const FString& InAssetPath, const FString& InNodeGuid)
 	{
 		const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
@@ -291,6 +311,66 @@ void FSMGetLocalGraphSpec::Define()
 
 		const FSMAssistOperationResult Result = RunGetLocalGraph(AssetPath, FGuid::NewGuid().ToString());
 		TestFalse(TEXT("unknown guid fails"), Result.bSuccess);
+	});
+
+	It("resolves a state graph nested one level inside a collapsed sub state machine", [this]()
+	{
+		const FString AssetPath = CreateTransientBlueprint();
+		if (!TestTrue(TEXT("Blueprint created"), !AssetPath.IsEmpty()))
+		{
+			return;
+		}
+
+		const FString StateA = AddState(AssetPath, TEXT("A"));
+		const FString StateB = AddState(AssetPath, TEXT("B"));
+		AddTransition(AssetPath, StateA, StateB);
+
+		// Collapsing preserves each collapsed node's guid; A now lives inside the container's bound graph.
+		const FString Container = CollapseToStateMachine(AssetPath, { StateA, StateB });
+		if (!TestTrue(TEXT("Container created"), !Container.IsEmpty()))
+		{
+			return;
+		}
+
+		// FindNodeByGuid must descend into the nested state machine to resolve a node one level deep.
+		const FSMAssistOperationResult Result = RunGetLocalGraph(AssetPath, StateA);
+		if (!TestTrue(TEXT("nested state resolves"), Result.bSuccess))
+		{
+			return;
+		}
+		FString NodeKind;
+		Result.Payload->TryGetStringField(TEXT("node_kind"), NodeKind);
+		TestEqual(TEXT("resolved node is the nested State"), NodeKind, FString(TEXT("State")));
+	});
+
+	It("resolves a node nested two levels deep", [this]()
+	{
+		const FString AssetPath = CreateTransientBlueprint();
+		if (!TestTrue(TEXT("Blueprint created"), !AssetPath.IsEmpty()))
+		{
+			return;
+		}
+
+		const FString StateA = AddState(AssetPath, TEXT("A"));
+		const FString StateB = AddState(AssetPath, TEXT("B"));
+		AddTransition(AssetPath, StateA, StateB);
+		const FString Inner = CollapseToStateMachine(AssetPath, { StateA, StateB });
+		if (!TestTrue(TEXT("Inner container created"), !Inner.IsEmpty()))
+		{
+			return;
+		}
+
+		const FString StateC = AddState(AssetPath, TEXT("C"));
+		AddTransition(AssetPath, Inner, StateC);
+		const FString Outer = CollapseToStateMachine(AssetPath, { Inner, StateC });
+		if (!TestTrue(TEXT("Outer container created"), !Outer.IsEmpty()))
+		{
+			return;
+		}
+
+		// Outer (root) -> Inner (depth 1) -> A (depth 2). The nested sub-machine and the leaf both resolve.
+		TestTrue(TEXT("sub-machine one level deep resolves"), RunGetLocalGraph(AssetPath, Inner).bSuccess);
+		TestTrue(TEXT("state two levels deep resolves"), RunGetLocalGraph(AssetPath, StateA).bSuccess);
 	});
 }
 

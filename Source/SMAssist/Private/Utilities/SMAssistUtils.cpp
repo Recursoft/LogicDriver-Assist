@@ -107,7 +107,28 @@ USMGraphNode_Base* LD::Assist::Utils::FindNodeByGuid(USMBlueprint* InBlueprint, 
 	}
 
 	TArray<USMGraph*> GraphsToSearch;
+	TSet<const USMGraph*> Visited;
 	GraphsToSearch.Add(RootGraph);
+	Visited.Add(RootGraph);
+
+	// Queue a nested state machine graph for searching so nodes at any nesting depth resolve. LD graph
+	// nodes do not override UEdGraphNode::GetSubGraphs(), so a state-machine-state node exposes its nested
+	// graph only through GetBoundGraph(); descending on GetSubGraphs() alone would never leave the root
+	// graph. The same-package check keeps the walk inside this asset so a reference is never followed into
+	// another blueprint (whose nodes belong to a different asset). Only a state-machine-state node's bound
+	// graph is a USMGraph; a state/transition/conduit K2 bound graph fails the cast and is skipped.
+	const UPackage* OwningPackage = InBlueprint->GetOutermost();
+	auto QueueNestedSMGraph = [&GraphsToSearch, &Visited, OwningPackage](UEdGraph* InCandidate)
+	{
+		USMGraph* NestedSMGraph = Cast<USMGraph>(InCandidate);
+		if (NestedSMGraph
+			&& NestedSMGraph->GetOutermost() == OwningPackage
+			&& !Visited.Contains(NestedSMGraph))
+		{
+			Visited.Add(NestedSMGraph);
+			GraphsToSearch.Add(NestedSMGraph);
+		}
+	};
 
 	while (GraphsToSearch.Num() > 0)
 	{
@@ -127,12 +148,14 @@ USMGraphNode_Base* LD::Assist::Utils::FindNodeByGuid(USMBlueprint* InBlueprint, 
 				}
 			}
 
+			if (const USMGraphNode_Base* SMNode = Cast<USMGraphNode_Base>(Node))
+			{
+				QueueNestedSMGraph(SMNode->GetBoundGraph());
+			}
+
 			for (UEdGraph* SubGraph : Node->GetSubGraphs())
 			{
-				if (USMGraph* SubSMGraph = Cast<USMGraph>(SubGraph))
-				{
-					GraphsToSearch.Add(SubSMGraph);
-				}
+				QueueNestedSMGraph(SubGraph);
 			}
 		}
 	}
