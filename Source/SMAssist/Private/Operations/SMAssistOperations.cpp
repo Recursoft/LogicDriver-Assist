@@ -2559,6 +2559,25 @@ namespace LD::Assist::Private
 		return static_cast<FBlueprintEditor*>(EditorInstance);
 	}
 
+	// OpenGraphAndBringToFront accepts a bound local graph exactly as double-clicking a transition does, so
+	// opening one instead of the root graph is the only difference between the two capture callers.
+	static TSharedPtr<SGraphEditor> OpenAndFocusGraph(FBlueprintEditor* InEditor, UEdGraph* InGraph, FString& OutError)
+	{
+		if (!InGraph)
+		{
+			OutError = TEXT("No graph to open.");
+			return nullptr;
+		}
+
+		TSharedPtr<SGraphEditor> GraphEditor = InEditor->OpenGraphAndBringToFront(InGraph, /*bSetFocus=*/true);
+		if (!GraphEditor.IsValid())
+		{
+			OutError = FString::Printf(TEXT("Failed to focus graph '%s' in the blueprint editor."), *InGraph->GetName());
+			return nullptr;
+		}
+		return GraphEditor;
+	}
+
 	static TSharedPtr<SGraphEditor> OpenAndFocusRootGraph(FBlueprintEditor* InEditor, USMBlueprint* InBlueprint, FString& OutError)
 	{
 		USMGraph* RootGraph = LD::Assist::Utils::GetRootStateMachineGraph(InBlueprint);
@@ -2567,14 +2586,7 @@ namespace LD::Assist::Private
 			OutError = TEXT("Blueprint has no root state machine graph.");
 			return nullptr;
 		}
-
-		TSharedPtr<SGraphEditor> GraphEditor = InEditor->OpenGraphAndBringToFront(RootGraph, /*bSetFocus=*/true);
-		if (!GraphEditor.IsValid())
-		{
-			OutError = TEXT("Failed to focus the root graph in the blueprint editor.");
-			return nullptr;
-		}
-		return GraphEditor;
+		return OpenAndFocusGraph(InEditor, RootGraph, OutError);
 	}
 
 	// Force a Slate tick so newly-opened panels compute their desired sizes before we read geometry.
@@ -2643,6 +2655,120 @@ namespace LD::Assist::Private
 		}
 		InGraphEditor->JumpToNode(InNode, /*bRequestRename=*/false, /*bSelectNode=*/true);
 		PumpSlateUntilGraphPanelSettles(InPanel, /*MaxTicks=*/64);
+	}
+
+	// Shared body of the capture ops: the only thing capture_graph_view and capture_local_graph differ on
+	// is which graph they pass in. Returns the {asset_path, path, width, height, bytes, mime} payload.
+	static FSMAssistOperationResult CaptureGraphToPng(
+		FBlueprintEditor* InEditor,
+		UEdGraph* InGraph,
+		USMBlueprint* InBlueprint,
+		const UEdGraphNode* InFocusNode,
+		bool bClipToPanel,
+		bool bFitToContent,
+		const FString& InOutputSubdir,
+		FString InPrefix,
+		const FString& InDefaultPrefixBase)
+	{
+		FString GraphError;
+		TSharedPtr<SGraphEditor> GraphEditor = OpenAndFocusGraph(InEditor, InGraph, GraphError);
+		if (!GraphEditor.IsValid())
+		{
+			return FSMAssistOperationResult::MakeError(GraphError);
+		}
+
+		EnsureSlateLayoutReady();
+
+		SGraphPanel* Panel = GraphEditor->GetGraphPanel();
+		if (!Panel)
+		{
+			return FSMAssistOperationResult::MakeError(TEXT("Graph editor has no panel."));
+		}
+
+		// Focusing a single node and fitting to all content are mutually exclusive framing intents; a
+		// requested focus node wins. Both paths leave the panel settled on the final view before capture.
+		if (InFocusNode)
+		{
+			FocusGraphPanelOnNode(GraphEditor.ToSharedRef(), Panel, InFocusNode);
+		}
+		else if (bFitToContent)
+		{
+			FitGraphPanelToContent(GraphEditor.ToSharedRef(), Panel);
+		}
+
+		TSharedPtr<SWidget> TargetWidget;
+		if (bClipToPanel)
+		{
+			TargetWidget = Panel->AsShared();
+		}
+		else
+		{
+			// Capture the entire blueprint editor window the panel is parented in.
+			TSharedPtr<SWindow> Window = FSlateApplication::Get().FindWidgetWindow(Panel->AsShared());
+			if (!Window.IsValid())
+			{
+				return FSMAssistOperationResult::MakeError(TEXT("Could not locate the editor window for capture."));
+			}
+			TargetWidget = Window;
+		}
+
+		TArray<FColor> ColorData;
+		FIntVector OutSize(0, 0, 0);
+		if (!FSlateApplication::Get().TakeScreenshot(TargetWidget.ToSharedRef(), ColorData, OutSize))
+		{
+			return FSMAssistOperationResult::MakeError(TEXT("Slate screenshot capture failed."));
+		}
+		if (OutSize.X <= 0 || OutSize.Y <= 0 || ColorData.Num() == 0)
+		{
+			return FSMAssistOperationResult::MakeError(TEXT("Screenshot returned an empty image."));
+		}
+
+		TArray64<uint8> PngBytes;
+		FImageUtils::PNGCompressImageArray(
+			OutSize.X, OutSize.Y,
+			TArrayView64<const FColor>(ColorData.GetData(), ColorData.Num()),
+			PngBytes);
+
+		if (PngBytes.Num() == 0)
+		{
+			return FSMAssistOperationResult::MakeError(TEXT("PNG encoding produced zero bytes."));
+		}
+
+		if (!InPrefix.IsEmpty() && !LD::Assist::Utils::IsSafeFileStem(InPrefix))
+		{
+			return FSMAssistOperationResult::MakeError(
+				TEXT("'prefix' must be a bare filename with no path separators or '..'."));
+		}
+
+		if (InPrefix.IsEmpty())
+		{
+			InPrefix = FString::Printf(TEXT("%s_%s"), *InDefaultPrefixBase, *FDateTime::Now().ToString(TEXT("%Y-%m-%d_%H-%M-%S")));
+		}
+
+		const FString FileName = InPrefix + TEXT(".png");
+		FString TargetDir;
+		FString PathError;
+		if (!LD::Assist::Utils::ResolveContainedScreenshotsDir(InOutputSubdir, TargetDir, PathError))
+		{
+			return FSMAssistOperationResult::MakeError(PathError);
+		}
+		IFileManager::Get().MakeDirectory(*TargetDir, /*Tree=*/true);
+		const FString TargetPath = FPaths::Combine(TargetDir, FileName);
+
+		if (!FFileHelper::SaveArrayToFile(PngBytes, *TargetPath))
+		{
+			return FSMAssistOperationResult::MakeError(
+				FString::Printf(TEXT("Failed to write PNG to '%s'."), *TargetPath));
+		}
+
+		const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
+		Payload->SetStringField(Args::AssetPath, InBlueprint->GetPathName());
+		Payload->SetStringField(Args::Path, TargetPath);
+		Payload->SetNumberField(Args::Width, OutSize.X);
+		Payload->SetNumberField(Args::Height, OutSize.Y);
+		Payload->SetNumberField(Args::Bytes, PngBytes.Num());
+		Payload->SetStringField(Args::Mime, TEXT("image/png"));
+		return FSMAssistOperationResult::MakeSuccess(Payload);
 	}
 
 	static TArray<TSharedPtr<FJsonValue>> Vec2fToJsonArray(const FVector2f& InVec)
@@ -2933,106 +3059,15 @@ FSMAssistOperationResult LD::Assist::CaptureGraphView(const TSharedRef<FJsonObje
 		return FSMAssistOperationResult::MakeError(EditorError);
 	}
 
-	FString GraphError;
-	TSharedPtr<SGraphEditor> GraphEditor = LD::Assist::Private::OpenAndFocusRootGraph(BlueprintEditor, Blueprint, GraphError);
-	if (!GraphEditor.IsValid())
+	USMGraph* RootGraph = LD::Assist::Utils::GetRootStateMachineGraph(Blueprint);
+	if (!RootGraph)
 	{
-		return FSMAssistOperationResult::MakeError(GraphError);
+		return FSMAssistOperationResult::MakeError(TEXT("Blueprint has no root state machine graph."));
 	}
 
-	LD::Assist::Private::EnsureSlateLayoutReady();
-
-	SGraphPanel* Panel = GraphEditor->GetGraphPanel();
-	if (!Panel)
-	{
-		return FSMAssistOperationResult::MakeError(TEXT("Graph editor has no panel."));
-	}
-
-	if (FocusNode)
-	{
-		// node_guid takes precedence over fit_to_content: focusing a single node and fitting to all
-		// content are mutually exclusive intents. The deferred-focus pump leaves the panel framed on
-		// the chosen node when capture proceeds below.
-		LD::Assist::Private::FocusGraphPanelOnNode(GraphEditor.ToSharedRef(), Panel, FocusNode);
-	}
-	else if (bFitToContent)
-	{
-		LD::Assist::Private::FitGraphPanelToContent(GraphEditor.ToSharedRef(), Panel);
-	}
-
-	TSharedPtr<SWidget> TargetWidget;
-	if (bClipToPanel)
-	{
-		TargetWidget = Panel->AsShared();
-	}
-	else
-	{
-		// Capture the entire blueprint editor window the panel is parented in.
-		TSharedPtr<SWindow> Window = FSlateApplication::Get().FindWidgetWindow(Panel->AsShared());
-		if (!Window.IsValid())
-		{
-			return FSMAssistOperationResult::MakeError(TEXT("Could not locate the editor window for capture."));
-		}
-		TargetWidget = Window;
-	}
-
-	TArray<FColor> ColorData;
-	FIntVector OutSize(0, 0, 0);
-	if (!FSlateApplication::Get().TakeScreenshot(TargetWidget.ToSharedRef(), ColorData, OutSize))
-	{
-		return FSMAssistOperationResult::MakeError(TEXT("Slate screenshot capture failed."));
-	}
-	if (OutSize.X <= 0 || OutSize.Y <= 0 || ColorData.Num() == 0)
-	{
-		return FSMAssistOperationResult::MakeError(TEXT("Screenshot returned an empty image."));
-	}
-
-	TArray64<uint8> PngBytes;
-	FImageUtils::PNGCompressImageArray(
-		OutSize.X, OutSize.Y,
-		TArrayView64<const FColor>(ColorData.GetData(), ColorData.Num()),
-		PngBytes);
-
-	if (PngBytes.Num() == 0)
-	{
-		return FSMAssistOperationResult::MakeError(TEXT("PNG encoding produced zero bytes."));
-	}
-
-	if (!Prefix.IsEmpty() && !LD::Assist::Utils::IsSafeFileStem(Prefix))
-	{
-		return FSMAssistOperationResult::MakeError(
-			TEXT("'prefix' must be a bare filename with no path separators or '..'."));
-	}
-
-	if (Prefix.IsEmpty())
-	{
-		Prefix = FString::Printf(TEXT("%s_%s"), *Blueprint->GetName(), *FDateTime::Now().ToString(TEXT("%Y-%m-%d_%H-%M-%S")));
-	}
-
-	const FString FileName = Prefix + TEXT(".png");
-	FString TargetDir;
-	FString PathError;
-	if (!LD::Assist::Utils::ResolveContainedScreenshotsDir(OutputSubdir, TargetDir, PathError))
-	{
-		return FSMAssistOperationResult::MakeError(PathError);
-	}
-	IFileManager::Get().MakeDirectory(*TargetDir, /*Tree=*/true);
-	const FString TargetPath = FPaths::Combine(TargetDir, FileName);
-
-	if (!FFileHelper::SaveArrayToFile(PngBytes, *TargetPath))
-	{
-		return FSMAssistOperationResult::MakeError(
-			FString::Printf(TEXT("Failed to write PNG to '%s'."), *TargetPath));
-	}
-
-	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
-	Payload->SetStringField(Args::AssetPath, Blueprint->GetPathName());
-	Payload->SetStringField(Args::Path, TargetPath);
-	Payload->SetNumberField(Args::Width, OutSize.X);
-	Payload->SetNumberField(Args::Height, OutSize.Y);
-	Payload->SetNumberField(Args::Bytes, PngBytes.Num());
-	Payload->SetStringField(Args::Mime, TEXT("image/png"));
-	return FSMAssistOperationResult::MakeSuccess(Payload);
+	return LD::Assist::Private::CaptureGraphToPng(
+		BlueprintEditor, RootGraph, Blueprint, FocusNode,
+		bClipToPanel, bFitToContent, OutputSubdir, Prefix, Blueprint->GetName());
 }
 
 FSMAssistOperationResult LD::Assist::ClearScreenshots(const TSharedRef<FJsonObject>& InArgs)
@@ -5389,6 +5424,45 @@ FSMAssistOperationResult LD::Assist::GetLocalGraph(const TSharedRef<FJsonObject>
 	Payload->SetArrayField(Args::Nodes, Nodes);
 
 	return FSMAssistOperationResult::MakeSuccess(Payload);
+}
+
+FSMAssistOperationResult LD::Assist::CaptureLocalGraph(const TSharedRef<FJsonObject>& InArgs)
+{
+	check(IsInGameThread());
+
+	bool bClipToPanel = true;
+	InArgs->TryGetBoolField(Args::ClipToPanel, bClipToPanel);
+
+	bool bFitToContent = true;
+	InArgs->TryGetBoolField(Args::FitToContent, bFitToContent);
+
+	FString OutputSubdir = TEXT("LogicDriver");
+	InArgs->TryGetStringField(Args::OutputSubdir, OutputSubdir);
+
+	FString Prefix;
+	InArgs->TryGetStringField(Args::Prefix, Prefix);
+
+	// Resolve asset_path + node_guid to the node's bound graph, normalizing reroutes to the primary
+	// transition exactly like sm.get_local_graph. Capturing this graph, rather than the root graph, is the
+	// whole difference between this op and sm.capture_graph_view.
+	FString Error;
+	LD::Assist::Private::FResolvedLocalGraph Resolved;
+	if (!LD::Assist::Private::ResolveLocalGraph(InArgs, Resolved, Error))
+	{
+		return FSMAssistOperationResult::MakeError(Error);
+	}
+
+	FString EditorError;
+	FBlueprintEditor* BlueprintEditor = LD::Assist::Private::FindOrOpenBlueprintEditor(Resolved.Blueprint, EditorError);
+	if (!BlueprintEditor)
+	{
+		return FSMAssistOperationResult::MakeError(EditorError);
+	}
+
+	const FString DefaultPrefixBase = FString::Printf(TEXT("%s_%s"), *Resolved.Blueprint->GetName(), *Resolved.Graph->GetName());
+	return LD::Assist::Private::CaptureGraphToPng(
+		BlueprintEditor, Resolved.Graph, Resolved.Blueprint, /*InFocusNode=*/nullptr,
+		bClipToPanel, bFitToContent, OutputSubdir, Prefix, DefaultPrefixBase);
 }
 
 FSMAssistOperationResult LD::Assist::AddLocalGraphNode(const TSharedRef<FJsonObject>& InArgs)

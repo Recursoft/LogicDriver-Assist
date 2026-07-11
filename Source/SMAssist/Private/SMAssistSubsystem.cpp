@@ -493,6 +493,24 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 
 	{
 		FSMAssistOperationInfo Info;
+		Info.Name = Ops::CaptureLocalGraph;
+		Info.Description = TEXT("Capture a single SM graph node's local (bound) graph as a PNG written to disk; returns the absolute path so the caller can read the image. This is the visual companion to 'sm.get_local_graph': where that op returns the bound-graph logic as data, this renders it. Use it to actually see the K2 logic inside a transition's CanEnterTransition graph, a conduit's graph, or a state's OnStateBegin/Update/End graph (e.g. a 'TimeInState -> Greater -> bCanEnterTransition' gate) -- something 'sm.capture_graph_view' cannot do, because that op always frames the root state machine graph and its 'node_guid' only focuses a node within the root panel. The bound graph is resolved from 'node_guid' exactly like sm.get_local_graph: a state, transition (any reroute segment), conduit, or reroute waypoint is accepted, and reroutes and non-primary rerouted segments normalize to the primary transition that owns the single compiled graph. With 'clip_to_panel=true' (default) only the graph panel is captured; with false the entire editor window is captured. 'fit_to_content=true' (default) reframes the panel to show every node before capture. Files are written under <Project>/Saved/Screenshots/<output_subdir>/<prefix>.png. Requires the editor UI (the capture drives Slate). Returns { asset_path, path, width, height, bytes, mime }.");
+		Info.InputSchema = MakeSchema(
+			{
+				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the target SMBlueprint.")) },
+				{ Args::NodeGuid, MakePropertyObject(TEXT("string"), TEXT("Guid of the SM graph node whose local graph to capture: a state, transition (any reroute segment), conduit, or reroute waypoint. Reroutes and non-primary segments resolve to the primary transition that owns the single compiled graph.")) },
+				{ Args::ClipToPanel, MakePropertyObject(TEXT("boolean"), TEXT("True (default) captures just the SGraphPanel showing the bound graph; false captures the whole blueprint editor window.")) },
+				{ Args::FitToContent, MakePropertyObject(TEXT("boolean"), TEXT("True (default) reframes the panel to fit all nodes in the bound graph before capturing. Set false to capture the panel's current view as-is.")) },
+				{ Args::OutputSubdir, MakePropertyObject(TEXT("string"), TEXT("Subdirectory under <Project>/Saved/Screenshots/ for the output PNG. Default 'LogicDriver'.")) },
+				{ Args::Prefix, MakePropertyObject(TEXT("string"), TEXT("Filename prefix (no extension). Default '<BlueprintName>_<GraphName>_<timestamp>'. Always followed by .png.")) }
+			},
+			{ Args::AssetPath, Args::NodeGuid });
+		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::CaptureLocalGraph);
+		RegisterOperation(MoveTemp(Info));
+	}
+
+	{
+		FSMAssistOperationInfo Info;
 		Info.Name = Ops::ClearScreenshots;
 		Info.Description = TEXT("Delete PNG screenshots written by 'sm.capture_graph_view' under <Project>/Saved/Screenshots/<output_subdir>. Useful housekeeping when a session has accumulated many captures and only the latest matter. Only files with the .png extension are affected; non-PNG files in the directory are left alone. Returns the directory inspected, deleted_count, freed_bytes, and the list of paths that were deleted (or would be deleted in dry_run mode).");
 		Info.InputSchema = MakeSchema(

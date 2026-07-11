@@ -27,6 +27,7 @@ namespace LD::Assist::Ops
 	inline constexpr const TCHAR* SetTransitionCondition = TEXT("sm.set_transition_condition");
 	inline constexpr const TCHAR* GetGraphView = TEXT("sm.get_graph_view");
 	inline constexpr const TCHAR* CaptureGraphView = TEXT("sm.capture_graph_view");
+	inline constexpr const TCHAR* CaptureLocalGraph = TEXT("sm.capture_local_graph");
 	inline constexpr const TCHAR* ClearScreenshots = TEXT("sm.clear_screenshots");
 	inline constexpr const TCHAR* LayoutStates = TEXT("sm.layout_states");
 	inline constexpr const TCHAR* GetPropertyPins = TEXT("sm.get_property_pins");

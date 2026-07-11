@@ -50,6 +50,8 @@ namespace LD::Assist
 
 	FSMAssistOperationResult CaptureGraphView(const TSharedRef<FJsonObject>& InArgs);
 
+	FSMAssistOperationResult CaptureLocalGraph(const TSharedRef<FJsonObject>& InArgs);
+
 	FSMAssistOperationResult ClearScreenshots(const TSharedRef<FJsonObject>& InArgs);
 
 	FSMAssistOperationResult LayoutStates(const TSharedRef<FJsonObject>& InArgs);

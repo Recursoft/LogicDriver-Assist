@@ -656,6 +656,32 @@ public:
 		const FString& Prefix = TEXT(""));
 
 	/**
+	 * Captures a single SM node's local (bound) graph as a PNG, saved under the configured Saved/
+	 * subdirectory. This is the visual companion to GetLocalGraph: where that returns the bound-graph
+	 * logic as data, this renders it. Use it to actually see the K2 logic inside a transition's
+	 * CanEnterTransition graph, a conduit's graph, or a state's OnStateBegin/Update/End graph (e.g. a
+	 * TimeInState -> Greater -> bCanEnterTransition gate) -- something CaptureGraphView cannot do, because
+	 * that op always frames the root state machine graph. The bound graph is resolved from NodeGuid
+	 * exactly like GetLocalGraph (reroutes normalize to the primary transition). The PNG is non-trivial in
+	 * image tokens, so call only when the bound-graph logic is in visual question, not reflexively.
+	 * @param Blueprint The blueprint owning the node. Required.
+	 * @param NodeGuid GUID of the state/transition/conduit/reroute node whose local graph to capture. Required.
+	 * @param bClipToPanel Clip the capture to the editor's graph-panel widget. Default true.
+	 * @param bFitToContent Auto-fit the view to the bound graph's contents before capture. Default true.
+	 * @param OutputSubdir Output folder under Saved/. Empty = "LogicDriver".
+	 * @param Prefix File-name prefix for the screenshot. Empty = "<BlueprintName>_<GraphName>_<timestamp>".
+	 * @return JSON: { asset_path, path, width, height, bytes, mime }
+	 */
+	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
+	static FString CaptureLocalGraph(
+		USMBlueprint* Blueprint,
+		const FString& NodeGuid,
+		bool bClipToPanel = true,
+		bool bFitToContent = true,
+		const FString& OutputSubdir = TEXT(""),
+		const FString& Prefix = TEXT(""));
+
+	/**
 	 * Deletes screenshots from a Saved/ subdirectory, optionally filtered by age.
 	 * @param OutputSubdir Subdir under Saved/ to clean. Empty = "LogicDriver".
 	 * @param OlderThanSeconds Only delete files older than this many seconds. Negative sentinel (e.g., -1.0) = no time filter, delete all matching files.

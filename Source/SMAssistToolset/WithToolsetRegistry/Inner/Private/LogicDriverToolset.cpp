@@ -401,6 +401,24 @@ FString ULogicDriverToolset::CaptureGraphView(
 	return LDA::Execute(TEXT("sm.capture_graph_view"), Args);
 }
 
+FString ULogicDriverToolset::CaptureLocalGraph(
+	USMBlueprint* Blueprint,
+	const FString& NodeGuid,
+	bool bClipToPanel,
+	bool bFitToContent,
+	const FString& OutputSubdir,
+	const FString& Prefix)
+{
+	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
+	Args->SetStringField(TEXT("node_guid"), NodeGuid);
+	LDA::AddBool(*Args, TEXT("clip_to_panel"), bClipToPanel);
+	LDA::AddBool(*Args, TEXT("fit_to_content"), bFitToContent);
+	LDA::AddIfNonEmpty(*Args, TEXT("output_subdir"), OutputSubdir);
+	LDA::AddIfNonEmpty(*Args, TEXT("prefix"), Prefix);
+	return LDA::Execute(TEXT("sm.capture_local_graph"), Args);
+}
+
 FString ULogicDriverToolset::ClearScreenshots(
 	const FString& OutputSubdir,
 	double OlderThanSeconds,
