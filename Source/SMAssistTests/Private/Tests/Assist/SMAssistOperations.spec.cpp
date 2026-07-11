@@ -1038,6 +1038,7 @@ void FAssistOperationsSpec::Define()
 
 			USMAssistSubsystem* Subsystem = GetSubsystem();
 
+			FString TransitionGuid;
 			{
 				const TSharedRef<FJsonObject> TransitionArgs = MakeShared<FJsonObject>();
 				TransitionArgs->SetStringField(TEXT("asset_path"), AssetPath);
@@ -1046,6 +1047,25 @@ void FAssistOperationsSpec::Define()
 				const FSMAssistOperationResult TransitionResult = Subsystem->ExecuteOperation(
 					FName(TEXT("sm.add_transition")), TransitionArgs);
 				TestTrue("Transition added", TransitionResult.bSuccess);
+				if (TransitionResult.Payload.IsValid())
+				{
+					TransitionResult.Payload->TryGetStringField(TEXT("transition_guid"), TransitionGuid);
+				}
+			}
+			if (!TestFalse("Transition guid returned", TransitionGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			// Pin the condition so the gate value is deterministic regardless of the new-transition default.
+			{
+				const TSharedRef<FJsonObject> ConditionArgs = MakeShared<FJsonObject>();
+				ConditionArgs->SetStringField(TEXT("asset_path"), AssetPath);
+				ConditionArgs->SetStringField(TEXT("transition_guid"), TransitionGuid);
+				ConditionArgs->SetBoolField(TEXT("condition"), true);
+				const FSMAssistOperationResult ConditionResult = Subsystem->ExecuteOperation(
+					FName(TEXT("sm.set_transition_condition")), ConditionArgs);
+				TestTrue("Condition set", ConditionResult.bSuccess);
 			}
 
 			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
@@ -1074,6 +1094,186 @@ void FAssistOperationsSpec::Define()
 			if (Transitions)
 			{
 				TestEqual("One transition present", Transitions->Num(), 1);
+				if (Transitions->Num() > 0)
+				{
+					const TSharedPtr<FJsonObject>* TransitionObj = nullptr;
+					if (TestTrue("Transition entry is an object", (*Transitions)[0]->TryGetObject(TransitionObj)) && TransitionObj)
+					{
+						FString Gate;
+						TestTrue("Transition entry has 'gate'",
+							(*TransitionObj)->TryGetStringField(TEXT("gate"), Gate));
+						TestEqual("Gate reflects the constant-true condition", Gate, FString(TEXT("constant:true")));
+
+						FString Evaluation;
+						TestTrue("Transition entry has 'evaluation'",
+							(*TransitionObj)->TryGetStringField(TEXT("evaluation"), Evaluation));
+						TestEqual("A polled transition evaluates on tick", Evaluation, FString(TEXT("tick")));
+
+						const TSharedPtr<FJsonObject>* EventObj = nullptr;
+						TestFalse("No event binding on a plain transition",
+							(*TransitionObj)->TryGetObjectField(TEXT("event"), EventObj));
+					}
+				}
+			}
+
+			// Flipping the condition flips the gate polarity (guards the constant true/false parse).
+			{
+				const TSharedRef<FJsonObject> ConditionArgs = MakeShared<FJsonObject>();
+				ConditionArgs->SetStringField(TEXT("asset_path"), AssetPath);
+				ConditionArgs->SetStringField(TEXT("transition_guid"), TransitionGuid);
+				ConditionArgs->SetBoolField(TEXT("condition"), false);
+				Subsystem->ExecuteOperation(FName(TEXT("sm.set_transition_condition")), ConditionArgs);
+
+				const FSMAssistOperationResult FalseResult = Subsystem->ExecuteOperation(
+					FName(TEXT("sm.get_asset")), Args);
+				const TArray<TSharedPtr<FJsonValue>>* FalseTransitions = nullptr;
+				if (FalseResult.Payload.IsValid()
+					&& FalseResult.Payload->TryGetArrayField(TEXT("transitions"), FalseTransitions)
+					&& FalseTransitions && FalseTransitions->Num() > 0)
+				{
+					const TSharedPtr<FJsonObject>* FalseObj = nullptr;
+					if ((*FalseTransitions)[0]->TryGetObject(FalseObj) && FalseObj)
+					{
+						FString FalseGate;
+						(*FalseObj)->TryGetStringField(TEXT("gate"), FalseGate);
+						TestEqual("Gate reflects the constant-false condition", FalseGate, FString(TEXT("constant:false")));
+					}
+				}
+			}
+		});
+
+		It("Reports the auto-bound event trigger and binding", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString FromGuid = AddStateToBlueprint(AssetPath, TEXT("Alpha"));
+			const FString ToGuid = AddStateToBlueprint(AssetPath, TEXT("Beta"));
+			if (!TestFalse("From guid populated", FromGuid.IsEmpty())
+				|| !TestFalse("To guid populated", ToGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			FString TransitionGuid;
+			{
+				const TSharedRef<FJsonObject> TransitionArgs = MakeShared<FJsonObject>();
+				TransitionArgs->SetStringField(TEXT("asset_path"), AssetPath);
+				TransitionArgs->SetStringField(TEXT("from_state_guid"), FromGuid);
+				TransitionArgs->SetStringField(TEXT("to_state_guid"), ToGuid);
+				const FSMAssistOperationResult TransitionResult = Subsystem->ExecuteOperation(
+					FName(TEXT("sm.add_transition")), TransitionArgs);
+				TestTrue("Transition added", TransitionResult.bSuccess);
+				if (TransitionResult.Payload.IsValid())
+				{
+					TransitionResult.Payload->TryGetStringField(TEXT("transition_guid"), TransitionGuid);
+				}
+			}
+			if (!TestFalse("Transition guid returned", TransitionGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			{
+				const TSharedRef<FJsonObject> EventArgs = MakeShared<FJsonObject>();
+				EventArgs->SetStringField(TEXT("asset_path"), AssetPath);
+				EventArgs->SetStringField(TEXT("transition_guid"), TransitionGuid);
+				EventArgs->SetStringField(TEXT("delegate_owner_instance"), TEXT("Context"));
+				EventArgs->SetStringField(TEXT("delegate_property_name"), TEXT("OnChoiceMade"));
+				EventArgs->SetBoolField(TEXT("event_triggers_targeted_update"), true);
+				EventArgs->SetBoolField(TEXT("event_triggers_full_update"), true);
+				const FSMAssistOperationResult EventResult = Subsystem->ExecuteOperation(
+					FName(TEXT("sm.configure_transition_event")), EventArgs);
+				TestTrue("Event configured", EventResult.bSuccess);
+			}
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.get_asset")), Args);
+
+			if (!TestTrue("Result is success", Result.bSuccess)
+				|| !TestTrue("Payload populated", Result.Payload.IsValid()))
+			{
+				return;
+			}
+
+			const TArray<TSharedPtr<FJsonValue>>* Transitions = nullptr;
+			if (!TestTrue("Payload has 'transitions'", Result.Payload->TryGetArrayField(TEXT("transitions"), Transitions))
+				|| !Transitions
+				|| !TestEqual("One transition present", Transitions->Num(), 1))
+			{
+				return;
+			}
+
+			const TSharedPtr<FJsonObject>* TransitionObj = nullptr;
+			if (!TestTrue("Transition entry is an object", (*Transitions)[0]->TryGetObject(TransitionObj)) || !TransitionObj)
+			{
+				return;
+			}
+
+			FString Evaluation;
+			TestTrue("Transition entry has 'evaluation'",
+				(*TransitionObj)->TryGetStringField(TEXT("evaluation"), Evaluation));
+			TestEqual("A bound event evaluates on tick and event", Evaluation, FString(TEXT("tick+event")));
+
+			// A from-state that disables tick transition evaluation leaves its outgoing edge event-only,
+			// so the same bound transition now reads "event" instead of "tick+event".
+			{
+				const TSharedRef<FJsonObject> PropArgs = MakeShared<FJsonObject>();
+				PropArgs->SetStringField(TEXT("asset_path"), AssetPath);
+				PropArgs->SetStringField(TEXT("node_guid"), FromGuid);
+				PropArgs->SetStringField(TEXT("property_name"), TEXT("bDisableTickTransitionEvaluation"));
+				PropArgs->SetBoolField(TEXT("value"), true);
+				const FSMAssistOperationResult PropResult = Subsystem->ExecuteOperation(
+					FName(TEXT("sm.set_node_property")), PropArgs);
+				TestTrue("From-state tick evaluation disabled", PropResult.bSuccess);
+
+				const FSMAssistOperationResult EventOnlyResult = Subsystem->ExecuteOperation(
+					FName(TEXT("sm.get_asset")), Args);
+				const TArray<TSharedPtr<FJsonValue>>* EventOnlyTransitions = nullptr;
+				if (EventOnlyResult.Payload.IsValid()
+					&& EventOnlyResult.Payload->TryGetArrayField(TEXT("transitions"), EventOnlyTransitions)
+					&& EventOnlyTransitions && EventOnlyTransitions->Num() > 0)
+				{
+					const TSharedPtr<FJsonObject>* EventOnlyObj = nullptr;
+					if ((*EventOnlyTransitions)[0]->TryGetObject(EventOnlyObj) && EventOnlyObj)
+					{
+						FString EventOnlyEval;
+						(*EventOnlyObj)->TryGetStringField(TEXT("evaluation"), EventOnlyEval);
+						TestEqual("Event-only transition evaluates on event", EventOnlyEval, FString(TEXT("event")));
+					}
+				}
+			}
+
+			const TSharedPtr<FJsonObject>* EventObj = nullptr;
+			if (TestTrue("Transition entry has 'event'", (*TransitionObj)->TryGetObjectField(TEXT("event"), EventObj)) && EventObj)
+			{
+				FString Delegate;
+				TestTrue("Event has 'delegate_property_name'",
+					(*EventObj)->TryGetStringField(TEXT("delegate_property_name"), Delegate));
+				TestEqual("Delegate name round-trips", Delegate, FString(TEXT("OnChoiceMade")));
+
+				FString Owner;
+				TestTrue("Event has 'delegate_owner_instance'",
+					(*EventObj)->TryGetStringField(TEXT("delegate_owner_instance"), Owner));
+				TestEqual("Owner instance round-trips", Owner, FString(TEXT("Context")));
+
+				bool bTargeted = false;
+				TestTrue("Event has 'event_triggers_targeted_update'",
+					(*EventObj)->TryGetBoolField(TEXT("event_triggers_targeted_update"), bTargeted));
+				TestTrue("Targeted update round-trips", bTargeted);
+
+				bool bFull = false;
+				TestTrue("Event has 'event_triggers_full_update'",
+					(*EventObj)->TryGetBoolField(TEXT("event_triggers_full_update"), bFull));
+				TestTrue("Full update round-trips", bFull);
 			}
 		});
 

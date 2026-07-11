@@ -13,6 +13,7 @@
 #include "ISMGraphGeneration.h"
 #include "Blueprints/SMBlueprint.h"
 #include "Blueprints/SMBlueprintGeneratedClass.h"
+#include "ExposedFunctions/SMExposedFunctions.h"
 #include "Graph/Nodes/SMGraphNode_AnyStateNode.h"
 #include "Graph/Nodes/SMGraphNode_Base.h"
 #include "Graph/Nodes/SMGraphNode_ConduitNode.h"
@@ -561,10 +562,90 @@ FSMAssistOperationResult LD::Assist::GetAsset(const TSharedRef<FJsonObject>& InA
 			{
 				Entry->SetStringField(Args::ToStateGuid, ToState->NodeGuid.ToString());
 			}
-			if (const UClass* NodeClass = TransitionEdge->GetNodeClass())
+			const UClass* TransitionNodeClass = TransitionEdge->GetNodeClass();
+			if (TransitionNodeClass)
 			{
-				Entry->SetStringField(Args::TransitionClass, NodeClass->GetPathName());
+				Entry->SetStringField(Args::TransitionClass, TransitionNodeClass->GetPathName());
 			}
+
+			// Condition axis ("what must be true"), readable without a get_local_graph. The trigger axis below is
+			// independent. Reuse the plugin's own classifier so the constant/inline call matches compilation and
+			// handles a result node buried in a nested graph.
+			FString Gate;
+			if (TransitionNodeClass && TransitionNodeClass != USMTransitionInstance::StaticClass())
+			{
+				Gate = TEXT("class");
+			}
+			else if (const USMTransitionGraph* TransitionGraph = TransitionEdge->GetTransitionGraph())
+			{
+				switch (TransitionGraph->GetConditionalEvaluationType())
+				{
+				case ESMConditionalEvaluationType::SM_AlwaysTrue:
+					Gate = TEXT("constant:true");
+					break;
+				case ESMConditionalEvaluationType::SM_AlwaysFalse:
+					Gate = TEXT("constant:false");
+					break;
+				default:
+					Gate = TEXT("inline");
+					break;
+				}
+			}
+			if (!Gate.IsEmpty())
+			{
+				Entry->SetStringField(Args::Gate, Gate);
+			}
+
+			// Trigger axis, independent of the gate: polled each tick, fired by an auto-bound event, or both. The
+			// event component needs an actual binding, since the permission flag defaults true.
+			if (const USMTransitionInstance* TransitionInstance = Cast<USMTransitionInstance>(TransitionEdge->GetNodeTemplate()))
+			{
+				bool bTick = TransitionInstance->GetCanEvaluate();
+				// A from-state that disables tick transition evaluation suppresses polling of its outgoing edges,
+				// leaving them event-only. Mirrors FSMState_Base::CanEvaluateTransitionsOnTick.
+				if (const USMGraphNode_StateNodeBase* FromState = TransitionEdge->GetFromState())
+				{
+					if (const USMStateInstance_Base* FromInstance = Cast<USMStateInstance_Base>(FromState->GetNodeTemplate()))
+					{
+						bTick = bTick && !FromInstance->GetDisableTickTransitionEvaluation();
+					}
+				}
+				const bool bEvent = TransitionEdge->DelegatePropertyName != NAME_None && TransitionInstance->GetCanEvaluateFromEvent();
+				const TCHAR* Evaluation = bTick
+					? (bEvent ? TEXT("tick+event") : TEXT("tick"))
+					: (bEvent ? TEXT("event") : TEXT("none"));
+				Entry->SetStringField(Args::Evaluation, Evaluation);
+			}
+
+			// Auto-bound event binding, mirroring configure_transition_event's fields so a caller can verify it
+			// landed without a get_local_graph.
+			if (TransitionEdge->DelegatePropertyName != NAME_None)
+			{
+				const TCHAR* OwnerInstance = TEXT("Context");
+				switch (TransitionEdge->DelegateOwnerInstance.GetValue())
+				{
+				case SMDO_This:
+					OwnerInstance = TEXT("This");
+					break;
+				case SMDO_PreviousState:
+					OwnerInstance = TEXT("PreviousState");
+					break;
+				default:
+					break;
+				}
+
+				const TSharedRef<FJsonObject> EventObject = MakeShared<FJsonObject>();
+				EventObject->SetStringField(Args::DelegatePropertyName, TransitionEdge->DelegatePropertyName.ToString());
+				EventObject->SetStringField(Args::DelegateOwnerInstance, OwnerInstance);
+				if (const UClass* OwnerClass = TransitionEdge->DelegateOwnerClass)
+				{
+					EventObject->SetStringField(Args::DelegateOwnerClass, OwnerClass->GetPathName());
+				}
+				EventObject->SetBoolField(Args::EventTriggersTargetedUpdate, TransitionEdge->bEventTriggersTargetedUpdate != 0);
+				EventObject->SetBoolField(Args::EventTriggersFullUpdate, TransitionEdge->bEventTriggersFullUpdate != 0);
+				Entry->SetObjectField(Args::Event, EventObject);
+			}
+
 			Transitions.Add(MakeShared<FJsonValueObject>(Entry));
 		}
 	}

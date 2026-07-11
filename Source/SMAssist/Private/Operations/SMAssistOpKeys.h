@@ -85,6 +85,9 @@ namespace LD::Assist::Args
 	inline constexpr const TCHAR* ToStateGuid = TEXT("to_state_guid");
 	inline constexpr const TCHAR* TransitionGuid = TEXT("transition_guid");
 	inline constexpr const TCHAR* TransitionClass = TEXT("transition_class");
+	inline constexpr const TCHAR* Gate = TEXT("gate");
+	inline constexpr const TCHAR* Evaluation = TEXT("evaluation");
+	inline constexpr const TCHAR* Event = TEXT("event");
 	inline constexpr const TCHAR* RerouteGuid = TEXT("reroute_guid");
 
 	inline constexpr const TCHAR* NodeGuid = TEXT("node_guid");

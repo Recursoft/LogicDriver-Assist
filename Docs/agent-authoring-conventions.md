@@ -44,6 +44,34 @@ Logic Driver authoring (via the LogicDriver-Assist sm.* operations):
   node's id and pins, so no intervening re-read is needed.
   sm.set_transition_condition writes only a constant, so it does not combine with
   a wired result pin.
+- A gate that reads a variable needs something to WRITE that variable, or every
+  such gate reads the default and the branch never varies at runtime. If a
+  transition reads a player's choice or a visit count, author the writer too (a
+  state's OnStateBegin, a driver, or player input), or acknowledge a fixed
+  default. A clean compile does not prove the branch varies.
+- Transitions have two independent axes: the CONDITION (the gate above) and the
+  TRIGGER (when it is checked). By default a transition polls every tick. To fire
+  it from an event, bind one with sm.configure_transition_event
+  (delegate_property_name on a delegate_owner_instance of This/Context/
+  PreviousState; Context also needs delegate_owner_class), then pick
+  event_triggers_targeted_update (this edge + destination, preferred) or
+  event_triggers_full_update (whole machine, legacy). It auto-places the return
+  node; never spawn that yourself. Binding leaves the edge tick+event; to make it
+  event-ONLY, turn tick off via sm.set_node_property (bCanEvaluate=false on the
+  transition, or bDisableTickTransitionEvaluation=true on the from-state, which
+  suppresses tick for all its outgoing edges). An event-only edge only fires
+  when something broadcasts the bound delegate, so author or confirm that
+  broadcaster just as a gated variable needs a writer. Verify with
+  sm.get_asset: each transition reports evaluation (tick/event/tick+event/none)
+  and, when bound, an event object. Graph logic calling
+  EvaluateFromManuallyBoundEvent is not reflected in those fields.
+- Node logic lives in two graphs, reached differently. A state's entry/update/end
+  logic is a bound graph, authored with the sm.* local-graph ops (sm.get_local_graph
+  on the state node, then wire off the "On State Begin" entry node's then pin). The
+  machine's own OnStateMachineStart lives in the blueprint's top-level event graph,
+  reached with generic blueprint tools; it ships already placed (shown disabled), so
+  wire off its then pin to activate it. Do NOT add a new override; it already exists
+  and the add fails.
 - The state machine graph is authored via sm.*, but the actor blueprint and its
   USMStateMachineComponent are set up on the editor surface (by hand or generic
   engine tools), not via sm.*. sm.configure_sm_component_on_actor then configures
@@ -90,6 +118,28 @@ A transition that has no authored condition and no transition class evaluates to
 Read it first with `sm.get_local_graph`, which returns the existing nodes and, for a transition, the wire-into anchor (`result_node_name` and `result_pin_name`, typically `bCanEnterTransition`). Place the state read with `sm.spawn_local_graph_read_node` (type `TimeInState`); the generic node-create menu cannot place Logic Driver's bound nodes, which is why a dedicated op exists. Place the comparison with `sm.add_local_graph_node` (`node_class` `call_function`, `function_name` `Greater_DoubleDouble`); that op writes any K2 node straight into the bound graph, bypassing the transport's generic graph resolver, so the comparison lands even though generic blueprint tools cannot address the graph at all. Seed the threshold with `sm.set_local_graph_pin_default` (pin `B` = `2.5`). Then wire twice with `sm.connect_local_graph_pins`: the read node's output into the comparison's `A`, and the comparison's `ReturnValue` into the transition's result pin. Both `sm.spawn_local_graph_read_node` and `sm.add_local_graph_node` return the new node's id and pins, so you can wire immediately without a re-read. Finish with `sm.compile`.
 
 A wired result pin and `sm.set_transition_condition` are mutually exclusive: once the result pin is wired, its constant default is ignored (`sm.get_local_graph` shows `bCanEnterTransition` change from a `True` default to a connection). An always-true *entry* gate is better modeled as an empty state than as a conduit.
+
+### Feed the variables a gate reads
+
+A transition can compile, evaluate every frame, and still never change which branch it takes. A gate that reads a variable (a player's choice, a visit count, a flag) only does something once something *writes* that variable. If nothing does, every such gate reads the default: the machine always takes the same branch, or, when the default satisfies no edge, sits at the source state. Authoring the read is half the job. Author the write too: a state's `OnStateBegin` that increments a counter on entry, a driver that sets the choice before a hub, or real player input. When a genuine runtime input is out of scope, pick and state a fixed default rather than leaving the variable unbacked. Treat a clean compile as "the class built," never as "the branch varies at runtime."
+
+### Event transitions
+
+A transition has two independent axes. The *condition* ("what must be true") is the gate covered above: a transition class, a constant, or inline graph logic. The *trigger* ("when is that condition checked") is separate: by default a transition is polled every tick, but it can instead fire from an event, or do both. The two are set independently on the transition, so choosing one never constrains the other.
+
+Bind an auto-bound event with `sm.configure_transition_event`. It attaches a multicast delegate, named by `delegate_property_name`, that lives on the `delegate_owner_instance` you name: `This` (the state machine instance itself), `Context`, or `PreviousState`. A `Context` owner also needs `delegate_owner_class` to resolve the property. The op mirrors a Details-panel edit exactly, including the cascading resets (changing the owner clears the delegate name), and it auto-places the `TransitionEventReturn` node in the transition's bound graph. Never place that node yourself with `sm.spawn_local_graph_write_node`. Passing an empty `delegate_property_name` clears the binding while preserving any downstream logic wired off the return node, so unbind and rebind cycles do not lose work.
+
+When the delegate fires, the transition re-evaluates. Pick what update runs: `event_triggers_targeted_update` re-evaluates just this transition and its destination state (the focused, preferred behavior), while `event_triggers_full_update` runs a whole-machine update (the older, broader behavior, applied after the targeted one). These map to the transition's "Targeted Update" and "Full Update" settings; those Details-panel labels do not appear in the operation, only the argument keys.
+
+Binding an event does not stop the tick poll: the edge becomes `tick+event`. To make it event-only, turn the tick side off with `sm.set_node_property`. Setting `bCanEvaluate` to false on the transition stops that one edge from polling; setting `bDisableTickTransitionEvaluation` to true on the *from-state* stops tick evaluation of every edge leaving that state. Either leaves the transition firing on its event alone. An event-only edge fires only when something broadcasts the bound delegate, so if nothing ever does it can never trigger and the machine sits at the source state on a clean compile. Author or confirm the broadcaster the same way a gated variable needs a writer.
+
+Read the result back with `sm.get_asset` without opening a bound graph. Each transition entry carries an `evaluation` field (`tick`, `event`, `tick+event`, or `none`) and, when an event is bound, an `event` object mirroring the `configure_transition_event` fields, so a caller can confirm the binding landed. One case stays invisible to these fields: a transition whose graph logic calls `EvaluateFromManuallyBoundEvent` directly, with no auto-bound delegate, has no static binding to report, so `evaluation` reflects only the tick and auto-event configuration.
+
+`sm.set_node_property` writes these flags' authoring-time defaults. To flip `CanEvaluate` or `CanEvaluateFromEvent` at runtime from within graph logic instead, spawn the matching write node with `sm.spawn_local_graph_write_node` (types `CanEvaluate`, `CanEvaluateFromEvent`); their read counterparts spawn with `sm.spawn_local_graph_read_node`.
+
+### Where entry and start logic live
+
+Node logic lives in two different graphs, reached by two different surfaces. A *state's* entry, update, and end logic is a bound graph, authored with the `sm.*` local-graph ops: `sm.get_local_graph` on the state node returns its `On State Begin` / `On State Update` / `On State End` entry nodes, and you wire your logic off `On State Begin`'s output. The *machine's* own `OnStateMachineStart` (and `Tick`) live in the blueprint's ordinary top-level event graph, so they are reached with the generic engine blueprint tools, not `sm.*`. A fresh state machine ships with `OnStateMachineStart` already placed there, shown disabled ("This node is disabled and will not be called") until it is used. Do not add the override again; it already exists and the add fails. Wire your logic off its execution pin instead, which activates it on the next compile. For logic that should run once when the machine begins, `OnStateMachineStart` or the entry state's `OnStateBegin` both work; choose by whether the logic is machine-wide or specific to that first state.
 
 ### Components and running the machine
 
