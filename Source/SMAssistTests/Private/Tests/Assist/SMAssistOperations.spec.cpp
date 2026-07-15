@@ -6048,6 +6048,56 @@ void FAssistOperationsSpec::Define()
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error reports the length bound", Result.ErrorMessage.Contains(TEXT("characters")));
 		});
+
+		// A state's display name feeds core node/graph naming, which constructs FNames; add_state,
+		// add_conduit, add_reference, and add_any_state all route state_name the same way. An
+		// over-long name froze the editor game thread before the guard was added.
+		It("Rejects an over-long state_name cleanly", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("state_name"), FString::ChrN(1100, TEXT('s')));
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.add_state")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+			TestTrue("Error reports the length bound", Result.ErrorMessage.Contains(TEXT("characters")));
+		});
+
+		It("Rejects an over-long new_name cleanly", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString StateGuid = AddStateToBlueprint(AssetPath, TEXT("Target"));
+			if (!TestFalse("State created", StateGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("state_guid"), StateGuid);
+			Args->SetStringField(TEXT("new_name"), FString::ChrN(1100, TEXT('n')));
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.rename_state")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+			TestTrue("Error reports the length bound", Result.ErrorMessage.Contains(TEXT("characters")));
+		});
 	});
 }
 

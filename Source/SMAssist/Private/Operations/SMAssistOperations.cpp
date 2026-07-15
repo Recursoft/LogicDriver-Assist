@@ -280,6 +280,11 @@ FSMAssistOperationResult LD::Assist::AddState(const TSharedRef<FJsonObject>& InA
 	FString StateName;
 	if (InArgs->TryGetStringField(Args::StateName, StateName))
 	{
+		FString LengthError;
+		if (!LD::Assist::Utils::IsWithinNameLength(StateName, TEXT("state_name"), LengthError))
+		{
+			return FSMAssistOperationResult::MakeError(LengthError);
+		}
 		CreateArgs.StateName = StateName;
 	}
 
@@ -1467,6 +1472,12 @@ FSMAssistOperationResult LD::Assist::RenameState(const TSharedRef<FJsonObject>& 
 		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'new_name'."));
 	}
 
+	FString LengthError;
+	if (!LD::Assist::Utils::IsWithinNameLength(NewName, TEXT("new_name"), LengthError))
+	{
+		return FSMAssistOperationResult::MakeError(LengthError);
+	}
+
 	FGuid NodeGuid;
 	if (!FGuid::Parse(NodeGuidStr, NodeGuid))
 	{
@@ -1800,6 +1811,11 @@ FSMAssistOperationResult LD::Assist::AddConduit(const TSharedRef<FJsonObject>& I
 	FString StateName;
 	if (InArgs->TryGetStringField(Args::StateName, StateName))
 	{
+		FString LengthError;
+		if (!LD::Assist::Utils::IsWithinNameLength(StateName, TEXT("state_name"), LengthError))
+		{
+			return FSMAssistOperationResult::MakeError(LengthError);
+		}
 		CreateArgs.StateName = StateName;
 	}
 
@@ -1909,6 +1925,11 @@ FSMAssistOperationResult LD::Assist::AddReference(const TSharedRef<FJsonObject>&
 	FString StateName;
 	if (InArgs->TryGetStringField(Args::StateName, StateName))
 	{
+		FString LengthError;
+		if (!LD::Assist::Utils::IsWithinNameLength(StateName, TEXT("state_name"), LengthError))
+		{
+			return FSMAssistOperationResult::MakeError(LengthError);
+		}
 		CreateArgs.StateName = StateName;
 	}
 
@@ -2092,6 +2113,11 @@ FSMAssistOperationResult LD::Assist::AddAnyState(const TSharedRef<FJsonObject>& 
 	FString StateName;
 	if (InArgs->TryGetStringField(Args::StateName, StateName))
 	{
+		FString LengthError;
+		if (!LD::Assist::Utils::IsWithinNameLength(StateName, TEXT("state_name"), LengthError))
+		{
+			return FSMAssistOperationResult::MakeError(LengthError);
+		}
 		CreateArgs.StateName = StateName;
 	}
 
