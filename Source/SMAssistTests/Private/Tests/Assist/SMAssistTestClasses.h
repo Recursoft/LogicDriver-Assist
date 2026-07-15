@@ -34,6 +34,19 @@ protected:
 	}
 };
 
+UCLASS()
+class USMAssistFalseTransitionInstance : public USMTransitionInstance
+{
+	GENERATED_BODY()
+
+protected:
+
+	virtual bool CanEnterTransition_Implementation() const override
+	{
+		return false;
+	}
+};
+
 USTRUCT(BlueprintType)
 struct FSMAssistSplitInnerStruct
 {

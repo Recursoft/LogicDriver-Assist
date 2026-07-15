@@ -249,6 +249,74 @@ void FSMLocalGraphWriteSpec::Define()
 		TestFalse(TEXT("unknown node class fails"), R.bSuccess);
 	});
 
+	// Regression: an AnimGraphNode_* class passed the UK2Node gate, then PostPlacedNewNode
+	// CastChecked'd the owning blueprint to UAnimBlueprint and crashed the editor.
+	It("rejects a schema-foreign node class cleanly", [this]()
+	{
+		const FString Asset = CreateBlueprint();
+		const FString From = AddState(Asset, TEXT("From"));
+		const FString To = AddState(Asset, TEXT("To"));
+		const FString Trans = AddTransition(Asset, From, To);
+		if (!TestTrue(TEXT("transition created"), !Trans.IsEmpty()))
+		{
+			return;
+		}
+
+		const FSMAssistOperationResult R = Run(TEXT("sm.add_local_graph_node"),
+			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans },
+				  { TEXT("node_class"), TEXT("AnimGraphNode_SequencePlayer") } }));
+		TestFalse(TEXT("anim node class fails"), R.bSuccess);
+		TestTrue(TEXT("error reports incompatibility"), R.ErrorMessage.Contains(TEXT("not compatible")));
+	});
+
+	It("rejects a Logic Driver structural node class cleanly", [this]()
+	{
+		const FString Asset = CreateBlueprint();
+		const FString From = AddState(Asset, TEXT("From"));
+		const FString To = AddState(Asset, TEXT("To"));
+		const FString Trans = AddTransition(Asset, From, To);
+		if (!TestTrue(TEXT("transition created"), !Trans.IsEmpty()))
+		{
+			return;
+		}
+
+		const FSMAssistOperationResult R = Run(TEXT("sm.add_local_graph_node"),
+			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans },
+				  { TEXT("node_class"), TEXT("SMGraphK2Node_StateMachineNode") } }));
+		TestFalse(TEXT("structural node class fails"), R.bSuccess);
+		TestTrue(TEXT("error reports the structural rejection"), R.ErrorMessage.Contains(TEXT("structural")));
+	});
+
+	// Regression: a nested state machine's bound graph is a USMGraph whose schema forbids plain K2
+	// nodes; spawning one there corrupted the asset at compile.
+	It("rejects spawning a K2 node into a state machine graph cleanly", [this]()
+	{
+		const FString Asset = CreateBlueprint();
+		const FString A = AddState(Asset, TEXT("A"));
+		const FString B = AddState(Asset, TEXT("B"));
+		const FString C = AddState(Asset, TEXT("C"));
+
+		TArray<TSharedPtr<FJsonValue>> NodeGuids;
+		NodeGuids.Add(MakeShared<FJsonValueString>(B));
+		NodeGuids.Add(MakeShared<FJsonValueString>(C));
+		const TSharedRef<FJsonObject> CollapseArgs = MakeShared<FJsonObject>();
+		CollapseArgs->SetStringField(TEXT("asset_path"), Asset);
+		CollapseArgs->SetArrayField(TEXT("node_guids"), NodeGuids);
+		const FSMAssistOperationResult Collapse = Run(TEXT("sm.collapse_to_state_machine"), CollapseArgs);
+		if (!TestTrue(TEXT("collapse succeeded"), Collapse.bSuccess))
+		{
+			return;
+		}
+		const FString ContainerGuid = Str(Collapse, TEXT("state_guid"));
+
+		const FSMAssistOperationResult R = Run(TEXT("sm.add_local_graph_node"),
+			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), ContainerGuid },
+				  { TEXT("node_class"), TEXT("K2Node_ExecutionSequence") } }));
+		TestFalse(TEXT("K2 node into state machine graph fails"), R.bSuccess);
+		TestTrue(TEXT("error reports the state machine graph target"),
+			R.ErrorMessage.Contains(TEXT("state machine graph")));
+	});
+
 	It("errors when the function cannot be resolved", [this]()
 	{
 		const FString Asset = CreateBlueprint();

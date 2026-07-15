@@ -14,6 +14,7 @@
 #include "Graph/Nodes/SMGraphNode_Base.h"
 #include "Graph/SMPropertyGraph.h"
 #include "Properties/SMGraphProperty_Base.h"
+#include "SMInstance.h"
 #include "SMStateInstance.h"
 #include "SMTransitionInstance.h"
 
@@ -23,7 +24,10 @@
 #include "Editor.h"
 #include "Engine/Blueprint.h"
 #include "Engine/BlueprintGeneratedClass.h"
+#include "Engine/SCS_Node.h"
+#include "Engine/SimpleConstructionScript.h"
 #include "GameFramework/Actor.h"
+#include "SMStateMachineComponent.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Misc/Paths.h"
@@ -182,6 +186,159 @@ BEGIN_DEFINE_SPEC(FAssistOperationsSpec, "LogicDriver.Assist",
 		FString TransitionGuid;
 		Result.Payload->TryGetStringField(TEXT("transition_guid"), TransitionGuid);
 		return TransitionGuid;
+	}
+
+	FString AddAnyStateToBlueprint(const FString& InAssetPath, const FString& InStateName)
+	{
+		USMAssistSubsystem* Subsystem = GetSubsystem();
+		if (!Subsystem)
+		{
+			return FString();
+		}
+
+		const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+		Args->SetStringField(TEXT("asset_path"), InAssetPath);
+		Args->SetStringField(TEXT("state_name"), InStateName);
+
+		const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+			FName(TEXT("sm.add_any_state")), Args);
+		if (!Result.bSuccess || !Result.Payload.IsValid())
+		{
+			return FString();
+		}
+
+		FString StateGuid;
+		Result.Payload->TryGetStringField(TEXT("state_guid"), StateGuid);
+		return StateGuid;
+	}
+
+	FString AddLinkStateToBlueprint(const FString& InAssetPath, const FString& InLinkToStateName)
+	{
+		USMAssistSubsystem* Subsystem = GetSubsystem();
+		if (!Subsystem)
+		{
+			return FString();
+		}
+
+		const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+		Args->SetStringField(TEXT("asset_path"), InAssetPath);
+		Args->SetStringField(TEXT("link_to_state_name"), InLinkToStateName);
+
+		const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+			FName(TEXT("sm.add_link_state")), Args);
+		if (!Result.bSuccess || !Result.Payload.IsValid())
+		{
+			return FString();
+		}
+
+		FString StateGuid;
+		Result.Payload->TryGetStringField(TEXT("state_guid"), StateGuid);
+		return StateGuid;
+	}
+
+	int32 GetTransitionCount(const FString& InAssetPath)
+	{
+		USMAssistSubsystem* Subsystem = GetSubsystem();
+		if (!Subsystem)
+		{
+			return -1;
+		}
+
+		const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+		Args->SetStringField(TEXT("asset_path"), InAssetPath);
+		const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+			FName(TEXT("sm.get_asset")), Args);
+		if (!Result.bSuccess || !Result.Payload.IsValid())
+		{
+			return -1;
+		}
+
+		const TArray<TSharedPtr<FJsonValue>>* Transitions = nullptr;
+		if (!Result.Payload->TryGetArrayField(TEXT("transitions"), Transitions) || !Transitions)
+		{
+			return -1;
+		}
+		return Transitions->Num();
+	}
+
+	TArray<FString> GetEntryStateGuids(const FString& InAssetPath)
+	{
+		TArray<FString> Guids;
+		USMAssistSubsystem* Subsystem = GetSubsystem();
+		if (!Subsystem)
+		{
+			return Guids;
+		}
+
+		const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+		Args->SetStringField(TEXT("asset_path"), InAssetPath);
+		const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+			FName(TEXT("sm.get_asset")), Args);
+		if (!Result.bSuccess || !Result.Payload.IsValid())
+		{
+			return Guids;
+		}
+
+		const TArray<TSharedPtr<FJsonValue>>* Entries = nullptr;
+		if (Result.Payload->TryGetArrayField(TEXT("entry_state_guids"), Entries) && Entries)
+		{
+			for (const TSharedPtr<FJsonValue>& Value : *Entries)
+			{
+				FString Guid;
+				if (Value->TryGetString(Guid))
+				{
+					Guids.Add(Guid);
+				}
+			}
+		}
+		return Guids;
+	}
+
+	// Reads a template property's exported value back through sm.get_node_properties, so mutation
+	// specs assert the asset state rather than the op's echoed arguments.
+	FString GetNodePropertyValue(const FString& InAssetPath, const FString& InNodeGuid, const FString& InPropertyName, int32 InStackIndex = INDEX_NONE)
+	{
+		USMAssistSubsystem* Subsystem = GetSubsystem();
+		if (!Subsystem)
+		{
+			return FString();
+		}
+
+		const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+		Args->SetStringField(TEXT("asset_path"), InAssetPath);
+		Args->SetStringField(TEXT("node_guid"), InNodeGuid);
+		if (InStackIndex >= 0)
+		{
+			Args->SetNumberField(TEXT("stack_index"), InStackIndex);
+		}
+
+		const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+			FName(TEXT("sm.get_node_properties")), Args);
+		if (!Result.bSuccess || !Result.Payload.IsValid())
+		{
+			return FString();
+		}
+
+		const TArray<TSharedPtr<FJsonValue>>* Properties = nullptr;
+		if (!Result.Payload->TryGetArrayField(TEXT("properties"), Properties) || !Properties)
+		{
+			return FString();
+		}
+		for (const TSharedPtr<FJsonValue>& Value : *Properties)
+		{
+			const TSharedPtr<FJsonObject>* Entry = nullptr;
+			if (Value->TryGetObject(Entry) && Entry->IsValid())
+			{
+				FString Name;
+				if ((*Entry)->TryGetStringField(TEXT("name"), Name) && Name == InPropertyName)
+				{
+					FString PropertyValue;
+					(*Entry)->TryGetStringField(TEXT("value"), PropertyValue);
+					return PropertyValue;
+				}
+			}
+		}
+		return FString();
 	}
 
 	TArray<FString> GetRootStateGuids(const FString& InAssetPath)
@@ -964,6 +1121,128 @@ void FAssistOperationsSpec::Define()
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error mentions 'from'", Result.ErrorMessage.Contains(TEXT("from")));
 		});
+
+		// Regression: a Link State has no output pin; before endpoint validation this reached
+		// CreateTransitionEdge's GetOutputPin()->LinkedTo and crashed the editor.
+		It("Fails cleanly when the from state is a Link State", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString TargetGuid = AddStateToBlueprint(AssetPath, TEXT("LinkTarget"), nullptr, /*bIsEntry*/true);
+			const FString DestGuid = AddStateToBlueprint(AssetPath, TEXT("Dest"));
+			const FString LinkGuid = AddLinkStateToBlueprint(AssetPath, TEXT("LinkTarget"));
+			if (!TestFalse("Target state created", TargetGuid.IsEmpty())
+				|| !TestFalse("Dest state created", DestGuid.IsEmpty())
+				|| !TestFalse("Link state created", LinkGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			const int32 TransitionCountBefore = GetTransitionCount(AssetPath);
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("from_state_guid"), LinkGuid);
+			Args->SetStringField(TEXT("to_state_guid"), DestGuid);
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.add_transition")), Args);
+
+			TestFalse("Result is failure", Result.bSuccess);
+			TestTrue("Error identifies the Link State endpoint",
+				Result.ErrorMessage.Contains(TEXT("Link State")));
+			TestEqual("No transition was added", GetTransitionCount(AssetPath), TransitionCountBefore);
+		});
+
+		// Regression: an Any State has no input pin; before endpoint validation this reached the graph
+		// schema with a null pin and crashed the editor.
+		It("Fails cleanly when the to state is an Any State", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString FromGuid = AddStateToBlueprint(AssetPath, TEXT("From"), nullptr, /*bIsEntry*/true);
+			const FString AnyGuid = AddAnyStateToBlueprint(AssetPath, TEXT("GlobalAny"));
+			if (!TestFalse("From state created", FromGuid.IsEmpty())
+				|| !TestFalse("Any state created", AnyGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			const int32 TransitionCountBefore = GetTransitionCount(AssetPath);
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("from_state_guid"), FromGuid);
+			Args->SetStringField(TEXT("to_state_guid"), AnyGuid);
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.add_transition")), Args);
+
+			TestFalse("Result is failure", Result.bSuccess);
+			TestTrue("Error identifies the Any State endpoint",
+				Result.ErrorMessage.Contains(TEXT("Any State")));
+			TestEqual("No transition was added", GetTransitionCount(AssetPath), TransitionCountBefore);
+		});
+
+		// Regression: endpoints in different graphs (root vs nested) reached a fatal
+		// check(FromGraph == ToGraph) in CreateTransitionEdge.
+		It("Fails cleanly when the states are in different graphs", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString AGuid = AddStateToBlueprint(AssetPath, TEXT("A"), nullptr, /*bIsEntry*/true);
+			const FString BGuid = AddStateToBlueprint(AssetPath, TEXT("B"));
+			const FString CGuid = AddStateToBlueprint(AssetPath, TEXT("C"));
+			if (!TestFalse("A guid populated", AGuid.IsEmpty())
+				|| !TestFalse("B guid populated", BGuid.IsEmpty())
+				|| !TestFalse("C guid populated", CGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			TArray<TSharedPtr<FJsonValue>> NodeGuids;
+			NodeGuids.Add(MakeShared<FJsonValueString>(BGuid));
+			NodeGuids.Add(MakeShared<FJsonValueString>(CGuid));
+
+			const TSharedRef<FJsonObject> CollapseArgs = MakeShared<FJsonObject>();
+			CollapseArgs->SetStringField(TEXT("asset_path"), AssetPath);
+			CollapseArgs->SetArrayField(TEXT("node_guids"), NodeGuids);
+
+			const FSMAssistOperationResult CollapseResult = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.collapse_to_state_machine")), CollapseArgs);
+			if (!TestTrue("States collapsed into a nested state machine", CollapseResult.bSuccess))
+			{
+				return;
+			}
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("from_state_guid"), AGuid);
+			Args->SetStringField(TEXT("to_state_guid"), BGuid);
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.add_transition")), Args);
+
+			TestFalse("Result is failure", Result.bSuccess);
+			TestTrue("Error identifies the graph mismatch",
+				Result.ErrorMessage.Contains(TEXT("different graphs")));
+		});
 	});
 
 	Describe("sm.list_assets", [this]()
@@ -1492,6 +1771,12 @@ void FAssistOperationsSpec::Define()
 			TestTrue("Payload has element_count",
 				Result.Payload->TryGetNumberField(TEXT("element_count"), ElementCount));
 			TestEqual("element_count matches array length", (int32)ElementCount, 3);
+
+			// element_count is computed from the input; read the template back to prove the write landed.
+			const FString StoredValue = GetNodePropertyValue(AssetPath, StateGuid, TEXT("StringArray"));
+			TestTrue("Template array contains first element", StoredValue.Contains(TEXT("alpha")));
+			TestTrue("Template array contains second element", StoredValue.Contains(TEXT("beta")));
+			TestTrue("Template array contains third element", StoredValue.Contains(TEXT("gamma")));
 		});
 
 		It("Rejects 'array_index' combined with an array value", [this]()
@@ -1820,6 +2105,10 @@ void FAssistOperationsSpec::Define()
 			FString Action;
 			TestTrue("Payload action is 'remove'",
 				RemoveResult.Payload->TryGetStringField(TEXT("array_action"), Action) && Action == TEXT("remove"));
+
+			const FString StoredValue = GetNodePropertyValue(AssetPath, StateGuid, TEXT("StringArray"));
+			TestFalse("Removed element gone from the template", StoredValue.Contains(TEXT("\"a\"")));
+			TestTrue("Remaining element intact on the template", StoredValue.Contains(TEXT("\"b\"")));
 		});
 
 		It("Fails when 'array_action=remove' omits array_index", [this]()
@@ -1869,6 +2158,21 @@ void FAssistOperationsSpec::Define()
 
 			USMAssistSubsystem* Subsystem = GetSubsystem();
 
+			// Seed so clearing has something to remove; clear on an empty array cannot detect a no-op.
+			TArray<TSharedPtr<FJsonValue>> Elements;
+			Elements.Add(MakeShared<FJsonValueString>(TEXT("a")));
+			Elements.Add(MakeShared<FJsonValueString>(TEXT("b")));
+			const TSharedRef<FJsonObject> SeedArgs = MakeShared<FJsonObject>();
+			SeedArgs->SetStringField(TEXT("asset_path"), AssetPath);
+			SeedArgs->SetStringField(TEXT("node_guid"), StateGuid);
+			SeedArgs->SetStringField(TEXT("property_name"), TEXT("StringArray"));
+			SeedArgs->SetArrayField(TEXT("value"), Elements);
+			if (!TestTrue("Seed array succeeded",
+				Subsystem->ExecuteOperation(FName(TEXT("sm.set_node_property")), SeedArgs).bSuccess))
+			{
+				return;
+			}
+
 			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
 			Args->SetStringField(TEXT("asset_path"), AssetPath);
 			Args->SetStringField(TEXT("node_guid"), StateGuid);
@@ -1886,6 +2190,22 @@ void FAssistOperationsSpec::Define()
 			FString Action;
 			TestTrue("Payload action is 'clear'",
 				Result.Payload->TryGetStringField(TEXT("array_action"), Action) && Action == TEXT("clear"));
+
+			// The sibling property anchors the readback path: absent elements only prove the clear
+			// when the same helper demonstrably returns real values for this node.
+			const TSharedRef<FJsonObject> AnchorArgs = MakeShared<FJsonObject>();
+			AnchorArgs->SetStringField(TEXT("asset_path"), AssetPath);
+			AnchorArgs->SetStringField(TEXT("node_guid"), StateGuid);
+			AnchorArgs->SetStringField(TEXT("property_name"), TEXT("SingleString"));
+			AnchorArgs->SetStringField(TEXT("value"), TEXT("anchor"));
+			TestTrue("Anchor property written",
+				Subsystem->ExecuteOperation(FName(TEXT("sm.set_node_property")), AnchorArgs).bSuccess);
+			TestEqual("Readback path proven by the anchor property",
+				GetNodePropertyValue(AssetPath, StateGuid, TEXT("SingleString")), FString(TEXT("anchor")));
+
+			const FString StoredValue = GetNodePropertyValue(AssetPath, StateGuid, TEXT("StringArray"));
+			TestFalse("Cleared array holds no seeded elements", StoredValue.Contains(TEXT("\"a\"")));
+			TestFalse("Cleared array holds no seeded elements (second)", StoredValue.Contains(TEXT("\"b\"")));
 		});
 
 		It("Rejects an unknown array_action", [this]()
@@ -2165,6 +2485,11 @@ void FAssistOperationsSpec::Define()
 				FName(TEXT("sm.set_initial_state")), Args);
 			TestTrue("Result is success", Result.bSuccess);
 
+			// Compile success alone is insensitive to the rewire; assert the entry actually moved.
+			const TArray<FString> EntryGuids = GetEntryStateGuids(AssetPath);
+			TestTrue("Entry moved to the requested state", EntryGuids.Contains(SecondGuid));
+			TestFalse("Previous entry no longer wired", EntryGuids.Contains(FirstGuid));
+
 			const TSharedRef<FJsonObject> CompileArgs = MakeShared<FJsonObject>();
 			CompileArgs->SetStringField(TEXT("asset_path"), AssetPath);
 			const FSMAssistOperationResult CompileResult = Subsystem->ExecuteOperation(
@@ -2189,6 +2514,41 @@ void FAssistOperationsSpec::Define()
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
 				FName(TEXT("sm.set_initial_state")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
+		});
+
+		// Regression: an Any State has no input pin; before endpoint validation SetInitialState
+		// reached the graph schema with a null pin and crashed the editor.
+		It("Fails cleanly when the target is an Any State", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString FirstGuid = AddStateToBlueprint(AssetPath, TEXT("First"), nullptr, /*bIsEntry*/true);
+			const FString AnyGuid = AddAnyStateToBlueprint(AssetPath, TEXT("GlobalAny"));
+			if (!TestFalse("First state created", FirstGuid.IsEmpty())
+				|| !TestFalse("Any state created", AnyGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("state_guid"), AnyGuid);
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.set_initial_state")), Args);
+
+			TestFalse("Result is failure", Result.bSuccess);
+			TestTrue("Error identifies the Any State target",
+				Result.ErrorMessage.Contains(TEXT("Any State")));
+
+			const TArray<FString> EntryGuids = GetEntryStateGuids(AssetPath);
+			TestTrue("Entry wiring still points at the original state", EntryGuids.Contains(FirstGuid));
 		});
 	});
 
@@ -2283,6 +2643,12 @@ void FAssistOperationsSpec::Define()
 			TestTrue("Payload echoes stack_index",
 				PropResult.Payload->TryGetNumberField(TEXT("stack_index"), Echoed));
 			TestEqual("stack_index echo matches", (int32)Echoed, 0);
+
+			// SingleString exists only on the stack template's class, and the value must land there,
+			// proving stack_index resolved the stack template rather than the primary template.
+			TestEqual("Value written to the stack template",
+				GetNodePropertyValue(AssetPath, StateGuid, TEXT("SingleString"), /*InStackIndex*/0),
+				FString(TEXT("stacked")));
 		});
 
 		It("Fails when stack_index targets a missing stack template", [this]()
@@ -2474,6 +2840,76 @@ void FAssistOperationsSpec::Define()
 			int32 UpdateHits = 0;
 			int32 EndHits = 0;
 			TestHelpers::RunStateMachineToCompletion(this, Blueprint, EntryHits, UpdateHits, EndHits);
+		});
+
+		// A true primary with a false stack entry must block the transition; the always-true variant
+		// above cannot fail, so this is the assert that proves the entry joins the evaluated AND chain.
+		It("A false stack entry blocks the transition", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const FString StartGuid = AddStateToBlueprint(AssetPath, TEXT("Start"), nullptr, /*bIsEntry*/true);
+			const FString EndGuid = AddStateToBlueprint(AssetPath, TEXT("End"));
+			if (!TestFalse("Start guid populated", StartGuid.IsEmpty())
+				|| !TestFalse("End guid populated", EndGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			FString TransitionGuid;
+			{
+				const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+				Args->SetStringField(TEXT("asset_path"), AssetPath);
+				Args->SetStringField(TEXT("from_state_guid"), StartGuid);
+				Args->SetStringField(TEXT("to_state_guid"), EndGuid);
+				Args->SetStringField(TEXT("transition_class"),
+					USMAssistTestTransitionInstance::StaticClass()->GetPathName());
+				const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+					FName(TEXT("sm.add_transition")), Args);
+				if (!TestTrue("Transition added", Result.bSuccess && Result.Payload.IsValid()))
+				{
+					return;
+				}
+				Result.Payload->TryGetStringField(TEXT("transition_guid"), TransitionGuid);
+			}
+
+			{
+				const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+				Args->SetStringField(TEXT("asset_path"), AssetPath);
+				Args->SetStringField(TEXT("transition_guid"), TransitionGuid);
+				Args->SetStringField(TEXT("transition_class"),
+					USMAssistFalseTransitionInstance::StaticClass()->GetPathName());
+				const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+					FName(TEXT("sm.add_transition_stack")), Args);
+				if (!TestTrue("False stack entry added", Result.bSuccess))
+				{
+					return;
+				}
+			}
+
+			USMBlueprint* Blueprint = Cast<USMBlueprint>(FSoftObjectPath(AssetPath).TryLoad());
+			if (!TestNotNull("Blueprint loaded for run", Blueprint))
+			{
+				return;
+			}
+
+			int32 EntryHits = 0;
+			int32 UpdateHits = 0;
+			int32 EndHits = 0;
+			USMInstance* Instance = TestHelpers::RunStateMachineToCompletion(this, Blueprint,
+				EntryHits, UpdateHits, EndHits, /*MaxIterations*/10, /*bShutdownStateMachine*/false,
+				/*bTestCompletion*/false);
+			if (TestNotNull("Instance ran", Instance))
+			{
+				TestFalse("SM must not reach the end state through a false AND chain", Instance->IsInEndState());
+				Instance->Shutdown();
+			}
 		});
 	});
 
@@ -5393,6 +5829,224 @@ void FAssistOperationsSpec::Define()
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error reports the containment rejection",
 				Result.ErrorMessage.Contains(TEXT("outside the screenshots directory")));
+		});
+
+		// Regression: an explicit empty output_subdir resolved to the whole Saved/Screenshots root
+		// and deleted manual F9/high-res captures alongside tool output.
+		It("Rejects an empty output_subdir that resolves to the screenshots root", [this]()
+		{
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			if (!TestNotNull("Subsystem available", Subsystem))
+			{
+				return;
+			}
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("output_subdir"), TEXT(""));
+			Args->SetBoolField(TEXT("dry_run"), true);
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.clear_screenshots")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+			TestTrue("Error reports the root rejection",
+				Result.ErrorMessage.Contains(TEXT("root")));
+		});
+
+		It("Accepts the default subdirectory", [this]()
+		{
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			if (!TestNotNull("Subsystem available", Subsystem))
+			{
+				return;
+			}
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetBoolField(TEXT("dry_run"), true);
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.clear_screenshots")), Args);
+			TestTrue("Dry run against the default subdir succeeds", Result.bSuccess);
+		});
+	});
+
+	Describe("sm.configure_sm_component_on_actor", [this]()
+	{
+		// Regression: extra_config_json wrote through raw reflection with no editability filter, so an
+		// internal UPROPERTY name (CreationMethod, replication internals) wrote straight into the SCS
+		// template and was reported in 'applied'.
+		It("Rejects a non-editable property in extra_config_json and leaves the template unchanged", [this]()
+		{
+			UBlueprint* ActorBP = CreateTransientBlueprintOfType(
+				AActor::StaticClass(), UBlueprint::StaticClass(), UBlueprintGeneratedClass::StaticClass());
+			if (!TestNotNull("Actor blueprint created", ActorBP)
+				|| !TestNotNull("SimpleConstructionScript present", ActorBP->SimpleConstructionScript.Get()))
+			{
+				return;
+			}
+
+			USCS_Node* SCSNode = ActorBP->SimpleConstructionScript->CreateNode(
+				USMStateMachineComponent::StaticClass(), TEXT("SMComp"));
+			if (!TestNotNull("SCS node created", SCSNode))
+			{
+				return;
+			}
+			ActorBP->SimpleConstructionScript->AddNode(SCSNode);
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("actor_blueprint"), ActorBP->GetPathName());
+			Args->SetStringField(TEXT("component_name"), TEXT("SMComp"));
+			Args->SetStringField(TEXT("extra_config_json"), TEXT("{\"CreationMethod\":\"Instance\"}"));
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.configure_sm_component_on_actor")), Args);
+			TestTrue("Result is success", Result.bSuccess);
+			if (!TestTrue("Payload populated", Result.Payload.IsValid()))
+			{
+				return;
+			}
+
+			const TArray<TSharedPtr<FJsonValue>>* Applied = nullptr;
+			bool bInApplied = false;
+			if (Result.Payload->TryGetArrayField(TEXT("applied"), Applied) && Applied)
+			{
+				for (const TSharedPtr<FJsonValue>& Value : *Applied)
+				{
+					if (Value->AsString().Contains(TEXT("CreationMethod")))
+					{
+						bInApplied = true;
+					}
+				}
+			}
+			TestFalse("CreationMethod not reported as applied", bInApplied);
+
+			const TArray<TSharedPtr<FJsonValue>>* Unknown = nullptr;
+			bool bInUnknown = false;
+			if (Result.Payload->TryGetArrayField(TEXT("unknown_keys"), Unknown) && Unknown)
+			{
+				for (const TSharedPtr<FJsonValue>& Value : *Unknown)
+				{
+					if (Value->AsString().Contains(TEXT("CreationMethod")))
+					{
+						bInUnknown = true;
+					}
+				}
+			}
+			TestTrue("CreationMethod routed to unknown_keys with a reason", bInUnknown);
+
+			const USMStateMachineComponent* Template = Cast<USMStateMachineComponent>(SCSNode->ComponentTemplate);
+			if (TestNotNull("Component template present", Template))
+			{
+				TestTrue("Template CreationMethod unchanged",
+					Template->CreationMethod == EComponentCreationMethod::Native);
+			}
+		});
+
+		It("Leaves StateMachineClass alone on a config-only call", [this]()
+		{
+			UBlueprint* ActorBP = CreateTransientBlueprintOfType(
+				AActor::StaticClass(), UBlueprint::StaticClass(), UBlueprintGeneratedClass::StaticClass());
+			if (!TestNotNull("Actor blueprint created", ActorBP)
+				|| !TestNotNull("SimpleConstructionScript present", ActorBP->SimpleConstructionScript.Get()))
+			{
+				return;
+			}
+
+			USCS_Node* SCSNode = ActorBP->SimpleConstructionScript->CreateNode(
+				USMStateMachineComponent::StaticClass(), TEXT("SMComp"));
+			if (!TestNotNull("SCS node created", SCSNode))
+			{
+				return;
+			}
+			ActorBP->SimpleConstructionScript->AddNode(SCSNode);
+
+			const FString SMAssetPath = CreateTransientBlueprint();
+			if (!TestFalse("SM blueprint created", SMAssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const TSharedRef<FJsonObject> SetArgs = MakeShared<FJsonObject>();
+			SetArgs->SetStringField(TEXT("actor_blueprint"), ActorBP->GetPathName());
+			SetArgs->SetStringField(TEXT("component_name"), TEXT("SMComp"));
+			SetArgs->SetStringField(TEXT("state_machine_class"), SMAssetPath);
+			if (!TestTrue("Class-setting call succeeded",
+				Subsystem->ExecuteOperation(FName(TEXT("sm.configure_sm_component_on_actor")), SetArgs).bSuccess))
+			{
+				return;
+			}
+
+			const USMStateMachineComponent* Template = Cast<USMStateMachineComponent>(SCSNode->ComponentTemplate);
+			if (!TestNotNull("Component template present", Template)
+				|| !TestNotNull("StateMachineClass was set", Template->StateMachineClass.Get()))
+			{
+				return;
+			}
+			UClass* AssignedClass = Template->StateMachineClass;
+
+			const TSharedRef<FJsonObject> ConfigArgs = MakeShared<FJsonObject>();
+			ConfigArgs->SetStringField(TEXT("actor_blueprint"), ActorBP->GetPathName());
+			ConfigArgs->SetStringField(TEXT("component_name"), TEXT("SMComp"));
+			ConfigArgs->SetBoolField(TEXT("b_stop_on_end_play"), true);
+			TestTrue("Config-only call succeeded",
+				Subsystem->ExecuteOperation(FName(TEXT("sm.configure_sm_component_on_actor")), ConfigArgs).bSuccess);
+
+			TestTrue("StateMachineClass untouched by the config-only call",
+				Template->StateMachineClass.Get() == AssignedClass);
+			TestTrue("Config flag applied", Template->bStopOnEndPlay);
+		});
+	});
+
+	// Regression: FName construction fatally asserts at NAME_SIZE (1024) characters. An over-long
+	// asset_path crashed inside FSoftObjectPath before any op-level guard could run.
+	Describe("input length bounds", [this]()
+	{
+		It("Rejects an over-long asset_path cleanly", [this]()
+		{
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			if (!TestNotNull("Subsystem available", Subsystem))
+			{
+				return;
+			}
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), FString::ChrN(1100, TEXT('a')));
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.get_asset")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+			TestTrue("Error reports the length bound", Result.ErrorMessage.Contains(TEXT("characters")));
+		});
+
+		It("Rejects an over-long property_name cleanly", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString StateGuid = AddStateToBlueprint(AssetPath, TEXT("Target"));
+			if (!TestFalse("State created", StateGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("node_guid"), StateGuid);
+			Args->SetStringField(TEXT("property_name"), FString::ChrN(1100, TEXT('p')));
+			Args->SetStringField(TEXT("value"), TEXT("1"));
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.set_node_property")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+			TestTrue("Error reports the length bound", Result.ErrorMessage.Contains(TEXT("characters")));
 		});
 	});
 }

@@ -24,6 +24,7 @@
 #include "Graph/Nodes/SMGraphNode_StateNode.h"
 #include "Graph/Nodes/SMGraphNode_StateNodeBase.h"
 #include "Graph/Nodes/SMGraphNode_TransitionEdge.h"
+#include "Graph/Nodes/SMGraphK2Node_Base.h"
 #include "Graph/Nodes/PropertyNodes/SMGraphK2Node_PropertyNode_Base.h"
 #include "Graph/Nodes/RootNodes/SMGraphK2Node_ConduitResultNode.h"
 #include "Graph/Nodes/RootNodes/SMGraphK2Node_TransitionResultNode.h"
@@ -99,6 +100,69 @@ namespace LD::Assist::Private
 		return GraphGen.Get();
 	}
 
+	// FindStateNodeByGuid resolves Any State (output pin only), Link State (input pin only), and nodes in
+	// nested graphs, but core transition/entry APIs assume two-pin states in a single graph and assert or
+	// null-deref otherwise. Reject unusable endpoints with a specific message before reaching core.
+	static bool ValidateTransitionEndpoints(const USMGraphNode_StateNodeBase* InFromState,
+		const USMGraphNode_StateNodeBase* InToState, FString& OutError)
+	{
+		if (InFromState->IsA<USMGraphNode_LinkStateNode>())
+		{
+			OutError = FString::Printf(
+				TEXT("'from' state '%s' is a Link State and cannot have outgoing transitions."),
+				*InFromState->GetStateName());
+			return false;
+		}
+		if (!InFromState->GetOutputPin())
+		{
+			OutError = FString::Printf(
+				TEXT("'from' state '%s' has no output pin and cannot have outgoing transitions."),
+				*InFromState->GetStateName());
+			return false;
+		}
+		if (InToState->IsA<USMGraphNode_AnyStateNode>())
+		{
+			OutError = FString::Printf(
+				TEXT("'to' state '%s' is an Any State and cannot receive transitions."),
+				*InToState->GetStateName());
+			return false;
+		}
+		if (!InToState->GetInputPin())
+		{
+			OutError = FString::Printf(
+				TEXT("'to' state '%s' has no input pin and cannot receive transitions."),
+				*InToState->GetStateName());
+			return false;
+		}
+		if (InFromState->GetGraph() != InToState->GetGraph())
+		{
+			OutError = FString::Printf(
+				TEXT("'from' state '%s' and 'to' state '%s' are in different graphs. Transitions must connect states within the same state machine graph."),
+				*InFromState->GetStateName(), *InToState->GetStateName());
+			return false;
+		}
+		return true;
+	}
+
+	static bool ValidateInitialStateNode(const USMGraphNode_StateNodeBase* InStateNode, FString& OutError)
+	{
+		if (InStateNode->IsA<USMGraphNode_AnyStateNode>())
+		{
+			OutError = FString::Printf(
+				TEXT("State '%s' is an Any State and cannot be the initial state."),
+				*InStateNode->GetStateName());
+			return false;
+		}
+		if (!InStateNode->GetInputPin())
+		{
+			OutError = FString::Printf(
+				TEXT("State '%s' has no input pin and cannot be the initial state."),
+				*InStateNode->GetStateName());
+			return false;
+		}
+		return true;
+	}
+
 	// The graph-node property write path goes through raw reflection (PropertyUtils::SetPropertyValue), which
 	// can silently corrupt identity or structural state. Refuse the node's identity guid, object-typed fields
 	// (e.g. BoundGraph), and containers (e.g. GraphPropertyGraphs, StateStack); scalar positional, comment,
@@ -154,6 +218,13 @@ FSMAssistOperationResult LD::Assist::CreateBlueprint(const TSharedRef<FJsonObjec
 
 	FString Path;
 	InArgs->TryGetStringField(Args::Path, Path);
+
+	FString LengthError;
+	if (!LD::Assist::Utils::IsWithinNameLength(Name, TEXT("name"), LengthError)
+		|| !LD::Assist::Utils::IsWithinNameLength(Path, TEXT("path"), LengthError))
+	{
+		return FSMAssistOperationResult::MakeError(LengthError);
+	}
 
 	ISMAssetToolsModule& AssetToolsModule = FModuleManager::LoadModuleChecked<ISMAssetToolsModule>(
 		LOGICDRIVER_ASSET_TOOLS_MODULE_NAME);
@@ -230,6 +301,11 @@ FSMAssistOperationResult LD::Assist::AddState(const TSharedRef<FJsonObject>& InA
 	FString StateClassPath;
 	if (InArgs->TryGetStringField(Args::StateClass, StateClassPath) && !StateClassPath.IsEmpty())
 	{
+		FString LengthError;
+		if (!LD::Assist::Utils::IsWithinNameLength(StateClassPath, TEXT("state_class"), LengthError))
+		{
+			return FSMAssistOperationResult::MakeError(LengthError);
+		}
 		UClass* StateClass = LoadClass<USMStateInstance_Base>(nullptr, *StateClassPath);
 		if (!StateClass)
 		{
@@ -239,7 +315,18 @@ FSMAssistOperationResult LD::Assist::AddState(const TSharedRef<FJsonObject>& InA
 		CreateArgs.StateInstanceClass = StateClass;
 	}
 
-	USMGraphNode_StateNodeBase* StateNode = GraphGen->CreateStateNode(Blueprint, CreateArgs);
+	// Core's schema action transacts the node add, but entry wiring and naming run after that inner
+	// transaction closes; undoing the partial record would dangle the entry pin. One op-level scope
+	// captures the whole chain (the inner transaction merges into it).
+	USMGraphNode_StateNodeBase* StateNode = nullptr;
+	{
+		FScopedTransaction Transaction(NSLOCTEXT("SMAssistOperations", "AssistAddState", "Add State (Assist)"));
+		StateNode = GraphGen->CreateStateNode(Blueprint, CreateArgs);
+		if (!StateNode)
+		{
+			Transaction.Cancel();
+		}
+	}
 	if (!StateNode)
 	{
 		return FSMAssistOperationResult::MakeError(TEXT("Failed to create state node."));
@@ -306,6 +393,12 @@ FSMAssistOperationResult LD::Assist::AddTransition(const TSharedRef<FJsonObject>
 			FString::Printf(TEXT("Could not find 'to' state with guid '%s'."), *ToGuidStr));
 	}
 
+	FString EndpointError;
+	if (!LD::Assist::Private::ValidateTransitionEndpoints(FromState, ToState, EndpointError))
+	{
+		return FSMAssistOperationResult::MakeError(EndpointError);
+	}
+
 	FString GraphGenError;
 	ISMGraphGeneration* GraphGen = LD::Assist::Private::GetGraphGeneration(GraphGenError);
 	if (!GraphGen)
@@ -320,6 +413,11 @@ FSMAssistOperationResult LD::Assist::AddTransition(const TSharedRef<FJsonObject>
 	FString TransitionClassPath;
 	if (InArgs->TryGetStringField(Args::TransitionClass, TransitionClassPath) && !TransitionClassPath.IsEmpty())
 	{
+		FString LengthError;
+		if (!LD::Assist::Utils::IsWithinNameLength(TransitionClassPath, TEXT("transition_class"), LengthError))
+		{
+			return FSMAssistOperationResult::MakeError(LengthError);
+		}
 		UClass* TransitionClass = LoadClass<USMTransitionInstance>(nullptr, *TransitionClassPath);
 		if (!TransitionClass)
 		{
@@ -329,7 +427,17 @@ FSMAssistOperationResult LD::Assist::AddTransition(const TSharedRef<FJsonObject>
 		CreateArgs.TransitionInstanceClass = TransitionClass;
 	}
 
-	USMGraphNode_TransitionEdge* TransitionEdge = GraphGen->CreateTransitionEdge(Blueprint, CreateArgs);
+	// Core CreateTransitionEdge wires both endpoints with no transaction of its own; without an
+	// op-level scope the engine's Modify calls record nothing and the connection is invisible to undo.
+	USMGraphNode_TransitionEdge* TransitionEdge = nullptr;
+	{
+		FScopedTransaction Transaction(NSLOCTEXT("SMAssistOperations", "AssistAddTransition", "Add Transition (Assist)"));
+		TransitionEdge = GraphGen->CreateTransitionEdge(Blueprint, CreateArgs);
+		if (!TransitionEdge)
+		{
+			Transaction.Cancel();
+		}
+	}
 	if (!TransitionEdge)
 	{
 		return FSMAssistOperationResult::MakeError(TEXT("Failed to create transition edge."));
@@ -414,6 +522,12 @@ FSMAssistOperationResult LD::Assist::ListAssets(const TSharedRef<FJsonObject>& I
 {
 	FString PathPrefix;
 	InArgs->TryGetStringField(Args::PathPrefix, PathPrefix);
+
+	FString LengthError;
+	if (!LD::Assist::Utils::IsWithinNameLength(PathPrefix, TEXT("path_prefix"), LengthError))
+	{
+		return FSMAssistOperationResult::MakeError(LengthError);
+	}
 
 	const FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(
 		TEXT("AssetRegistry"));
@@ -711,7 +825,18 @@ FSMAssistOperationResult LD::Assist::RemoveNode(const TSharedRef<FJsonObject>& I
 		return FSMAssistOperationResult::MakeError(GraphGenError);
 	}
 
-	if (!GraphGen->RemoveNode(Node))
+	// Core RemoveNode Modifies the graph, the node, and link counterparts but opens no transaction;
+	// the op-level scope makes those records effective so undo restores the node and its links.
+	bool bRemoved = false;
+	{
+		FScopedTransaction Transaction(NSLOCTEXT("SMAssistOperations", "AssistRemoveNode", "Remove Node (Assist)"));
+		bRemoved = GraphGen->RemoveNode(Node);
+		if (!bRemoved)
+		{
+			Transaction.Cancel();
+		}
+	}
+	if (!bRemoved)
 	{
 		return FSMAssistOperationResult::MakeError(TEXT("Failed to remove node."));
 	}
@@ -842,6 +967,12 @@ FSMAssistOperationResult LD::Assist::SetNodeProperty(const TSharedRef<FJsonObjec
 		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'property_name'."));
 	}
 
+	FString PropertyNameLengthError;
+	if (!LD::Assist::Utils::IsWithinNameLength(PropertyName, TEXT("property_name"), PropertyNameLengthError))
+	{
+		return FSMAssistOperationResult::MakeError(PropertyNameLengthError);
+	}
+
 	FGuid NodeGuid;
 	if (!FGuid::Parse(NodeGuidStr, NodeGuid))
 	{
@@ -957,6 +1088,9 @@ FSMAssistOperationResult LD::Assist::SetNodeProperty(const TSharedRef<FJsonObjec
 				}
 			}
 
+			// Without a transaction the Modify below records nothing; scope it so graph-node field
+			// writes (position, comment) participate in undo.
+			const FScopedTransaction Transaction(NSLOCTEXT("SMAssistOperations", "AssistSetNodeProperty", "Set Node Property (Assist)"));
 			Node->Modify();
 			for (int32 Idx = 0; Idx < ValueStrings.Num(); ++Idx)
 			{
@@ -1402,6 +1536,12 @@ FSMAssistOperationResult LD::Assist::SetInitialState(const TSharedRef<FJsonObjec
 			FString::Printf(TEXT("Could not find state node with guid '%s'."), *StateGuidStr));
 	}
 
+	FString StateError;
+	if (!LD::Assist::Private::ValidateInitialStateNode(StateNode, StateError))
+	{
+		return FSMAssistOperationResult::MakeError(StateError);
+	}
+
 	FString GraphGenError;
 	ISMGraphGeneration* GraphGen = LD::Assist::Private::GetGraphGeneration(GraphGenError);
 	if (!GraphGen)
@@ -1409,7 +1549,18 @@ FSMAssistOperationResult LD::Assist::SetInitialState(const TSharedRef<FJsonObjec
 		return FSMAssistOperationResult::MakeError(GraphGenError);
 	}
 
-	if (!GraphGen->SetInitialState(StateNode))
+	// Core SetInitialState breaks the old entry link and wires the new one with no transaction;
+	// the pin primitives Modify both endpoints, so an op-level scope captures the full rewire.
+	bool bInitialStateSet = false;
+	{
+		FScopedTransaction Transaction(NSLOCTEXT("SMAssistOperations", "AssistSetInitialState", "Set Initial State (Assist)"));
+		bInitialStateSet = GraphGen->SetInitialState(StateNode);
+		if (!bInitialStateSet)
+		{
+			Transaction.Cancel();
+		}
+	}
+	if (!bInitialStateSet)
 	{
 		return FSMAssistOperationResult::MakeError(
 			FString::Printf(TEXT("Failed to set initial state for node '%s'."), *StateGuidStr));
@@ -1446,6 +1597,12 @@ FSMAssistOperationResult LD::Assist::AddStateStack(const TSharedRef<FJsonObject>
 	{
 		return FSMAssistOperationResult::MakeError(
 			FString::Printf(TEXT("Invalid 'state_guid' '%s'."), *StateGuidStr));
+	}
+
+	FString LengthError;
+	if (!LD::Assist::Utils::IsWithinNameLength(StateClassPath, TEXT("state_class"), LengthError))
+	{
+		return FSMAssistOperationResult::MakeError(LengthError);
 	}
 
 	UClass* StackClass = LoadClass<USMStateInstance>(nullptr, *StateClassPath);
@@ -1540,6 +1697,12 @@ FSMAssistOperationResult LD::Assist::AddTransitionStack(const TSharedRef<FJsonOb
 	{
 		return FSMAssistOperationResult::MakeError(
 			FString::Printf(TEXT("Invalid 'transition_guid' '%s'."), *TransitionGuidStr));
+	}
+
+	FString LengthError;
+	if (!LD::Assist::Utils::IsWithinNameLength(TransitionClassPath, TEXT("transition_class"), LengthError))
+	{
+		return FSMAssistOperationResult::MakeError(LengthError);
 	}
 
 	UClass* StackClass = LoadClass<USMTransitionInstance>(nullptr, *TransitionClassPath);
@@ -1658,6 +1821,12 @@ FSMAssistOperationResult LD::Assist::AddConduit(const TSharedRef<FJsonObject>& I
 	FString StateClassPath;
 	if (InArgs->TryGetStringField(Args::StateClass, StateClassPath) && !StateClassPath.IsEmpty())
 	{
+		FString LengthError;
+		if (!LD::Assist::Utils::IsWithinNameLength(StateClassPath, TEXT("state_class"), LengthError))
+		{
+			return FSMAssistOperationResult::MakeError(LengthError);
+		}
+
 		UClass* ConduitClass = LoadClass<USMConduitInstance>(nullptr, *StateClassPath);
 		if (!ConduitClass)
 		{
@@ -2479,6 +2648,13 @@ FSMAssistOperationResult LD::Assist::SpawnActorContextComponent(const TSharedRef
 		return FSMAssistOperationResult::MakeError(LoadError);
 	}
 
+	FString LengthError;
+	if (!LD::Assist::Utils::IsWithinNameLength(ActorClassPath, TEXT("target_actor_class"), LengthError)
+		|| !LD::Assist::Utils::IsWithinNameLength(ComponentClassPath, TEXT("component_class"), LengthError))
+	{
+		return FSMAssistOperationResult::MakeError(LengthError);
+	}
+
 	UClass* ActorClass = LoadClass<AActor>(nullptr, *ActorClassPath);
 	if (!ActorClass)
 	{
@@ -3171,6 +3347,17 @@ FSMAssistOperationResult LD::Assist::ClearScreenshots(const TSharedRef<FJsonObje
 		return FSMAssistOperationResult::MakeError(PathError);
 	}
 
+	// An empty or root-resolving subdir ("" / "." / "sub/..") targets the whole Saved/Screenshots
+	// directory and would delete manual F9 and high-res captures alongside tool output.
+	FString ScreenshotsRoot;
+	FString RootError;
+	LD::Assist::Utils::ResolveContainedScreenshotsDir(FString(), ScreenshotsRoot, RootError);
+	if (TargetDir == ScreenshotsRoot)
+	{
+		return FSMAssistOperationResult::MakeError(
+			TEXT("'output_subdir' must name a subdirectory under Saved/Screenshots; deleting from the root is not allowed."));
+	}
+
 	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
 	Payload->SetStringField(Args::Directory, TargetDir);
 	Payload->SetBoolField(Args::DryRun, bDryRun);
@@ -3780,6 +3967,13 @@ FSMAssistOperationResult LD::Assist::GetPropertyPins(const TSharedRef<FJsonObjec
 
 	FString FilterVariable;
 	InArgs->TryGetStringField(Args::VariableName, FilterVariable);
+
+	FString LengthError;
+	if (!LD::Assist::Utils::IsWithinNameLength(FilterVariable, TEXT("variable_name"), LengthError))
+	{
+		return FSMAssistOperationResult::MakeError(LengthError);
+	}
+
 	const FName VariableFilter = FilterVariable.IsEmpty() ? NAME_None : FName(*FilterVariable);
 
 	TArray<TSharedPtr<FJsonValue>> PropArr;
@@ -4231,6 +4425,12 @@ FSMAssistOperationResult LD::Assist::ResetNodeProperty(const TSharedRef<FJsonObj
 		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'property_name'."));
 	}
 
+	FString PropertyNameLengthError;
+	if (!LD::Assist::Utils::IsWithinNameLength(PropertyName, TEXT("property_name"), PropertyNameLengthError))
+	{
+		return FSMAssistOperationResult::MakeError(PropertyNameLengthError);
+	}
+
 	FGuid NodeGuid;
 	if (!FGuid::Parse(NodeGuidStr, NodeGuid))
 	{
@@ -4458,6 +4658,12 @@ FSMAssistOperationResult LD::Assist::AddSMVariable(const TSharedRef<FJsonObject>
 	FString DefaultValue;
 	InArgs->TryGetStringField(Args::DefaultValue, DefaultValue);
 
+	FString VarNameLengthError;
+	if (!LD::Assist::Utils::IsWithinNameLength(VarName, TEXT("variable_name"), VarNameLengthError))
+	{
+		return FSMAssistOperationResult::MakeError(VarNameLengthError);
+	}
+
 	const FName VarFName(*VarName);
 	const bool bAdded = FBlueprintEditorUtils::AddMemberVariable(Blueprint, VarFName, PinType, DefaultValue);
 	if (!bAdded)
@@ -4539,6 +4745,13 @@ FSMAssistOperationResult LD::Assist::ConfigureSMComponentOnActor(const TSharedRe
 	if (!InArgs->TryGetStringField(Args::ComponentName, ComponentName) || ComponentName.IsEmpty())
 	{
 		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'component_name'."));
+	}
+
+	FString LengthError;
+	if (!LD::Assist::Utils::IsWithinNameLength(ActorBPPath, TEXT("actor_blueprint"), LengthError)
+		|| !LD::Assist::Utils::IsWithinNameLength(ComponentName, TEXT("component_name"), LengthError))
+	{
+		return FSMAssistOperationResult::MakeError(LengthError);
 	}
 
 	UBlueprint* ActorBP = LoadObject<UBlueprint>(nullptr, *ActorBPPath);
@@ -4649,10 +4862,25 @@ FSMAssistOperationResult LD::Assist::ConfigureSMComponentOnActor(const TSharedRe
 		UClass* TemplateClass = Template->GetClass();
 		for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : ExtraObj->Values)
 		{
+			FString KeyLengthError;
+			if (!LD::Assist::Utils::IsWithinNameLength(Pair.Key, TEXT("extra_config_json key"), KeyLengthError))
+			{
+				UnknownKeys.Add(FString::Printf(TEXT("%s... (%s)"), *Pair.Key.Left(64), *KeyLengthError));
+				continue;
+			}
+
 			FProperty* Property = TemplateClass->FindPropertyByName(FName(*Pair.Key));
 			if (!Property)
 			{
 				UnknownKeys.Add(Pair.Key);
+				continue;
+			}
+			// Raw reflection reaches internal UPROPERTYs (CreationMethod, replication state) that the
+			// details panel never exposes; writing those corrupts the SCS template. Only allow what a
+			// user could edit.
+			if (!Property->HasAnyPropertyFlags(CPF_Edit) || Property->HasAnyPropertyFlags(CPF_EditConst))
+			{
+				UnknownKeys.Add(FString::Printf(TEXT("%s (not editable on the component template)"), *Pair.Key));
 				continue;
 			}
 			const FString ValueAsText = Pair.Value->AsString();
@@ -5239,7 +5467,10 @@ namespace LD::Assist::Private
 	// the common Kismet libraries and the owning FSM class are searched so simple math/utility calls just work.
 	static UFunction* ResolveLocalGraphFunction(const FString& InFuncName, const FString& InClass, UBlueprint* InBlueprint)
 	{
-		if (InFuncName.IsEmpty())
+		FString LengthError;
+		if (InFuncName.IsEmpty()
+			|| !LD::Assist::Utils::IsWithinNameLength(InFuncName, TEXT("function_name"), LengthError)
+			|| !LD::Assist::Utils::IsWithinNameLength(InClass, TEXT("function_class"), LengthError))
 		{
 			return nullptr;
 		}
@@ -5286,7 +5517,8 @@ namespace LD::Assist::Private
 	// Resolve a UClass from a path (/Script/Engine.Actor, /Game/Foo/BP_Bar) or a bare name.
 	static UClass* ResolveClassSpec(const FString& InSpec)
 	{
-		if (InSpec.IsEmpty())
+		FString LengthError;
+		if (InSpec.IsEmpty() || !LD::Assist::Utils::IsWithinNameLength(InSpec, TEXT("class"), LengthError))
 		{
 			return nullptr;
 		}
@@ -5580,6 +5812,30 @@ FSMAssistOperationResult LD::Assist::AddLocalGraphNode(const TSharedRef<FJsonObj
 		return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("Node class '%s' is abstract and cannot be spawned."), *NodeClass->GetName()));
 	}
 
+	// Passing the UK2Node check is not enough: Logic Driver structural nodes are created only by the
+	// plugin's own machinery (the compiler CastChecked's them), a state machine graph accepts no plain
+	// K2 nodes, and schema-foreign classes crash in PostPlacedNewNode (an AnimGraphNode_* CastChecked's
+	// its blueprint to UAnimBlueprint). Reject each before the node exists.
+	if (NodeClass->IsChildOf(USMGraphK2Node_Base::StaticClass()))
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(
+			TEXT("Node class '%s' is a Logic Driver structural node managed by the plugin's own tooling and cannot be spawned into a local graph."),
+			*NodeClass->GetName()));
+	}
+	if (Cast<USMGraph>(Graph))
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(
+			TEXT("The target graph '%s' is a state machine graph; K2 nodes can only be added to bound logic graphs (state, transition, or conduit graphs)."),
+			*Graph->GetName()));
+	}
+	const UK2Node* NodeCDO = NodeClass->GetDefaultObject<UK2Node>();
+	if (!NodeCDO || !NodeCDO->IsCompatibleWithGraph(Graph))
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(
+			TEXT("Node class '%s' is not compatible with graph '%s'."),
+			*NodeClass->GetName(), *Graph->GetName()));
+	}
+
 	// Validate the reference-bearing node kinds before creating anything, so a bad request leaves no orphan.
 	UFunction* CallTarget = nullptr;
 	FProperty* VarProperty = nullptr;
@@ -5608,6 +5864,11 @@ FSMAssistOperationResult LD::Assist::AddLocalGraphNode(const TSharedRef<FJsonObj
 		if (!InArgs->TryGetStringField(Args::VariableName, VarName) || VarName.IsEmpty())
 		{
 			return FSMAssistOperationResult::MakeError(TEXT("A variable get/set node requires 'variable_name' (a member variable on the FSM blueprint)."));
+		}
+		FString VarLengthError;
+		if (!LD::Assist::Utils::IsWithinNameLength(VarName, TEXT("variable_name"), VarLengthError))
+		{
+			return FSMAssistOperationResult::MakeError(VarLengthError);
 		}
 		const FName VarFName(*VarName);
 		if (Blueprint->SkeletonGeneratedClass)
@@ -5645,6 +5906,9 @@ FSMAssistOperationResult LD::Assist::AddLocalGraphNode(const TSharedRef<FJsonObj
 
 	// Spawn generically, mirroring UEdGraph::CreateNode: RF_Transactional so the node is undo-recordable,
 	// RF_Transient propagated from a transient graph, and the reference configured before pins allocate.
+	// AddNode does not Modify the graph itself, so record it explicitly inside the op transaction.
+	const FScopedTransaction Transaction(NSLOCTEXT("SMAssistOperations", "AssistAddLocalGraphNode", "Add Local Graph Node (Assist)"));
+	Graph->Modify();
 	UEdGraphNode* NewNode = NewObject<UEdGraphNode>(Graph, NodeClass, NAME_None, RF_Transactional);
 	if (Graph->HasAnyFlags(RF_Transient))
 	{
@@ -5747,12 +6011,17 @@ FSMAssistOperationResult LD::Assist::ConnectLocalGraphPins(const TSharedRef<FJso
 		return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("Cannot connect %s -> %s: %s"),
 			*SourceRef, *DestRef, *Response.Message.ToString()));
 	}
-	if (!Schema->TryCreateConnection(SourcePin, DestPin))
 	{
-		return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("Connection failed for %s -> %s."), *SourceRef, *DestRef));
+		// TryCreateConnection Modifies both endpoint nodes but nothing opens a transaction on this
+		// path; scope it so the link participates in undo instead of silently mutating.
+		FScopedTransaction Transaction(NSLOCTEXT("SMAssistOperations", "AssistConnectLocalGraphPins", "Connect Local Graph Pins (Assist)"));
+		if (!Schema->TryCreateConnection(SourcePin, DestPin))
+		{
+			Transaction.Cancel();
+			return FSMAssistOperationResult::MakeError(FString::Printf(TEXT("Connection failed for %s -> %s."), *SourceRef, *DestRef));
+		}
+		FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Resolved.Blueprint);
 	}
-
-	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Resolved.Blueprint);
 
 	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
 	Payload->SetStringField(Args::AssetPath, Resolved.Blueprint->GetPathName());
@@ -5804,6 +6073,10 @@ FSMAssistOperationResult LD::Assist::SetLocalGraphPinDefault(const TSharedRef<FJ
 		return FSMAssistOperationResult::MakeError(TEXT("Local graph has no schema."));
 	}
 
+	// TrySetDefaultValue writes the pin fields without a Modify of its own; record the owning node
+	// inside an op transaction so the default participates in undo.
+	const FScopedTransaction Transaction(NSLOCTEXT("SMAssistOperations", "AssistSetLocalGraphPinDefault", "Set Local Graph Pin Default (Assist)"));
+	Node->Modify();
 	Schema->TrySetDefaultValue(*TargetPin, Value);
 	Node->PinDefaultValueChanged(TargetPin);
 	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Resolved.Blueprint);
@@ -5848,8 +6121,13 @@ FSMAssistOperationResult LD::Assist::RemoveLocalGraphNode(const TSharedRef<FJson
 	}
 
 	const FString RemovedName = Node->GetName();
-	FBlueprintEditorUtils::RemoveNode(Resolved.Blueprint, Node, true);
-	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Resolved.Blueprint);
+	{
+		// RemoveNode Modifies the graph, node, and link counterparts but opens no transaction on
+		// this path; scope it so undo restores the node with its links.
+		const FScopedTransaction Transaction(NSLOCTEXT("SMAssistOperations", "AssistRemoveLocalGraphNode", "Remove Local Graph Node (Assist)"));
+		FBlueprintEditorUtils::RemoveNode(Resolved.Blueprint, Node, true);
+		FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Resolved.Blueprint);
+	}
 
 	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
 	Payload->SetStringField(Args::AssetPath, Resolved.Blueprint->GetPathName());
@@ -5917,8 +6195,13 @@ FSMAssistOperationResult LD::Assist::DisconnectLocalGraphPins(const TSharedRef<F
 	const bool bWereLinked = SourcePin->LinkedTo.Contains(DestPin);
 	const FString SourceRef = FString::Printf(TEXT("%s.%s"), *FromNode->GetName(), *SourcePin->PinName.ToString());
 	const FString DestRef = FString::Printf(TEXT("%s.%s"), *ToNode->GetName(), *DestPin->PinName.ToString());
-	Schema->BreakSinglePinLink(SourcePin, DestPin);
-	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Resolved.Blueprint);
+	{
+		// BreakLinkTo Modifies both endpoint nodes but nothing opens a transaction on this path;
+		// scope it so the disconnect participates in undo.
+		const FScopedTransaction Transaction(NSLOCTEXT("SMAssistOperations", "AssistDisconnectLocalGraphPins", "Disconnect Local Graph Pins (Assist)"));
+		Schema->BreakSinglePinLink(SourcePin, DestPin);
+		FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Resolved.Blueprint);
+	}
 
 	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
 	Payload->SetStringField(Args::AssetPath, Resolved.Blueprint->GetPathName());
@@ -5954,45 +6237,53 @@ FSMAssistOperationResult LD::Assist::SetLocalGraphNode(const TSharedRef<FJsonObj
 	bool bAny = false;
 	bool bStructural = false;
 
-	double PosX = 0.0;
-	if (InArgs->TryGetNumberField(Args::PositionX, PosX))
 	{
-		Node->NodePosX = static_cast<int32>(PosX);
-		bAny = true;
-	}
-	double PosY = 0.0;
-	if (InArgs->TryGetNumberField(Args::PositionY, PosY))
-	{
-		Node->NodePosY = static_cast<int32>(PosY);
-		bAny = true;
-	}
-	FString Comment;
-	if (InArgs->TryGetStringField(Args::Comment, Comment))
-	{
-		Node->NodeComment = Comment;
-		bAny = true;
-	}
-	bool bEnabled = true;
-	if (InArgs->TryGetBoolField(Args::Enabled, bEnabled))
-	{
-		Node->SetEnabledState(bEnabled ? ENodeEnabledState::Enabled : ENodeEnabledState::Disabled, true);
-		bAny = true;
-		bStructural = true;
-	}
+		// Direct field writes have no Modify of their own; record the node inside an op transaction
+		// so the edit participates in undo. Canceled when no recognized field was supplied.
+		FScopedTransaction Transaction(NSLOCTEXT("SMAssistOperations", "AssistSetLocalGraphNode", "Set Local Graph Node (Assist)"));
+		Node->Modify();
 
-	if (!bAny)
-	{
-		return FSMAssistOperationResult::MakeError(TEXT("Requires at least one field to change: 'position_x', 'position_y', 'comment', or 'enabled'."));
-	}
+		double PosX = 0.0;
+		if (InArgs->TryGetNumberField(Args::PositionX, PosX))
+		{
+			Node->NodePosX = static_cast<int32>(PosX);
+			bAny = true;
+		}
+		double PosY = 0.0;
+		if (InArgs->TryGetNumberField(Args::PositionY, PosY))
+		{
+			Node->NodePosY = static_cast<int32>(PosY);
+			bAny = true;
+		}
+		FString Comment;
+		if (InArgs->TryGetStringField(Args::Comment, Comment))
+		{
+			Node->NodeComment = Comment;
+			bAny = true;
+		}
+		bool bEnabled = true;
+		if (InArgs->TryGetBoolField(Args::Enabled, bEnabled))
+		{
+			Node->SetEnabledState(bEnabled ? ENodeEnabledState::Enabled : ENodeEnabledState::Disabled, true);
+			bAny = true;
+			bStructural = true;
+		}
 
-	// Enabled state feeds compilation. Position and comment are cosmetic and only need the blueprint dirtied.
-	if (bStructural)
-	{
-		FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Resolved.Blueprint);
-	}
-	else
-	{
-		FBlueprintEditorUtils::MarkBlueprintAsModified(Resolved.Blueprint);
+		if (!bAny)
+		{
+			Transaction.Cancel();
+			return FSMAssistOperationResult::MakeError(TEXT("Requires at least one field to change: 'position_x', 'position_y', 'comment', or 'enabled'."));
+		}
+
+		// Enabled state feeds compilation. Position and comment are cosmetic and only need the blueprint dirtied.
+		if (bStructural)
+		{
+			FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Resolved.Blueprint);
+		}
+		else
+		{
+			FBlueprintEditorUtils::MarkBlueprintAsModified(Resolved.Blueprint);
+		}
 	}
 
 	const TSharedRef<FJsonObject> Payload = LD::Assist::Private::LocalGraphNodeToJson(Node, false, FString());
@@ -6070,6 +6361,11 @@ FSMAssistOperationResult LD::Assist::ConfigureTransitionEvent(const TSharedRef<F
 		}
 		else
 		{
+			FString OwnerLengthError;
+			if (!LD::Assist::Utils::IsWithinNameLength(OwnerClassPath, TEXT("delegate_owner_class"), OwnerLengthError))
+			{
+				return FSMAssistOperationResult::MakeError(OwnerLengthError);
+			}
 			UClass* OwnerClass = LoadClass<UObject>(nullptr, *OwnerClassPath);
 			if (!OwnerClass)
 			{
@@ -6083,6 +6379,11 @@ FSMAssistOperationResult LD::Assist::ConfigureTransitionEvent(const TSharedRef<F
 	FString DelegateName;
 	if (InArgs->TryGetStringField(Args::DelegatePropertyName, DelegateName))
 	{
+		FString DelegateLengthError;
+		if (!LD::Assist::Utils::IsWithinNameLength(DelegateName, TEXT("delegate_property_name"), DelegateLengthError))
+		{
+			return FSMAssistOperationResult::MakeError(DelegateLengthError);
+		}
 		ConfigureArgs.DelegatePropertyName = DelegateName.IsEmpty() ? FName(NAME_None) : FName(*DelegateName);
 		AppliedFields.Add(Args::DelegatePropertyName);
 	}
@@ -6264,6 +6565,10 @@ namespace LD::Assist::Private
 
 	static UBlueprint* LoadNodeClassBlueprint(const FString& InAssetPath, FString& OutError)
 	{
+		if (!LD::Assist::Utils::IsWithinNameLength(InAssetPath, TEXT("asset_path"), OutError))
+		{
+			return nullptr;
+		}
 		UBlueprint* BP = LoadObject<UBlueprint>(nullptr, *InAssetPath);
 		if (!BP)
 		{
@@ -6322,6 +6627,12 @@ FSMAssistOperationResult LD::Assist::AddNodeVariable(const TSharedRef<FJsonObjec
 	if (!LD::Assist::Private::ResolveVariablePinType(VarType, ContainerTypeStr, KeyType, PinType, ResolveError))
 	{
 		return FSMAssistOperationResult::MakeError(ResolveError);
+	}
+
+	FString LengthError;
+	if (!LD::Assist::Utils::IsWithinNameLength(VarName, TEXT("variable_name"), LengthError))
+	{
+		return FSMAssistOperationResult::MakeError(LengthError);
 	}
 
 	ISMGraphGeneration::FCreateNodeClassVariableArgs CreateArgs;
@@ -6453,6 +6764,12 @@ FSMAssistOperationResult LD::Assist::AddBlueprintVariable(const TSharedRef<FJson
 	FString DefaultValue;
 	InArgs->TryGetStringField(Args::DefaultValue, DefaultValue);
 
+	FString VarNameLengthError;
+	if (!LD::Assist::Utils::IsWithinNameLength(VarName, TEXT("variable_name"), VarNameLengthError))
+	{
+		return FSMAssistOperationResult::MakeError(VarNameLengthError);
+	}
+
 	const FName VarFName(*VarName);
 	const bool bAdded = FBlueprintEditorUtils::AddMemberVariable(Blueprint, VarFName, PinType, DefaultValue);
 	if (!bAdded)
@@ -6504,6 +6821,12 @@ FSMAssistOperationResult LD::Assist::ConfigureNodeVariable(const TSharedRef<FJso
 	{
 		return FSMAssistOperationResult::MakeError(
 			FString::Printf(TEXT("Blueprint '%s' is a USMTransitionInstance subclass. configure_node_variable sets directional / hidden / read-only state, which transition-class variables do not support."), *AssetPath));
+	}
+
+	FString LengthError;
+	if (!LD::Assist::Utils::IsWithinNameLength(VarName, TEXT("variable_name"), LengthError))
+	{
+		return FSMAssistOperationResult::MakeError(LengthError);
 	}
 
 	ISMGraphGeneration::FConfigureNodeClassVariableArgs ConfigureArgs;
@@ -6610,6 +6933,10 @@ namespace LD::Assist::Private
 			OutError = FString::Printf(TEXT("No state node with guid '%s'."), *InStateGuidStr);
 			return false;
 		}
+		if (!LD::Assist::Utils::IsWithinNameLength(InVarName, TEXT("variable_name"), OutError))
+		{
+			return false;
+		}
 		OutEndpoint.StateNode = Node;
 		OutEndpoint.VariableName = FName(*InVarName);
 
@@ -6686,6 +7013,11 @@ FSMAssistOperationResult LD::Assist::ConnectNodeVariableOutput(const TSharedRef<
 	}
 	else
 	{
+		FString LengthError;
+		if (!LD::Assist::Utils::IsWithinNameLength(ToOwningVar, TEXT("to_owning_blueprint_variable"), LengthError))
+		{
+			return FSMAssistOperationResult::MakeError(LengthError);
+		}
 		ConnectArgs.ToOwningBlueprintVariable = FName(*ToOwningVar);
 	}
 
@@ -6790,6 +7122,11 @@ FSMAssistOperationResult LD::Assist::DisconnectNodeVariableOutput(const TSharedR
 	}
 	else
 	{
+		FString LengthError;
+		if (!LD::Assist::Utils::IsWithinNameLength(ToOwningVar, TEXT("to_owning_blueprint_variable"), LengthError))
+		{
+			return FSMAssistOperationResult::MakeError(LengthError);
+		}
 		DisconnectArgs.ToOwningBlueprintVariable = FName(*ToOwningVar);
 	}
 
@@ -7141,9 +7478,20 @@ FSMAssistOperationResult LD::Assist::ConvertToReference(const TSharedRef<FJsonOb
 	InArgs->TryGetStringField(Args::Name, ConvertArgs.AssetName);
 	InArgs->TryGetStringField(Args::Path, ConvertArgs.AssetPath);
 
+	FString LengthError;
+	if (!LD::Assist::Utils::IsWithinNameLength(ConvertArgs.AssetName, TEXT("name"), LengthError)
+		|| !LD::Assist::Utils::IsWithinNameLength(ConvertArgs.AssetPath, TEXT("path"), LengthError))
+	{
+		return FSMAssistOperationResult::MakeError(LengthError);
+	}
+
 	FString ParentClassPath;
 	if (InArgs->TryGetStringField(Args::ParentClass, ParentClassPath) && !ParentClassPath.IsEmpty())
 	{
+		if (!LD::Assist::Utils::IsWithinNameLength(ParentClassPath, TEXT("parent_class"), LengthError))
+		{
+			return FSMAssistOperationResult::MakeError(LengthError);
+		}
 		UClass* ParentClass = LoadClass<USMInstance>(nullptr, *ParentClassPath);
 		if (!ParentClass)
 		{
