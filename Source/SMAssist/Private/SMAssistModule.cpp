@@ -12,6 +12,7 @@
 #include "HAL/IConsoleManager.h"
 #include "Modules/ModuleManager.h"
 #include "Serialization/JsonReader.h"
+#include "UObject/NameTypes.h"
 #include "Serialization/JsonSerializer.h"
 
 #define LOCTEXT_NAMESPACE "SMAssistModule"
@@ -55,6 +56,13 @@ void FSMAssistModule::HandleExecCommand(const TArray<FString>& InArgs, FOutputDe
 	if (!Subsystem)
 	{
 		InAr.Log(TEXT("SMAssist subsystem is not available."));
+		return;
+	}
+
+	// FName construction fatally asserts at NAME_SIZE; bound the raw console token first.
+	if (InArgs[0].Len() >= NAME_SIZE)
+	{
+		InAr.Logf(TEXT("Operation name is %d characters; the maximum is %d."), InArgs[0].Len(), NAME_SIZE - 1);
 		return;
 	}
 

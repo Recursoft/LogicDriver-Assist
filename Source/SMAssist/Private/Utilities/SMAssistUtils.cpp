@@ -32,6 +32,11 @@ UBlueprint* LD::Assist::Utils::LoadBlueprint(const FString& InAssetPath, FString
 		return nullptr;
 	}
 
+	if (!IsWithinNameLength(InAssetPath, TEXT("asset_path"), OutError))
+	{
+		return nullptr;
+	}
+
 	const FSoftObjectPath ObjectPath(InAssetPath);
 	const FString PackageName = ObjectPath.GetLongPackageName();
 	if (PackageName.IsEmpty())
@@ -228,6 +233,12 @@ bool LD::Assist::Utils::ResolveTerminalType(const FString& InTypeStr, FName& Out
 	OutSubCategory = NAME_None;
 	OutSubCategoryObject = nullptr;
 
+	FString LengthError;
+	if (!IsWithinNameLength(InTypeStr, TEXT("type"), LengthError))
+	{
+		return false;
+	}
+
 	const FString TypeStr = InTypeStr.ToLower();
 
 	if (TypeStr == TEXT("bool") || TypeStr == TEXT("boolean"))
@@ -411,6 +422,107 @@ bool LD::Assist::Utils::IntegerPropertyTextParses(const FProperty* InProperty, c
 		{
 			return false;
 		}
+	}
+	return true;
+}
+
+bool LD::Assist::Utils::IsWithinNameLength(const FString& InValue, const TCHAR* InFieldName, FString& OutError)
+{
+	// Headroom under NAME_SIZE (1024) so downstream suffixing (e.g. unique-name generation) cannot
+	// push a bounded value over the engine's fatal limit.
+	constexpr int32 MaxLength = 1000;
+	if (InValue.Len() > MaxLength)
+	{
+		OutError = FString::Printf(TEXT("'%s' is %d characters; the maximum is %d."),
+			InFieldName, InValue.Len(), MaxLength);
+		return false;
+	}
+	return true;
+}
+
+// Whether any leaf of InProperty's value tree is FName-typed, so text import of the value can reach
+// unguarded FName construction. Object references end the walk (their import resolves paths rather
+// than building names from raw tokens); depths beyond the cap conservatively count as containing.
+static bool PropertyTreeContainsName(const FProperty* InProperty, int32 InDepth = 0)
+{
+	constexpr int32 MaxDepth = 8;
+	if (!InProperty)
+	{
+		return false;
+	}
+	if (InDepth > MaxDepth)
+	{
+		return true;
+	}
+	if (CastField<FNameProperty>(InProperty))
+	{
+		return true;
+	}
+	if (const FStructProperty* StructProp = CastField<FStructProperty>(InProperty))
+	{
+		for (TFieldIterator<FProperty> It(StructProp->Struct); It; ++It)
+		{
+			if (PropertyTreeContainsName(*It, InDepth + 1))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+	if (const FArrayProperty* ArrayProp = CastField<FArrayProperty>(InProperty))
+	{
+		return PropertyTreeContainsName(ArrayProp->Inner, InDepth + 1);
+	}
+	if (const FSetProperty* SetProp = CastField<FSetProperty>(InProperty))
+	{
+		return PropertyTreeContainsName(SetProp->ElementProp, InDepth + 1);
+	}
+	if (const FMapProperty* MapProp = CastField<FMapProperty>(InProperty))
+	{
+		return PropertyTreeContainsName(MapProp->KeyProp, InDepth + 1)
+			|| PropertyTreeContainsName(MapProp->ValueProp, InDepth + 1);
+	}
+	return false;
+}
+
+// Whether InText holds a single delimiter-free run long enough to overflow FName construction.
+// Import tokenization breaks on struct-literal punctuation and whitespace, so only such a run can
+// reach an FName field whole.
+static bool ContainsOverlongImportToken(const FString& InText)
+{
+	int32 RunLength = 0;
+	for (const TCHAR Ch : InText)
+	{
+		const bool bDelimiter = Ch == TCHAR('(') || Ch == TCHAR(')') || Ch == TCHAR(',')
+			|| Ch == TCHAR('=') || Ch == TCHAR('"') || Ch == TCHAR('\'') || FChar::IsWhitespace(Ch);
+		RunLength = bDelimiter ? 0 : RunLength + 1;
+		if (RunLength >= NAME_SIZE)
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+bool LD::Assist::Utils::NameImportTextWithinLimit(const FProperty* InProperty, const FString& InText, const TCHAR* InFieldName, FString& OutError)
+{
+	if (CastField<FNameProperty>(InProperty))
+	{
+		return IsWithinNameLength(InText, InFieldName, OutError);
+	}
+
+	// Struct and container literals recurse into FName leaves during import with the same unguarded
+	// FName construction. A value shorter than NAME_SIZE cannot contain an overflowing token.
+	if (InText.Len() < NAME_SIZE || !PropertyTreeContainsName(InProperty))
+	{
+		return true;
+	}
+	if (ContainsOverlongImportToken(InText))
+	{
+		OutError = FString::Printf(
+			TEXT("'%s' contains a token too long to import into an FName field; the maximum is %d characters."),
+			InFieldName, NAME_SIZE - 1);
+		return false;
 	}
 	return true;
 }

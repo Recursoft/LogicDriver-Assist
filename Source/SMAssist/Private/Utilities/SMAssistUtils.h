@@ -57,4 +57,21 @@ namespace LD::Assist::Utils
 	 * enum name) must stay acceptable.
 	 */
 	bool IntegerPropertyTextParses(const FProperty* InProperty, const FString& InValue);
+
+	/**
+	 * True when InValue is short enough to construct an FName. FName construction fatally asserts at
+	 * NAME_SIZE (1024) characters, and name-like tool inputs (asset paths, property/variable/class
+	 * names) all become FNames inside the engine with no guard of their own, so ops bound them here
+	 * first. On failure OutError identifies the offending InFieldName.
+	 */
+	bool IsWithinNameLength(const FString& InValue, const TCHAR* InFieldName, FString& OutError);
+
+	/**
+	 * False only when importing InText into InProperty could overflow FName construction: the
+	 * property is FName-typed and InText exceeds the length cap, or the property's value tree
+	 * contains an FName leaf (struct member, container element) and InText holds a token long
+	 * enough to overflow it. FNameProperty::ImportText constructs an FName with no length guard,
+	 * so an over-long token fatally asserts before the import could fail cleanly.
+	 */
+	bool NameImportTextWithinLimit(const FProperty* InProperty, const FString& InText, const TCHAR* InFieldName, FString& OutError);
 }
