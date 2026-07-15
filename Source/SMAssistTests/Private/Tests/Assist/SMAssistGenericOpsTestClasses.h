@@ -13,6 +13,9 @@ struct FSMAssistGenericInnerStruct
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Test)
 	int32 InnerInt = 0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Test)
+	FName InnerName;
 };
 
 USTRUCT(BlueprintType)
@@ -44,6 +47,15 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Test)
 	TMap<FString, int32> IntMap;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Test)
+	TMap<int32, int32> IntKeyMap;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Test)
+	FName NameValue;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Test)
+	TMap<FName, int32> NameKeyMap;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Test)
 	FSMAssistGenericOuterStruct Outer;

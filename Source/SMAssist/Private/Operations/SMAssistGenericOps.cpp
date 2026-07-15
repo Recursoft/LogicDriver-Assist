@@ -13,6 +13,7 @@
 #include "GameFramework/Actor.h"
 #include "K2Node_FunctionEntry.h"
 #include "Kismet2/BlueprintEditorUtils.h"
+#include "Kismet2/Kismet2NameValidators.h"
 #include "Misc/Char.h"
 #include "Misc/ScopeExit.h"
 #include "UObject/Class.h"
@@ -53,7 +54,7 @@ namespace LD::Assist::GenericOps::Private
 
 	static bool ParseArrayIndex(const FString& InText, int32& OutIndex)
 	{
-		if (InText.IsEmpty())
+		if (InText.IsEmpty() || InText.Len() > 10)
 		{
 			return false;
 		}
@@ -64,7 +65,14 @@ namespace LD::Assist::GenericOps::Private
 				return false;
 			}
 		}
-		OutIndex = FCString::Atoi(*InText);
+		// Atoi overflow behavior is platform-defined (clamps on Windows, truncates on glibc, where a
+		// huge index could wrap negative and pass a bare upper-bound check). Parse wide and range-check.
+		const int64 Value = FCString::Strtoi64(*InText, nullptr, 10);
+		if (Value < 0 || Value > MAX_int32)
+		{
+			return false;
+		}
+		OutIndex = static_cast<int32>(Value);
 		return true;
 	}
 
@@ -72,6 +80,17 @@ namespace LD::Assist::GenericOps::Private
 	static void* AllocImportMapKey(const FMapProperty* InMapProp, const FString& InKeyText, UObject* InOwner, FString& OutError)
 	{
 		FProperty* KeyProp = InMapProp->KeyProp;
+		if (!LD::Assist::Utils::NameImportTextWithinLimit(KeyProp, InKeyText, TEXT("map key"), OutError))
+		{
+			return nullptr;
+		}
+		// Same integer-text pre-validation the value paths apply; without it a non-numeric key on an
+		// integer-keyed map can silently import as key 0 (observed on UE 5.8).
+		if (!LD::Assist::Utils::IntegerPropertyTextParses(KeyProp, InKeyText))
+		{
+			OutError = FString::Printf(TEXT("Could not parse map key '%s' as %s."), *InKeyText, *KeyProp->GetCPPType());
+			return nullptr;
+		}
 		void* KeyBuffer = FMemory::Malloc(KeyProp->GetSize(), KeyProp->GetMinAlignment());
 		KeyProp->InitializeValue(KeyBuffer);
 
@@ -93,6 +112,11 @@ namespace LD::Assist::GenericOps::Private
 
 	static UObject* ResolveTargetObject(const FString& InObject, const FString& InTarget, int32 InPieInstance, bool& bOutRuntime, FString& OutError)
 	{
+		if (!LD::Assist::Utils::IsWithinNameLength(InObject, TEXT("object"), OutError))
+		{
+			return nullptr;
+		}
+
 		bOutRuntime = InTarget.Equals(TEXT("runtime"), ESearchCase::IgnoreCase);
 		if (bOutRuntime)
 		{
@@ -403,10 +427,37 @@ FSMAssistOperationResult LD::Assist::GenericOps::WriteProperty(const TSharedRef<
 	void* PropAddr = Prop->ContainerPtrToValuePtr<void>(ParentContainer);
 	FString LeafType = Prop->GetCPPType();
 
+	FString NameLimitError;
+
+	// Every branch imports into scratch storage and copies on success. ImportText commits fields as
+	// it parses, so a mid-value failure (an unterminated struct literal) would otherwise leave the
+	// target half-written with no error dirtying the package. The scratch starts as a copy of the
+	// current value so a partial literal like "(X=5)" merges onto the existing members exactly as
+	// an in-place import would, instead of resetting unlisted members to defaults.
+	auto ImportIntoScratch = [&Owner, &ValueStr](FProperty* InProperty, void* InOutDestination) -> bool
+	{
+		void* ScratchBuffer = FMemory::Malloc(InProperty->GetSize(), InProperty->GetMinAlignment());
+		InProperty->InitializeValue(ScratchBuffer);
+		ON_SCOPE_EXIT { InProperty->DestroyValue(ScratchBuffer); FMemory::Free(ScratchBuffer); };
+		InProperty->CopyCompleteValue(ScratchBuffer, InOutDestination);
+
+		const bool bParsed =
+			LD::Assist::Utils::IntegerPropertyTextParses(InProperty, ValueStr)
+			&& InProperty->ImportText_Direct(*ValueStr, ScratchBuffer, Owner, PPF_None, nullptr) != nullptr;
+		if (bParsed)
+		{
+			InProperty->CopyCompleteValue(InOutDestination, ScratchBuffer);
+		}
+		return bParsed;
+	};
+
 	if (!Final.bHasSubscript)
 	{
-		if (!LD::Assist::Utils::IntegerPropertyTextParses(Prop, ValueStr)
-			|| Prop->ImportText_Direct(*ValueStr, PropAddr, Owner, PPF_None, nullptr) == nullptr)
+		if (!LD::Assist::Utils::NameImportTextWithinLimit(Prop, ValueStr, TEXT("value"), NameLimitError))
+		{
+			return FSMAssistOperationResult::MakeError(NameLimitError);
+		}
+		if (!ImportIntoScratch(Prop, PropAddr))
 		{
 			return FSMAssistOperationResult::MakeError(
 				FString::Printf(TEXT("Could not parse 'value' as %s."), *Prop->GetCPPType()));
@@ -429,8 +480,11 @@ FSMAssistOperationResult LD::Assist::GenericOps::WriteProperty(const TSharedRef<
 		}
 
 		LeafType = ArrayProp->Inner->GetCPPType();
-		if (!LD::Assist::Utils::IntegerPropertyTextParses(ArrayProp->Inner, ValueStr)
-			|| ArrayProp->Inner->ImportText_Direct(*ValueStr, Helper.GetRawPtr(Index), Owner, PPF_None, nullptr) == nullptr)
+		if (!LD::Assist::Utils::NameImportTextWithinLimit(ArrayProp->Inner, ValueStr, TEXT("value"), NameLimitError))
+		{
+			return FSMAssistOperationResult::MakeError(NameLimitError);
+		}
+		if (!ImportIntoScratch(ArrayProp->Inner, Helper.GetRawPtr(Index)))
 		{
 			return FSMAssistOperationResult::MakeError(
 				FString::Printf(TEXT("Could not parse 'value' as %s."), *LeafType));
@@ -446,33 +500,49 @@ FSMAssistOperationResult LD::Assist::GenericOps::WriteProperty(const TSharedRef<
 		}
 		ON_SCOPE_EXIT { FreeMapKey(MapProp, KeyBuffer); };
 
+		if (!LD::Assist::Utils::NameImportTextWithinLimit(MapProp->ValueProp, ValueStr, TEXT("value"), NameLimitError))
+		{
+			return FSMAssistOperationResult::MakeError(NameLimitError);
+		}
+
+		// Parse the value into scratch storage first so a failed parse never adds a pair. Removing a
+		// pair added via AddDefaultValue_Invalid_NeedsRehash before Rehash() recomputes against a hash
+		// that was never built for it and can corrupt heap-resident maps. For an existing key the
+		// scratch starts as a copy of the current value so partial literals merge instead of
+		// resetting unlisted members.
+		FProperty* ValueProp = MapProp->ValueProp;
+		LeafType = ValueProp->GetCPPType();
+
 		FScriptMapHelper Helper(MapProp, PropAddr);
 		int32 PairIndex = Helper.FindMapPairIndexFromHash(KeyBuffer);
 		const bool bAdded = (PairIndex == INDEX_NONE);
+
+		void* ValueBuffer = FMemory::Malloc(ValueProp->GetSize(), ValueProp->GetMinAlignment());
+		ValueProp->InitializeValue(ValueBuffer);
+		ON_SCOPE_EXIT { ValueProp->DestroyValue(ValueBuffer); FMemory::Free(ValueBuffer); };
+		if (!bAdded)
+		{
+			ValueProp->CopyCompleteValue(ValueBuffer, Helper.GetValuePtr(PairIndex));
+		}
+
+		const bool bValueParsed =
+			LD::Assist::Utils::IntegerPropertyTextParses(ValueProp, ValueStr)
+			&& ValueProp->ImportText_Direct(*ValueStr, ValueBuffer, Owner, PPF_None, nullptr) != nullptr;
+		if (!bValueParsed)
+		{
+			return FSMAssistOperationResult::MakeError(
+				FString::Printf(TEXT("Could not parse 'value' as %s."), *LeafType));
+		}
+
 		if (bAdded)
 		{
 			PairIndex = Helper.AddDefaultValue_Invalid_NeedsRehash();
 			MapProp->KeyProp->CopyCompleteValue(Helper.GetKeyPtr(PairIndex), KeyBuffer);
 		}
-
-		LeafType = MapProp->ValueProp->GetCPPType();
-		const bool bValueParsed =
-			LD::Assist::Utils::IntegerPropertyTextParses(MapProp->ValueProp, ValueStr)
-			&& MapProp->ValueProp->ImportText_Direct(*ValueStr, Helper.GetValuePtr(PairIndex), Owner, PPF_None, nullptr) != nullptr;
+		ValueProp->CopyCompleteValue(Helper.GetValuePtr(PairIndex), ValueBuffer);
 		if (bAdded)
 		{
-			// Keep the op atomic: a freshly-added pair whose value failed to parse must not linger.
-			if (!bValueParsed)
-			{
-				Helper.RemoveAt(PairIndex);
-			}
 			Helper.Rehash();
-		}
-
-		if (!bValueParsed)
-		{
-			return FSMAssistOperationResult::MakeError(
-				FString::Printf(TEXT("Could not parse 'value' as %s."), *LeafType));
 		}
 	}
 	else
@@ -509,6 +579,12 @@ FSMAssistOperationResult LD::Assist::GenericOps::AddDispatcher(const TSharedRef<
 		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'name'."));
 	}
 
+	FString LengthError;
+	if (!LD::Assist::Utils::IsWithinNameLength(DispatcherName, TEXT("name"), LengthError))
+	{
+		return FSMAssistOperationResult::MakeError(LengthError);
+	}
+
 	FString LoadError;
 	UBlueprint* Blueprint = LD::Assist::Utils::LoadBlueprint(AssetPath, LoadError);
 	if (!Blueprint)
@@ -517,6 +593,19 @@ FSMAssistOperationResult LD::Assist::GenericOps::AddDispatcher(const TSharedRef<
 	}
 
 	const FName DispatcherFName(*DispatcherName);
+
+	// AddMemberVariable below only checks variable names. A name matching an existing function graph
+	// would make CreateNewGraph silently rename that graph aside (breaking its call sites), and a name
+	// matching a non-graph inner object fatally asserts in Rename. Validate against everything the
+	// editor UI does before mutating.
+	FKismetNameValidator NameValidator(Blueprint);
+	if (NameValidator.IsValid(DispatcherFName) != EValidatorResult::Ok)
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(
+			TEXT("Dispatcher name '%s' is already in use in blueprint '%s' (or is not a valid name)."),
+			*DispatcherName, *Blueprint->GetName()));
+	}
+
 	const UEdGraphSchema_K2* K2Schema = GetDefault<UEdGraphSchema_K2>();
 
 	// Validate the whole param signature before touching the blueprint, so a bad param can never leave a
@@ -548,6 +637,11 @@ FSMAssistOperationResult LD::Assist::GenericOps::AddDispatcher(const TSharedRef<
 			{
 				return FSMAssistOperationResult::MakeError(
 					TEXT("Each entry in 'params' requires a non-empty 'name' and 'type'."));
+			}
+
+			if (!LD::Assist::Utils::IsWithinNameLength(ParamName, TEXT("params.name"), LengthError))
+			{
+				return FSMAssistOperationResult::MakeError(LengthError);
 			}
 
 			FName Category;

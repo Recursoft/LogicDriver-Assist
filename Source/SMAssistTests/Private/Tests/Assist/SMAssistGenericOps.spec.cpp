@@ -12,6 +12,7 @@
 
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
+#include "EdGraphSchema_K2.h"
 #include "Editor.h"
 #include "EdGraph/EdGraph.h"
 #include "Engine/Blueprint.h"
@@ -381,6 +382,34 @@ void FAssistGenericOpsSpec::Define()
 			TestTrue("Read reports the key absent", ReadResult.ErrorMessage.Contains(TEXT("not present")));
 		});
 
+		// Regression: a failed parse ran RemoveAt on a pair added via AddDefaultValue_Invalid_NeedsRehash
+		// before Rehash(), unlinking against a hash never built for it; a populated (rehashed) map is the
+		// state where that could corrupt.
+		It("Leaves a populated map intact when a new value fails to parse", [this]()
+		{
+			UBlueprint* Blueprint = MakeStateBlueprint();
+			if (!TestNotNull("State blueprint created", Blueprint))
+			{
+				return;
+			}
+
+			if (!TestTrue("Seed first key", Write(Blueprint->GetPathName(), TEXT("IntMap[Gold]"), TEXT("42")).bSuccess)
+				|| !TestTrue("Seed second key", Write(Blueprint->GetPathName(), TEXT("IntMap[Silver]"), TEXT("7")).bSuccess))
+			{
+				return;
+			}
+
+			const FSMAssistOperationResult WriteResult = Write(Blueprint->GetPathName(), TEXT("IntMap[Bad]"), TEXT("notanumber"));
+			TestFalse("Bad value is rejected", WriteResult.bSuccess);
+
+			TestEqual("First key intact", PayloadValue(Read(Blueprint->GetPathName(), TEXT("IntMap[Gold]"))), FString(TEXT("42")));
+			TestEqual("Second key intact", PayloadValue(Read(Blueprint->GetPathName(), TEXT("IntMap[Silver]"))), FString(TEXT("7")));
+
+			const FSMAssistOperationResult ReadBad = Read(Blueprint->GetPathName(), TEXT("IntMap[Bad]"));
+			TestFalse("Failed write left no entry", ReadBad.bSuccess);
+			TestTrue("Read reports the key absent", ReadBad.ErrorMessage.Contains(TEXT("not present")));
+		});
+
 		It("Writes a nested struct field and reads it back", [this]()
 		{
 			UBlueprint* Blueprint = MakeStateBlueprint();
@@ -394,6 +423,187 @@ void FAssistGenericOpsSpec::Define()
 
 			const FSMAssistOperationResult ReadResult = Read(Blueprint->GetPathName(), TEXT("Outer.Nested.InnerInt"));
 			TestEqual("Round-tripped nested value", PayloadValue(ReadResult), FString(TEXT("5")));
+		});
+
+		// Regression: ImportText commits fields as it parses, so a value that fails mid-way (an
+		// unterminated struct literal; unknown fields are skipped rather than failing) wrote OuterInt
+		// before erroring, leaving the struct half-written and the package not dirtied.
+		It("Leaves a struct unchanged when the value fails to parse mid-way", [this]()
+		{
+			UBlueprint* Blueprint = MakeStateBlueprint();
+			if (!TestNotNull("State blueprint created", Blueprint))
+			{
+				return;
+			}
+
+			if (!TestTrue("Seed struct", Write(Blueprint->GetPathName(), TEXT("Outer.OuterInt"), TEXT("3")).bSuccess))
+			{
+				return;
+			}
+
+			const FSMAssistOperationResult WriteResult = Write(
+				Blueprint->GetPathName(), TEXT("Outer"), TEXT("(OuterInt=9,Nested=(InnerInt=2"));
+			TestFalse("Partial struct value is rejected", WriteResult.bSuccess);
+
+			TestEqual("Parsed-first field not committed",
+				PayloadValue(Read(Blueprint->GetPathName(), TEXT("Outer.OuterInt"))), FString(TEXT("3")));
+		});
+
+		// Regression: the scratch-import fix initially started from a default-initialized buffer, so
+		// a partial struct literal reset every member the literal did not name.
+		It("Merges a partial struct literal onto the existing members", [this]()
+		{
+			UBlueprint* Blueprint = MakeStateBlueprint();
+			if (!TestNotNull("State blueprint created", Blueprint))
+			{
+				return;
+			}
+
+			if (!TestTrue("Seed outer field", Write(Blueprint->GetPathName(), TEXT("Outer.OuterInt"), TEXT("3")).bSuccess)
+				|| !TestTrue("Seed nested field", Write(Blueprint->GetPathName(), TEXT("Outer.Nested.InnerInt"), TEXT("7")).bSuccess))
+			{
+				return;
+			}
+
+			const FSMAssistOperationResult WriteResult = Write(
+				Blueprint->GetPathName(), TEXT("Outer"), TEXT("(OuterInt=9)"));
+			TestTrue("Partial literal accepted", WriteResult.bSuccess);
+
+			TestEqual("Named member updated",
+				PayloadValue(Read(Blueprint->GetPathName(), TEXT("Outer.OuterInt"))), FString(TEXT("9")));
+			TestEqual("Unlisted member preserved",
+				PayloadValue(Read(Blueprint->GetPathName(), TEXT("Outer.Nested.InnerInt"))), FString(TEXT("7")));
+		});
+
+		// Regression: the FName length guard only checked FName-typed leaves, so an over-long token
+		// nested inside a struct literal still reached FName construction and crashed the editor.
+		It("Rejects an over-long FName token nested in a struct literal", [this]()
+		{
+			UBlueprint* Blueprint = MakeStateBlueprint();
+			if (!TestNotNull("State blueprint created", Blueprint))
+			{
+				return;
+			}
+
+			const FString Value = FString::Printf(
+				TEXT("(OuterInt=1,Nested=(InnerName=%s))"), *FString::ChrN(1100, TEXT('n')));
+			const FSMAssistOperationResult WriteResult = Write(Blueprint->GetPathName(), TEXT("Outer"), Value);
+			TestFalse("Over-long nested token rejected", WriteResult.bSuccess);
+			TestTrue("Error reports the token bound", WriteResult.ErrorMessage.Contains(TEXT("token")));
+
+			TestEqual("Struct unchanged",
+				PayloadValue(Read(Blueprint->GetPathName(), TEXT("Outer.OuterInt"))), FString(TEXT("0")));
+		});
+
+		It("Rejects an array index that overflows int32 on read and write", [this]()
+		{
+			UBlueprint* Blueprint = MakeStateBlueprint();
+			if (!TestNotNull("State blueprint created", Blueprint))
+			{
+				return;
+			}
+
+			if (!TestTrue("Seed array", Write(Blueprint->GetPathName(), TEXT("IntArray"), TEXT("(10,20,30)")).bSuccess))
+			{
+				return;
+			}
+
+			const FSMAssistOperationResult ReadResult = Read(
+				Blueprint->GetPathName(), TEXT("IntArray[99999999999999999999]"));
+			TestFalse("Overflowing read index rejected", ReadResult.bSuccess);
+
+			const FSMAssistOperationResult WriteResult = Write(
+				Blueprint->GetPathName(), TEXT("IntArray[99999999999999999999]"), TEXT("5"));
+			TestFalse("Overflowing write index rejected", WriteResult.bSuccess);
+
+			TestEqual("Array unchanged", PayloadValue(Read(Blueprint->GetPathName(), TEXT("IntArray[0]"))), FString(TEXT("10")));
+		});
+
+		It("Rejects a non-integer key on an integer-keyed map", [this]()
+		{
+			UBlueprint* Blueprint = MakeStateBlueprint();
+			if (!TestNotNull("State blueprint created", Blueprint))
+			{
+				return;
+			}
+
+			const FSMAssistOperationResult WriteResult = Write(Blueprint->GetPathName(), TEXT("IntKeyMap[abc]"), TEXT("1"));
+			TestFalse("Non-integer key rejected", WriteResult.bSuccess);
+			TestTrue("Error mentions the map key", WriteResult.ErrorMessage.Contains(TEXT("map key")));
+
+			const FSMAssistOperationResult ReadResult = Read(Blueprint->GetPathName(), TEXT("IntKeyMap[0]"));
+			TestFalse("No phantom key 0 written", ReadResult.bSuccess);
+		});
+	});
+
+	// Regression: FName construction fatally asserts at NAME_SIZE (1024) characters, so any over-long
+	// input that reached an FName sink (soft object paths, FName property imports) crashed the editor.
+	Describe("input length bounds", [this]()
+	{
+		It("Rejects an over-long 'object' cleanly", [this]()
+		{
+			const FSMAssistOperationResult Result = Read(FString::ChrN(1100, TEXT('a')), TEXT("ScalarInt"));
+			TestFalse("Result is failure", Result.bSuccess);
+			TestTrue("Error reports the length bound", Result.ErrorMessage.Contains(TEXT("characters")));
+		});
+
+		It("Rejects an over-long property-path segment cleanly", [this]()
+		{
+			UBlueprint* Blueprint = MakeStateBlueprint();
+			if (!TestNotNull("State blueprint created", Blueprint))
+			{
+				return;
+			}
+
+			const FSMAssistOperationResult Result = Read(Blueprint->GetPathName(), FString::ChrN(1100, TEXT('a')));
+			TestFalse("Result is failure", Result.bSuccess);
+		});
+
+		It("Rejects an over-long value for an FName property and leaves it unchanged", [this]()
+		{
+			UBlueprint* Blueprint = MakeStateBlueprint();
+			if (!TestNotNull("State blueprint created", Blueprint))
+			{
+				return;
+			}
+
+			const FSMAssistOperationResult WriteResult = Write(
+				Blueprint->GetPathName(), TEXT("NameValue"), FString::ChrN(1100, TEXT('a')));
+			TestFalse("Result is failure", WriteResult.bSuccess);
+			TestTrue("Error reports the length bound", WriteResult.ErrorMessage.Contains(TEXT("characters")));
+
+			const FSMAssistOperationResult ReadResult = Read(Blueprint->GetPathName(), TEXT("NameValue"));
+			TestTrue("Read succeeds", ReadResult.bSuccess);
+			TestEqual("FName property unchanged", PayloadValue(ReadResult), FString(TEXT("None")));
+		});
+
+		It("Rejects an over-long key for an FName-keyed map cleanly", [this]()
+		{
+			UBlueprint* Blueprint = MakeStateBlueprint();
+			if (!TestNotNull("State blueprint created", Blueprint))
+			{
+				return;
+			}
+
+			const FString LongKey = FString::ChrN(1100, TEXT('k'));
+			const FSMAssistOperationResult WriteResult = Write(
+				Blueprint->GetPathName(), FString::Printf(TEXT("NameKeyMap[%s]"), *LongKey), TEXT("1"));
+			TestFalse("Result is failure", WriteResult.bSuccess);
+			TestTrue("Error reports the length bound", WriteResult.ErrorMessage.Contains(TEXT("characters")));
+		});
+
+		It("Rejects an over-long dispatcher name cleanly", [this]()
+		{
+			UBlueprint* Blueprint = MakeActorBlueprint();
+			if (!TestNotNull("Actor blueprint created", Blueprint))
+			{
+				return;
+			}
+
+			const FSMAssistOperationResult Result = AddDispatcher(
+				Blueprint->GetPathName(), FString::ChrN(1100, TEXT('d')), {});
+			TestFalse("Result is failure", Result.bSuccess);
+			TestTrue("Error reports the length bound", Result.ErrorMessage.Contains(TEXT("characters")));
 		});
 	});
 
@@ -434,6 +644,43 @@ void FAssistGenericOpsSpec::Define()
 			TestEqual("No dangling delegate variable",
 				FBlueprintEditorUtils::FindNewVariableIndex(Blueprint, FName(TEXT("BadDisp"))), INDEX_NONE);
 			TestFalse("No dangling signature graph", HasSignatureGraph(Blueprint, FName(TEXT("BadDisp"))));
+		});
+
+		// Regression: only variable names were checked, so a name matching an existing function graph
+		// made CreateNewGraph silently rename that graph aside, breaking its CallFunction sites while
+		// the op reported success.
+		It("Rejects a name colliding with an existing function graph and leaves the graph intact", [this]()
+		{
+			UBlueprint* Blueprint = MakeActorBlueprint();
+			if (!TestNotNull("Actor blueprint created", Blueprint))
+			{
+				return;
+			}
+
+			UEdGraph* FuncGraph = FBlueprintEditorUtils::CreateNewGraph(
+				Blueprint, FName(TEXT("Foo")), UEdGraph::StaticClass(), UEdGraphSchema_K2::StaticClass());
+			if (!TestNotNull("Function graph created", FuncGraph))
+			{
+				return;
+			}
+			FBlueprintEditorUtils::AddFunctionGraph<UClass>(Blueprint, FuncGraph, /*bIsUserCreated=*/true, nullptr);
+
+			const FSMAssistOperationResult Result = AddDispatcher(Blueprint->GetPathName(), TEXT("Foo"), {});
+			TestFalse("Result is failure", Result.bSuccess);
+			TestTrue("Error reports the name collision", Result.ErrorMessage.Contains(TEXT("already in use")));
+
+			bool bFunctionGraphIntact = false;
+			for (const UEdGraph* Graph : Blueprint->FunctionGraphs)
+			{
+				if (Graph && Graph->GetFName() == FName(TEXT("Foo")))
+				{
+					bFunctionGraphIntact = true;
+					break;
+				}
+			}
+			TestTrue("Function graph 'Foo' still present under its own name", bFunctionGraphIntact);
+			TestEqual("No dangling delegate variable",
+				FBlueprintEditorUtils::FindNewVariableIndex(Blueprint, FName(TEXT("Foo"))), INDEX_NONE);
 		});
 
 		It("Rejects duplicate param names and leaves nothing behind", [this]()
