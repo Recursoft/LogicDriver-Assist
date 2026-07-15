@@ -5234,6 +5234,240 @@ void FAssistOperationsSpec::Define()
 		});
 	});
 
+	Describe("sm.set_node_class", [this]()
+	{
+		It("Assigns a custom state class to an existing state and reports it back", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString StateGuid = AddStateToBlueprint(AssetPath, TEXT("Worker"));
+			if (!TestFalse("State guid populated", StateGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("node_guid"), StateGuid);
+			Args->SetStringField(TEXT("node_class"),
+				USMAssistArrayStateInstance::StaticClass()->GetPathName());
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.set_node_class")), Args);
+			TestTrue("Result is success", Result.bSuccess);
+			if (!TestTrue("Payload populated", Result.Payload.IsValid()))
+			{
+				return;
+			}
+
+			FString AppliedClass;
+			Result.Payload->TryGetStringField(TEXT("node_class"), AppliedClass);
+			TestEqual("Applied class matches the request", AppliedClass,
+				USMAssistArrayStateInstance::StaticClass()->GetPathName());
+		});
+
+		It("Assigns a custom class to a collapsed nested state machine, which set_node_property cannot", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString AGuid = AddStateToBlueprint(AssetPath, TEXT("A"));
+			const FString BGuid = AddStateToBlueprint(AssetPath, TEXT("B"));
+			if (!TestFalse("A guid populated", AGuid.IsEmpty())
+				|| !TestFalse("B guid populated", BGuid.IsEmpty()))
+			{
+				return;
+			}
+			TestFalse("A->B transition added", AddTransitionBetween(AssetPath, AGuid, BGuid).IsEmpty());
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			TArray<TSharedPtr<FJsonValue>> NodeGuids;
+			NodeGuids.Add(MakeShared<FJsonValueString>(AGuid));
+			NodeGuids.Add(MakeShared<FJsonValueString>(BGuid));
+			const TSharedRef<FJsonObject> CollapseArgs = MakeShared<FJsonObject>();
+			CollapseArgs->SetStringField(TEXT("asset_path"), AssetPath);
+			CollapseArgs->SetArrayField(TEXT("node_guids"), NodeGuids);
+			const FSMAssistOperationResult CollapseResult = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.collapse_to_state_machine")), CollapseArgs);
+			if (!TestTrue("Collapse succeeded", CollapseResult.bSuccess && CollapseResult.Payload.IsValid()))
+			{
+				return;
+			}
+			FString ContainerGuid;
+			CollapseResult.Payload->TryGetStringField(TEXT("state_guid"), ContainerGuid);
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("node_guid"), ContainerGuid);
+			Args->SetStringField(TEXT("node_class"),
+				USMAssistTestStateMachineInstance::StaticClass()->GetPathName());
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.set_node_class")), Args);
+			TestTrue("Result is success", Result.bSuccess);
+
+			FString AppliedClass;
+			if (Result.Payload.IsValid())
+			{
+				Result.Payload->TryGetStringField(TEXT("node_class"), AppliedClass);
+			}
+			TestEqual("Nested state machine now carries the custom class", AppliedClass,
+				USMAssistTestStateMachineInstance::StaticClass()->GetPathName());
+
+			CompileExpectingNoErrors(AssetPath, TEXT("custom-class nested state machine"));
+		});
+
+		It("Rejects a class that does not match the node kind", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString StateGuid = AddStateToBlueprint(AssetPath, TEXT("Worker"));
+			if (!TestFalse("State guid populated", StateGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("node_guid"), StateGuid);
+			Args->SetStringField(TEXT("node_class"),
+				USMAssistTestTransitionInstance::StaticClass()->GetPathName());
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.set_node_class")), Args);
+			TestFalse("A transition class is rejected on a state node", Result.bSuccess);
+		});
+
+		It("Resets to the default class when 'node_class' is empty", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString StateGuid = AddStateToBlueprint(AssetPath, TEXT("Worker"),
+				USMAssistArrayStateInstance::StaticClass());
+			if (!TestFalse("State guid populated", StateGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("node_guid"), StateGuid);
+			Args->SetStringField(TEXT("node_class"), FString());
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.set_node_class")), Args);
+			TestTrue("Result is success", Result.bSuccess);
+
+			FString AppliedClass;
+			if (Result.Payload.IsValid())
+			{
+				Result.Payload->TryGetStringField(TEXT("node_class"), AppliedClass);
+			}
+			TestEqual("State reverted to the default USMStateInstance class", AppliedClass,
+				USMStateInstance::StaticClass()->GetPathName());
+		});
+
+		It("Rejects an abstract class", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString StateGuid = AddStateToBlueprint(AssetPath, TEXT("Worker"));
+			if (!TestFalse("State guid populated", StateGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("node_guid"), StateGuid);
+			Args->SetStringField(TEXT("node_class"),
+				USMAssistAbstractStateInstance::StaticClass()->GetPathName());
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.set_node_class")), Args);
+			TestFalse("An abstract class is rejected", Result.bSuccess);
+		});
+
+		It("Rejects a state machine reference node", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			const FString TargetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty())
+				|| !TestFalse("Target blueprint created", TargetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const TSharedRef<FJsonObject> RefArgs = MakeShared<FJsonObject>();
+			RefArgs->SetStringField(TEXT("asset_path"), AssetPath);
+			RefArgs->SetStringField(TEXT("reference_asset_path"), TargetPath);
+			RefArgs->SetStringField(TEXT("state_name"), TEXT("Ref"));
+			const FSMAssistOperationResult RefResult = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.add_reference")), RefArgs);
+			FString RefGuid;
+			if (!TestTrue("Reference created", RefResult.bSuccess && RefResult.Payload.IsValid())
+				|| !RefResult.Payload->TryGetStringField(TEXT("state_guid"), RefGuid))
+			{
+				return;
+			}
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("node_guid"), RefGuid);
+			Args->SetStringField(TEXT("node_class"),
+				USMAssistTestStateMachineInstance::StaticClass()->GetPathName());
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.set_node_class")), Args);
+			TestFalse("A reference node's class cannot be set directly", Result.bSuccess);
+		});
+
+		It("Fails when the node guid cannot be found", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("node_guid"), FGuid::NewGuid().ToString());
+			Args->SetStringField(TEXT("node_class"),
+				USMAssistArrayStateInstance::StaticClass()->GetPathName());
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("sm.set_node_class")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+		});
+	});
+
 	Describe("sm.merge_states", [this]()
 	{
 		It("Copies a source state's template into the destination stack and leaves the source in place", [this]()

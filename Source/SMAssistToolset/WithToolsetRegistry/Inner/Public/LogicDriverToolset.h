@@ -422,6 +422,22 @@ public:
 		const FString& StateGuid);
 
 	/**
+	 * Sets (or resets) the node class on an existing state, conduit, transition, or nested state
+	 * machine node - the headless equivalent of the Details panel "Node Class" dropdown. Swaps the
+	 * node instance template and rebuilds its property graphs, so it is safe to call after creation
+	 * (unlike SetNodeProperty, which refuses class/object-reference fields).
+	 * @param Blueprint The blueprint to modify. Required.
+	 * @param NodeGuid GUID of the node whose class to set. Required.
+	 * @param NodeClass Class path of the node instance subclass to assign; must match the node kind (a USMStateInstance subclass for states, USMConduitInstance for conduits, USMTransitionInstance for transitions, USMStateMachineInstance for nested state machines). Empty resets the node to its default class.
+	 * @return JSON: { node_guid, node_class }
+	 */
+	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
+	static FString SetNodeClass(
+		USMBlueprint* Blueprint,
+		const FString& NodeGuid,
+		const FString& NodeClass);
+
+	/**
 	 * Sets a property on a state/transition node. Multiplexes set / add / insert / duplicate /
 	 * move / remove / clear based on ArrayAction.
 	 *

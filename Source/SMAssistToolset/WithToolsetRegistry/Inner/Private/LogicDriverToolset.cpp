@@ -245,6 +245,15 @@ FString ULogicDriverToolset::SetInitialState(USMBlueprint* Blueprint, const FStr
 	return LDA::Execute(TEXT("sm.set_initial_state"), Args);
 }
 
+FString ULogicDriverToolset::SetNodeClass(USMBlueprint* Blueprint, const FString& NodeGuid, const FString& NodeClass)
+{
+	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
+	Args->SetStringField(TEXT("node_guid"), NodeGuid);
+	Args->SetStringField(TEXT("node_class"), NodeClass);
+	return LDA::Execute(TEXT("sm.set_node_class"), Args);
+}
+
 FString ULogicDriverToolset::SetNodeProperty(
 	USMBlueprint* Blueprint,
 	const FString& NodeGuid,

@@ -279,6 +279,21 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 
 	{
 		FSMAssistOperationInfo Info;
+		Info.Name = Ops::SetNodeClass;
+		Info.Description = TEXT("Set (or reset) the node class on an existing state, conduit, transition, or nested state machine node - the headless equivalent of the editor's Details 'Node Class' dropdown. Routes through the node's SetNodeClass, which swaps the node instance template and rebuilds its property graphs, so it is safe to call after creation (unlike set_node_property, which deliberately refuses class/object-reference fields). The class must be a subclass of the node's required base: state -> USMStateInstance, conduit -> USMConduitInstance, transition -> USMTransitionInstance, nested state machine -> USMStateMachineInstance; abstract classes are rejected. Omit node_class (or pass an empty string) to revert the node to its default class. Reference nodes derive their class from the referenced blueprint, so they are not a meaningful target. Returns node_guid and node_class (the applied class path).");
+		Info.InputSchema = MakeSchema(
+			{
+				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the target SMBlueprint.")) },
+				{ Args::NodeGuid, MakePropertyObject(TEXT("string"), TEXT("Guid of the state, conduit, transition, or nested state machine node whose class to set.")) },
+				{ Args::NodeClass, MakePropertyObject(TEXT("string"), TEXT("Class path of the node instance subclass to assign (e.g. '/Game/AI/BP_ChaseState.BP_ChaseState_C'). Must match the node kind: a USMStateInstance subclass for states, USMConduitInstance for conduits, USMTransitionInstance for transitions, USMStateMachineInstance for nested state machines. Omit or pass an empty string to reset the node to its default class.")) }
+			},
+			{ Args::AssetPath, Args::NodeGuid });
+		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::SetNodeClass);
+		RegisterOperation(MoveTemp(Info));
+	}
+
+	{
+		FSMAssistOperationInfo Info;
 		Info.Name = Ops::Compile;
 		Info.Description = TEXT("Compile a Blueprint and return its compile status. Accepts any UBlueprint subclass: state-machine Blueprints (USMBlueprint), Logic Driver node-class Blueprints (USMNodeBlueprint child of USMStateInstance / USMTransitionInstance / etc.), and regular UBlueprints (actor, widget, component subclasses).");
 		Info.InputSchema = MakeSchema(

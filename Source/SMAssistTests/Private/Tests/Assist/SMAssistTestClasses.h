@@ -3,6 +3,7 @@
 #pragma once
 
 #include "SMStateInstance.h"
+#include "SMStateMachineInstance.h"
 #include "SMTransitionInstance.h"
 
 #include "SMAssistTestClasses.generated.h"
@@ -45,6 +46,18 @@ protected:
 	{
 		return false;
 	}
+};
+
+UCLASS()
+class USMAssistTestStateMachineInstance : public USMStateMachineInstance
+{
+	GENERATED_BODY()
+};
+
+UCLASS(Abstract)
+class USMAssistAbstractStateInstance : public USMStateInstance
+{
+	GENERATED_BODY()
 };
 
 USTRUCT(BlueprintType)

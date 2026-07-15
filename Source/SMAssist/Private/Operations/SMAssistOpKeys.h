@@ -14,6 +14,7 @@ namespace LD::Assist::Ops
 	inline constexpr const TCHAR* GetAsset = TEXT("sm.get_asset");
 	inline constexpr const TCHAR* RemoveNode = TEXT("sm.remove_node");
 	inline constexpr const TCHAR* SetNodeProperty = TEXT("sm.set_node_property");
+	inline constexpr const TCHAR* SetNodeClass = TEXT("sm.set_node_class");
 	inline constexpr const TCHAR* Compile = TEXT("sm.compile");
 	inline constexpr const TCHAR* RenameState = TEXT("sm.rename_state");
 	inline constexpr const TCHAR* SetInitialState = TEXT("sm.set_initial_state");

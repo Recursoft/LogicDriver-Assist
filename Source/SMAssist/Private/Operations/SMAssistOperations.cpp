@@ -2641,6 +2641,126 @@ FSMAssistOperationResult LD::Assist::SetConduitCondition(const TSharedRef<FJsonO
 	return FSMAssistOperationResult::MakeSuccess(Payload);
 }
 
+FSMAssistOperationResult LD::Assist::SetNodeClass(const TSharedRef<FJsonObject>& InArgs)
+{
+	FString AssetPath;
+	if (!InArgs->TryGetStringField(Args::AssetPath, AssetPath) || AssetPath.IsEmpty())
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'asset_path'."));
+	}
+
+	FString NodeGuidStr;
+	if (!InArgs->TryGetStringField(Args::NodeGuid, NodeGuidStr))
+	{
+		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'node_guid'."));
+	}
+
+	FGuid NodeGuid;
+	if (!FGuid::Parse(NodeGuidStr, NodeGuid))
+	{
+		return FSMAssistOperationResult::MakeError(
+			FString::Printf(TEXT("Invalid 'node_guid' '%s'."), *NodeGuidStr));
+	}
+
+	// An omitted or empty node_class reverts the node to its default class.
+	FString NodeClassPath;
+	InArgs->TryGetStringField(Args::NodeClass, NodeClassPath);
+
+	FString LoadError;
+	USMBlueprint* Blueprint = LD::Assist::Utils::LoadStateMachineBlueprint(AssetPath, LoadError);
+	if (!Blueprint)
+	{
+		return FSMAssistOperationResult::MakeError(LoadError);
+	}
+
+	USMGraphNode_Base* Node = LD::Assist::Utils::FindNodeByGuid(Blueprint, NodeGuid);
+	if (!Node)
+	{
+		return FSMAssistOperationResult::MakeError(
+			FString::Printf(TEXT("No node found with guid '%s'."), *NodeGuidStr));
+	}
+
+	// A reference node's class is derived from the referenced blueprint's root, so setting it here
+	// would be silently reverted by SetNodeClassFromReferenceTemplate on the next edit or compile.
+	if (const USMGraphNode_StateMachineStateNode* SMNode = Cast<USMGraphNode_StateMachineStateNode>(Node))
+	{
+		if (SMNode->IsStateMachineReference())
+		{
+			return FSMAssistOperationResult::MakeError(FString::Printf(
+				TEXT("Node '%s' is a state machine reference; its class is derived from the referenced blueprint and cannot be set directly."),
+				*NodeGuidStr));
+		}
+	}
+
+	const FName ClassPropertyName = Node->GetNodeClassPropertyName();
+	if (ClassPropertyName == NAME_None)
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(
+			TEXT("Node '%s' has no assignable node class (entry, any-state, link, and reroute nodes have none)."),
+			*NodeGuidStr));
+	}
+
+	const FClassProperty* ClassProperty = FindFProperty<FClassProperty>(Node->GetClass(), ClassPropertyName);
+	UClass* RequiredBase = USMNodeInstance::StaticClass();
+	if (ClassProperty && ClassProperty->MetaClass)
+	{
+		RequiredBase = ClassProperty->MetaClass;
+	}
+
+	UClass* ResolvedClass = nullptr;
+	if (!NodeClassPath.IsEmpty())
+	{
+		FString LengthError;
+		if (!LD::Assist::Utils::IsWithinNameLength(NodeClassPath, TEXT("node_class"), LengthError))
+		{
+			return FSMAssistOperationResult::MakeError(LengthError);
+		}
+
+		ResolvedClass = LoadClass<UObject>(nullptr, *NodeClassPath);
+		if (!ResolvedClass)
+		{
+			return FSMAssistOperationResult::MakeError(
+				FString::Printf(TEXT("Could not load 'node_class' '%s'."), *NodeClassPath));
+		}
+
+		if (!ResolvedClass->IsChildOf(RequiredBase))
+		{
+			return FSMAssistOperationResult::MakeError(FString::Printf(
+				TEXT("'node_class' '%s' is not a '%s' subclass, which this node requires."),
+				*NodeClassPath, *RequiredBase->GetName()));
+		}
+
+		if (ResolvedClass->HasAnyClassFlags(CLASS_Abstract))
+		{
+			return FSMAssistOperationResult::MakeError(FString::Printf(
+				TEXT("'node_class' '%s' is abstract and cannot be assigned as a node class."), *NodeClassPath));
+		}
+	}
+
+	{
+		const FScopedTransaction Transaction(NSLOCTEXT("SMAssistOperations", "AssistSetNodeClass", "Set Node Class (Assist)"));
+		Blueprint->Modify();
+		Node->Modify();
+		Node->SetNodeClass(ResolvedClass);
+		Node->CreateGraphPropertyGraphs();
+		FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+	}
+
+	const UClass* AppliedClass = Node->GetNodeClass();
+	if (!AppliedClass)
+	{
+		AppliedClass = Node->GetDefaultNodeClass();
+	}
+
+	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
+	Payload->SetStringField(Args::NodeGuid, NodeGuidStr);
+	if (AppliedClass)
+	{
+		Payload->SetStringField(Args::NodeClass, AppliedClass->GetPathName());
+	}
+	return FSMAssistOperationResult::MakeSuccess(Payload);
+}
+
 FSMAssistOperationResult LD::Assist::SpawnActorContextComponent(const TSharedRef<FJsonObject>& InArgs)
 {
 	FString AssetPath;
