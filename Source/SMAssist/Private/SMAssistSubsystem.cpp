@@ -76,8 +76,11 @@ bool USMAssistSubsystem::RegisterOperation(FSMAssistOperationInfo InInfo)
 	}
 
 	const FName Name = InInfo.Name;
-	const FSMAssistOperationInfo& Stored = Operations.Add(Name, MoveTemp(InInfo));
-	OnOperationRegisteredDelegate.Broadcast(Stored);
+	// Broadcast a copy, not a reference into map storage: a listener that registers or unregisters
+	// an operation during the broadcast would rehash the map and invalidate the reference.
+	const FSMAssistOperationInfo Announced = InInfo;
+	Operations.Add(Name, MoveTemp(InInfo));
+	OnOperationRegisteredDelegate.Broadcast(Announced);
 	return true;
 }
 
@@ -98,6 +101,10 @@ bool USMAssistSubsystem::HasOperation(FName InName) const
 
 FSMAssistOperationResult USMAssistSubsystem::ExecuteOperation(FName InName, const TSharedRef<FJsonObject>& InArgs)
 {
+	// Handlers mutate assets and editor state with no synchronization; every current transport is
+	// game-thread, and a future off-thread one must fail here instead of corrupting silently.
+	checkf(IsInGameThread(), TEXT("SMAssist operations must execute on the game thread (op '%s')."), *InName.ToString());
+
 	const FSMAssistOperationInfo* Info = Operations.Find(InName);
 	if (!Info || !Info->Handler.IsBound())
 	{
@@ -105,7 +112,10 @@ FSMAssistOperationResult USMAssistSubsystem::ExecuteOperation(FName InName, cons
 			FString::Printf(TEXT("Unknown operation '%s'."), *InName.ToString()));
 	}
 
-	return Info->Handler.Execute(InArgs);
+	// Execute a local copy of the handler: a reentrant register/unregister inside the op would
+	// rehash the map and invalidate Info mid-execution.
+	const FSMAssistOperationHandler Handler = Info->Handler;
+	return Handler.Execute(InArgs);
 }
 
 TArray<FName> USMAssistSubsystem::GetRegisteredOperationNames() const

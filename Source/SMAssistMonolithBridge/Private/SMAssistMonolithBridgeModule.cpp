@@ -16,6 +16,8 @@
 #include "Editor.h"
 #include "Misc/CoreDelegates.h"
 #include "Misc/EngineVersionComparison.h"
+#include "Serialization/JsonSerializer.h"
+#include "Serialization/JsonWriter.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogSMAssistMonolithBridge, Log, All);
 
@@ -97,7 +99,17 @@ namespace LD::Assist::MonolithBridge::Private
 
 		if (!Result.bSuccess)
 		{
-			return FMonolithActionResult::Error(Result.ErrorMessage);
+			// Failure payloads carry op diagnostics (e.g. compile errors); Monolith only forwards the
+			// error string, so fold the payload in rather than dropping it.
+			FString ErrorText = Result.ErrorMessage;
+			if (Result.Payload.IsValid() && Result.Payload->Values.Num() > 0)
+			{
+				FString PayloadText;
+				const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&PayloadText);
+				FJsonSerializer::Serialize(Result.Payload.ToSharedRef(), Writer);
+				ErrorText = FString::Printf(TEXT("%s Details: %s"), *ErrorText, *PayloadText);
+			}
+			return FMonolithActionResult::Error(ErrorText);
 		}
 
 		return FMonolithActionResult::Success(Result.Payload);
@@ -217,6 +229,14 @@ void FSMAssistMonolithBridgeModule::HandleOperationUnregistered(FName InName)
 	FString Namespace;
 	FString Action;
 	if (!SplitOperationName(InName, Namespace, Action))
+	{
+		return;
+	}
+
+	// Monolith's registry has no per-action removal, so the whole namespace is wiped and the
+	// survivors re-added. That is only safe for namespaces this bridge owns exclusively; never
+	// wipe one that some other system registered into.
+	if (!BridgedNamespaces.Contains(Namespace))
 	{
 		return;
 	}
