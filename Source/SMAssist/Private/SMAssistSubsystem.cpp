@@ -173,7 +173,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 		Info.InputSchema = MakeSchema(
 			{
 				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the target SMBlueprint.")) },
-				{ Args::StateName, MakePropertyObject(TEXT("string"), TEXT("Optional state name.")) },
+				{ Args::StateName, MakePropertyObject(TEXT("string"), TEXT("Optional short, human-readable state name (e.g. 'Idle', 'ChasePlayer'). Keep it concise unless the user asks for a longer name. Omit to auto-name.")) },
 				{ Args::IsEntry, MakePropertyObject(TEXT("boolean"), TEXT("Mark the new state as the entry state.")) },
 				{ Args::PositionX, MakePropertyObject(TEXT("number"), TEXT("Graph X coordinate. Entry is at x=0; place states to the right. Prefer sm.layout_states (apply=true) over hand-placing: manual gaps overlap easily because node width grows with the DisplayName. If manual, leave at least ~350 X between nodes (more for long names).")) },
 				{ Args::PositionY, MakePropertyObject(TEXT("number"), TEXT("Graph Y coordinate. 0 aligns horizontally with Entry; use non-zero only for deliberate vertical layout.")) },
@@ -298,7 +298,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 			{
 				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the target SMBlueprint.")) },
 				{ Args::StateGuid, MakePropertyObject(TEXT("string"), TEXT("Guid of the state node to rename.")) },
-				{ Args::NewName, MakePropertyObject(TEXT("string"), TEXT("New display name for the state.")) }
+				{ Args::NewName, MakePropertyObject(TEXT("string"), TEXT("New display name for the state. Keep it short and human-readable (e.g. 'Idle', 'ChasePlayer') unless the user asks for a longer name.")) }
 			},
 			{ Args::AssetPath, Args::StateGuid, Args::NewName });
 		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::RenameState);
@@ -358,7 +358,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 		Info.InputSchema = MakeSchema(
 			{
 				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the target SMBlueprint.")) },
-				{ Args::StateName, MakePropertyObject(TEXT("string"), TEXT("Optional conduit name.")) },
+				{ Args::StateName, MakePropertyObject(TEXT("string"), TEXT("Optional short, human-readable conduit name. Keep it concise unless the user asks for a longer name. Omit to auto-name.")) },
 				{ Args::IsEntry, MakePropertyObject(TEXT("boolean"), TEXT("Mark the new conduit as the entry state.")) },
 				{ Args::PositionX, MakePropertyObject(TEXT("number"), TEXT("Graph X coordinate. Entry is at x=0, so prefer positive values (~200+) to place the conduit to the right of Entry.")) },
 				{ Args::PositionY, MakePropertyObject(TEXT("number"), TEXT("Graph Y coordinate. 0 aligns horizontally with Entry; use non-zero only for deliberate vertical layout.")) },
@@ -378,7 +378,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 			{
 				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the target SMBlueprint.")) },
 				{ Args::ReferenceAssetPath, MakePropertyObject(TEXT("string"), TEXT("Optional. Object path to the SMBlueprint to reference. Omit to create the reference state without a target (assign later via sm.configure_reference).")) },
-				{ Args::StateName, MakePropertyObject(TEXT("string"), TEXT("Optional node name.")) },
+				{ Args::StateName, MakePropertyObject(TEXT("string"), TEXT("Optional short, human-readable node name. Keep it concise unless the user asks for a longer name. Omit to auto-name.")) },
 				{ Args::IsEntry, MakePropertyObject(TEXT("boolean"), TEXT("Mark the new reference as the entry state.")) },
 				{ Args::PositionX, MakePropertyObject(TEXT("number"), TEXT("Graph X coordinate. Entry is at x=0, so prefer positive values (~200+) to place the reference to the right of Entry.")) },
 				{ Args::PositionY, MakePropertyObject(TEXT("number"), TEXT("Graph Y coordinate. 0 aligns horizontally with Entry; use non-zero only for deliberate vertical layout.")) },
@@ -412,7 +412,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 		Info.InputSchema = MakeSchema(
 			{
 				{ Args::AssetPath, MakePropertyObject(TEXT("string"), TEXT("Object path to the target SMBlueprint.")) },
-				{ Args::StateName, MakePropertyObject(TEXT("string"), TEXT("Optional Any State name.")) },
+				{ Args::StateName, MakePropertyObject(TEXT("string"), TEXT("Optional short, human-readable Any State name. Keep it concise unless the user asks for a longer name. Omit to auto-name.")) },
 				{ Args::PositionX, MakePropertyObject(TEXT("number"), TEXT("Graph X coordinate. Entry is at x=0, so prefer positive values.")) },
 				{ Args::PositionY, MakePropertyObject(TEXT("number"), TEXT("Graph Y coordinate. Place on a separate row (e.g. -150) above or below the main flow to keep outbound transitions readable.")) }
 			},

@@ -180,7 +180,7 @@ public:
 	/**
 	 * Adds a regular state node to a blueprint's root state machine graph.
 	 * @param Blueprint The blueprint to modify. Required.
-	 * @param StateName Display name for the new state. Empty = SMAssist auto-names ("State", "State_1", ...).
+	 * @param StateName Display name for the new state; keep it short and human-readable (e.g. "Idle", "ChasePlayer") unless the user asks for a longer name. Empty = SMAssist auto-names ("State", "State_1", ...).
 	 * @param bIsEntry Whether this state becomes the graph's entry. Default false.
 	 * @param bAutoPosition True (default) = SMAssist auto-positions the node and PositionX/PositionY are ignored. Set false to place at PositionX/PositionY. Prefer auto or a LayoutStates pass over manual placement; coordinates near (0, 0) collide with the editor's Entry-pointer marker and produce a visually broken graph for entry states.
 	 * @param PositionX Canvas X coordinate; used only when bAutoPosition is false. Negative values are valid (the default state row sits near y=-43).
@@ -201,7 +201,7 @@ public:
 	/**
 	 * Adds a conduit node to a blueprint's root state machine graph.
 	 * @param Blueprint The blueprint to modify. Required.
-	 * @param StateName Display name for the new conduit. Empty = auto-name.
+	 * @param StateName Display name for the new conduit; keep it short and human-readable unless the user asks for a longer name. Empty = auto-name.
 	 * @param bIsEntry Whether this conduit becomes the graph's entry. Default false.
 	 * @param bAutoPosition True (default) = auto-position; PositionX/PositionY are ignored. Set false to place at PositionX/PositionY. Prefer auto or a LayoutStates pass over manual placement; coordinates near (0, 0) collide with the editor's Entry-pointer marker and produce a visually broken graph for entry states.
 	 * @param PositionX Canvas X coordinate; used only when bAutoPosition is false. Negative values are valid.
@@ -224,7 +224,7 @@ public:
 	/**
 	 * Adds an AnyState node to a blueprint's root state machine graph.
 	 * @param Blueprint The blueprint to modify. Required.
-	 * @param StateName Display name for the AnyState. Empty = auto-name.
+	 * @param StateName Display name for the AnyState; keep it short and human-readable unless the user asks for a longer name. Empty = auto-name.
 	 * @param bAutoPosition True (default) = auto-position; PositionX/PositionY are ignored. Set false to place at PositionX/PositionY. Prefer auto or a LayoutStates pass over manual placement; coordinates near (0, 0) collide with the editor's Entry-pointer marker and produce a visually broken graph for entry states.
 	 * @param PositionX Canvas X coordinate; used only when bAutoPosition is false. Negative values are valid.
 	 * @param PositionY Canvas Y coordinate; used only when bAutoPosition is false.
@@ -259,7 +259,7 @@ public:
 	 * Adds a reference node that embeds another state-machine blueprint into this graph.
 	 * @param Blueprint The blueprint to modify. Required.
 	 * @param ReferenceBlueprint The blueprint to reference (rendered as a sub-state-machine). Required.
-	 * @param StateName Display name for the reference node. Empty = auto-name.
+	 * @param StateName Display name for the reference node; keep it short and human-readable unless the user asks for a longer name. Empty = auto-name.
 	 * @param bIsEntry Whether this reference becomes the graph's entry. Default false.
 	 * @param bAutoPosition True (default) = auto-position; PositionX/PositionY are ignored. Set false to place at PositionX/PositionY. Prefer auto or a LayoutStates pass over manual placement; coordinates near (0, 0) collide with the editor's Entry-pointer marker and produce a visually broken graph for entry states.
 	 * @param PositionX Canvas X coordinate; used only when bAutoPosition is false. Negative values are valid.
@@ -401,7 +401,7 @@ public:
 	 * Renames a state.
 	 * @param Blueprint The blueprint to modify. Required.
 	 * @param StateGuid GUID of the state to rename. Required.
-	 * @param NewName New display name. Required.
+	 * @param NewName New display name; keep it short and human-readable (e.g. "Idle", "ChasePlayer") unless the user asks for a longer name. Required.
 	 * @return JSON: { state_guid, state_name }
 	 */
 	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
