@@ -46,14 +46,29 @@ namespace LD::Assist::Toolset::Marshal
 
 	/**
 	 * Adds a double field when the value is non-negative. Negative sentinel (e.g., -1.0) =
-	 * "use SMAssist default". Used for positions, gaps, and durations; none of these take
-	 * meaningful negative values in SMAssist.
+	 * "use SMAssist default". Only for quantities with no meaningful negative value (gaps,
+	 * durations); canvas coordinates are legitimately negative and use AddPosition instead.
 	 */
 	inline void AddIfNonNegative(FJsonObject& Json, FStringView Field, double Value)
 	{
 		if (Value >= 0.0)
 		{
 			Json.SetNumberField(FString(Field), Value);
+		}
+	}
+
+	/**
+	 * Adds both canvas-position fields for a manual placement; bAuto=true emits neither so
+	 * SMAssist auto-positions. A separate bool carries the "omit" signal because negative
+	 * coordinates are legitimate positions (the default state row sits near y=-43), so no
+	 * numeric sentinel can distinguish "unset" from a real value.
+	 */
+	inline void AddPosition(FJsonObject& Json, bool bAuto, FStringView FieldX, FStringView FieldY, double X, double Y)
+	{
+		if (!bAuto)
+		{
+			Json.SetNumberField(FString(FieldX), X);
+			Json.SetNumberField(FString(FieldY), Y);
 		}
 	}
 
@@ -67,13 +82,15 @@ namespace LD::Assist::Toolset::Marshal
 	 * Adds a variant-typed field whose value is JSON-encoded text. Parses `JsonText`
 	 * and emits the resulting JSON value (scalar / array / object) under `Field`.
 	 * Empty `JsonText` is the sentinel for "use SMAssist default"; no field is emitted.
-	 * Malformed JSON produces a script error and the field is skipped.
+	 * Malformed JSON raises a script error and returns false; the caller must return
+	 * without dispatching, since RaiseScriptError does not abort C++ and executing with
+	 * the field silently dropped would mutate the asset while reporting a tool error.
 	 */
-	inline void AddJsonValue(FJsonObject& Json, FStringView Field, const FString& JsonText)
+	[[nodiscard]] inline bool AddJsonValue(FJsonObject& Json, FStringView Field, const FString& JsonText)
 	{
 		if (JsonText.IsEmpty())
 		{
-			return;
+			return true;
 		}
 		// UE's top-level JSON reader only accepts objects and arrays, so a bare scalar
 		// ("1.5", "\"red\"", "true") would round-trip as malformed even though it is
@@ -93,9 +110,10 @@ namespace LD::Assist::Toolset::Marshal
 		{
 			UKismetSystemLibrary::RaiseScriptError(FString::Printf(
 				TEXT("Field '%.*s': malformed JSON value."), Field.Len(), Field.GetData()));
-			return;
+			return false;
 		}
 		Json.SetField(FString(Field), Parsed);
+		return true;
 	}
 
 	/**

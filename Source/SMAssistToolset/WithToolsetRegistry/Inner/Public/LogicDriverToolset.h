@@ -182,8 +182,9 @@ public:
 	 * @param Blueprint The blueprint to modify. Required.
 	 * @param StateName Display name for the new state. Empty = SMAssist auto-names ("State", "State_1", ...).
 	 * @param bIsEntry Whether this state becomes the graph's entry. Default false.
-	 * @param PositionX Canvas X coordinate. Negative sentinel (e.g., -1.0) = SMAssist auto-positions. Prefer the sentinel or a LayoutStates pass over manual placement; coordinates near (0, 0) collide with the editor's Entry-pointer marker and produce a visually broken graph for entry states.
-	 * @param PositionY Canvas Y coordinate. Negative sentinel (e.g., -1.0) = SMAssist auto-positions.
+	 * @param bAutoPosition True (default) = SMAssist auto-positions the node and PositionX/PositionY are ignored. Set false to place at PositionX/PositionY. Prefer auto or a LayoutStates pass over manual placement; coordinates near (0, 0) collide with the editor's Entry-pointer marker and produce a visually broken graph for entry states.
+	 * @param PositionX Canvas X coordinate; used only when bAutoPosition is false. Negative values are valid (the default state row sits near y=-43).
+	 * @param PositionY Canvas Y coordinate; used only when bAutoPosition is false.
 	 * @param StateClass Full path of a USMStateInstance_Base subclass. Empty = base USMStateInstance (no per-node instance is created at runtime). OMIT for any behavior-less state (end states especially); an empty custom class is wasted overhead. Only set this when the state has logic or exposed properties.
 	 * @return JSON: { state_guid, state_name }
 	 */
@@ -192,8 +193,9 @@ public:
 		USMBlueprint* Blueprint,
 		const FString& StateName = TEXT(""),
 		bool bIsEntry = false,
-		double PositionX = -1.0,
-		double PositionY = -1.0,
+		bool bAutoPosition = true,
+		double PositionX = 0.0,
+		double PositionY = 0.0,
 		const FString& StateClass = TEXT(""));
 
 	/**
@@ -201,8 +203,9 @@ public:
 	 * @param Blueprint The blueprint to modify. Required.
 	 * @param StateName Display name for the new conduit. Empty = auto-name.
 	 * @param bIsEntry Whether this conduit becomes the graph's entry. Default false.
-	 * @param PositionX Canvas X coordinate. Negative sentinel (e.g., -1.0) = auto-position. Prefer the sentinel or a LayoutStates pass over manual placement; coordinates near (0, 0) collide with the editor's Entry-pointer marker and produce a visually broken graph for entry states.
-	 * @param PositionY Canvas Y coordinate. Negative sentinel (e.g., -1.0) = auto-position.
+	 * @param bAutoPosition True (default) = auto-position; PositionX/PositionY are ignored. Set false to place at PositionX/PositionY. Prefer auto or a LayoutStates pass over manual placement; coordinates near (0, 0) collide with the editor's Entry-pointer marker and produce a visually broken graph for entry states.
+	 * @param PositionX Canvas X coordinate; used only when bAutoPosition is false. Negative values are valid.
+	 * @param PositionY Canvas Y coordinate; used only when bAutoPosition is false.
 	 * @param StateClass Full path of a USMConduitInstance subclass. Empty = base conduit.
 	 * @param bEvalWithTransitions Whether the conduit evaluates inline with outgoing transitions. Default true (matches the editor's default configuration for newly placed conduits).
 	 * @return JSON: { state_guid, state_name, state_class? }
@@ -212,8 +215,9 @@ public:
 		USMBlueprint* Blueprint,
 		const FString& StateName = TEXT(""),
 		bool bIsEntry = false,
-		double PositionX = -1.0,
-		double PositionY = -1.0,
+		bool bAutoPosition = true,
+		double PositionX = 0.0,
+		double PositionY = 0.0,
 		const FString& StateClass = TEXT(""),
 		bool bEvalWithTransitions = true);
 
@@ -221,31 +225,35 @@ public:
 	 * Adds an AnyState node to a blueprint's root state machine graph.
 	 * @param Blueprint The blueprint to modify. Required.
 	 * @param StateName Display name for the AnyState. Empty = auto-name.
-	 * @param PositionX Canvas X coordinate. Negative sentinel (e.g., -1.0) = auto-position. Prefer the sentinel or a LayoutStates pass over manual placement; coordinates near (0, 0) collide with the editor's Entry-pointer marker and produce a visually broken graph for entry states.
-	 * @param PositionY Canvas Y coordinate. Negative sentinel (e.g., -1.0) = auto-position.
+	 * @param bAutoPosition True (default) = auto-position; PositionX/PositionY are ignored. Set false to place at PositionX/PositionY. Prefer auto or a LayoutStates pass over manual placement; coordinates near (0, 0) collide with the editor's Entry-pointer marker and produce a visually broken graph for entry states.
+	 * @param PositionX Canvas X coordinate; used only when bAutoPosition is false. Negative values are valid.
+	 * @param PositionY Canvas Y coordinate; used only when bAutoPosition is false.
 	 * @return JSON: { state_guid, state_name }
 	 */
 	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
 	static FString AddAnyState(
 		USMBlueprint* Blueprint,
 		const FString& StateName = TEXT(""),
-		double PositionX = -1.0,
-		double PositionY = -1.0);
+		bool bAutoPosition = true,
+		double PositionX = 0.0,
+		double PositionY = 0.0);
 
 	/**
 	 * Adds a LinkState node pointing at an existing state by name.
 	 * @param Blueprint The blueprint to modify. Required.
 	 * @param LinkToStateName Display name of the target state to link to. Required.
-	 * @param PositionX Canvas X coordinate. Negative sentinel (e.g., -1.0) = auto-position. Prefer the sentinel or a LayoutStates pass over manual placement; coordinates near (0, 0) collide with the editor's Entry-pointer marker and produce a visually broken graph for entry states.
-	 * @param PositionY Canvas Y coordinate. Negative sentinel (e.g., -1.0) = auto-position.
+	 * @param bAutoPosition True (default) = auto-position; PositionX/PositionY are ignored. Set false to place at PositionX/PositionY. Prefer auto or a LayoutStates pass over manual placement; coordinates near (0, 0) collide with the editor's Entry-pointer marker and produce a visually broken graph for entry states.
+	 * @param PositionX Canvas X coordinate; used only when bAutoPosition is false. Negative values are valid.
+	 * @param PositionY Canvas Y coordinate; used only when bAutoPosition is false.
 	 * @return JSON: { state_guid, state_name, linked_state_guid?, link_to_state_name? }
 	 */
 	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
 	static FString AddLinkState(
 		USMBlueprint* Blueprint,
 		const FString& LinkToStateName,
-		double PositionX = -1.0,
-		double PositionY = -1.0);
+		bool bAutoPosition = true,
+		double PositionX = 0.0,
+		double PositionY = 0.0);
 
 	/**
 	 * Adds a reference node that embeds another state-machine blueprint into this graph.
@@ -253,8 +261,9 @@ public:
 	 * @param ReferenceBlueprint The blueprint to reference (rendered as a sub-state-machine). Required.
 	 * @param StateName Display name for the reference node. Empty = auto-name.
 	 * @param bIsEntry Whether this reference becomes the graph's entry. Default false.
-	 * @param PositionX Canvas X coordinate. Negative sentinel (e.g., -1.0) = auto-position. Prefer the sentinel or a LayoutStates pass over manual placement; coordinates near (0, 0) collide with the editor's Entry-pointer marker and produce a visually broken graph for entry states.
-	 * @param PositionY Canvas Y coordinate. Negative sentinel (e.g., -1.0) = auto-position.
+	 * @param bAutoPosition True (default) = auto-position; PositionX/PositionY are ignored. Set false to place at PositionX/PositionY. Prefer auto or a LayoutStates pass over manual placement; coordinates near (0, 0) collide with the editor's Entry-pointer marker and produce a visually broken graph for entry states.
+	 * @param PositionX Canvas X coordinate; used only when bAutoPosition is false. Negative values are valid.
+	 * @param PositionY Canvas Y coordinate; used only when bAutoPosition is false.
 	 * @param bUseIntermediateGraph Enable the intermediate K2 graph on the new reference state. Default false (matches the LD runtime default). Required true so SpawnLocalGraphReadNode kinds (GetStateMachineReference, InEndState) are visible/editable inside the reference state; without it, double-clicking the reference state enters the sub-SM directly. Toggle after creation via ConfigureReference.
 	 * @return JSON: { state_guid, state_name, reference_asset_path, use_intermediate_graph? }
 	 */
@@ -264,8 +273,9 @@ public:
 		USMBlueprint* ReferenceBlueprint,
 		const FString& StateName = TEXT(""),
 		bool bIsEntry = false,
-		double PositionX = -1.0,
-		double PositionY = -1.0,
+		bool bAutoPosition = true,
+		double PositionX = 0.0,
+		double PositionY = 0.0,
 		bool bUseIntermediateGraph = false);
 
 	/**
@@ -707,8 +717,9 @@ public:
 	 * @param Scope "graph" / "selection" / etc. Empty = whole graph.
 	 * @param ColumnGap Horizontal spacing between columns. Negative sentinel (e.g., -1.0) = SMAssist default gap.
 	 * @param RowGap Vertical spacing between rows. Negative sentinel (e.g., -1.0) = SMAssist default gap.
-	 * @param StartX Origin X for the layout. Negative sentinel (e.g., -1.0) = SMAssist default origin.
-	 * @param StartY Origin Y for the layout. Negative sentinel (e.g., -1.0) = SMAssist default origin.
+	 * @param bDefaultOrigin True (default) = SMAssist default layout origin; StartX/StartY are ignored. Set false to lay out from StartX/StartY.
+	 * @param StartX Origin X for the layout; used only when bDefaultOrigin is false. Negative values are valid.
+	 * @param StartY Origin Y for the layout; used only when bDefaultOrigin is false.
 	 * @param PinNodeGuidsJson JSON-encoded array of state GUID strings that should remain pinned at their existing positions. Empty = no pins.
 	 * @param bRespectExistingOrder Whether to preserve existing graph-order hints. Default true.
 	 * @param bSnapToGrid Snap final positions to the editor grid. Default true.
@@ -722,8 +733,9 @@ public:
 		const FString& Scope = TEXT(""),
 		double ColumnGap = -1.0,
 		double RowGap = -1.0,
-		double StartX = -1.0,
-		double StartY = -1.0,
+		bool bDefaultOrigin = true,
+		double StartX = 0.0,
+		double StartY = 0.0,
 		const FString& PinNodeGuidsJson = TEXT(""),
 		bool bRespectExistingOrder = true,
 		bool bSnapToGrid = true);
@@ -944,7 +956,8 @@ public:
 	 * for manual Start() control.
 	 * @param ActorBlueprint The actor blueprint hosting the component. Required.
 	 * @param StateMachineBlueprint The FSM blueprint whose generated class becomes the
-	 *        component template's StateMachineClass. Null/unset = leave StateMachineClass alone.
+	 *        component template's StateMachineClass. Pass "None" (or empty) to leave
+	 *        StateMachineClass alone, e.g. when only changing replication flags.
 	 * @param ComponentName SCS variable name of the USMStateMachineComponent on the actor BP.
 	 *        Required (no convention default; the AI client supplies it).
 	 * @param Config Configuration bag. See FSMComponentConfig for field semantics and sentinels.
