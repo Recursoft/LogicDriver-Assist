@@ -86,10 +86,12 @@ struct FSMComponentConfig
  * string.
  *
  * Convention note: every param is required at the MCP schema layer (UE 5.8's dispatcher rejects
- * omitted fields regardless of C++ defaults). C++ default values document the "use SMAssist
- * default" sentinel (empty string for FString, -1 for int32, -1.0 for "auto-layout"
- * positions/gaps and other double fields); the marshal helper skips these sentinels when
- * building the JSON, so passing a sentinel is equivalent to omitting the field.
+ * omitted fields regardless of C++ defaults). Most C++ default values document a "use SMAssist
+ * default" sentinel (empty string for FString, -1 for int32, -1.0 for gap/duration doubles); the
+ * marshal helper skips these sentinels when building the JSON, so passing a sentinel is equivalent
+ * to omitting the field. Canvas coordinates are the exception: a negative coordinate is a real
+ * value, so placement carries a companion bAutoPosition flag (bDefaultOrigin for LayoutStates)
+ * that defaults to auto, and the coordinate is emitted only when that flag is false.
  *
  * Result envelope: on success a tool returns the operation's payload serialized as a JSON string,
  * which the engine delivers as the reply's `returnValue` field; parse that string to get the
