@@ -67,7 +67,9 @@ Logic Driver authoring (via the LogicDriver-Assist sm.* operations):
   EvaluateFromManuallyBoundEvent is not reflected in those fields.
 - Node logic lives in two graphs, reached differently. A state's entry/update/end
   logic is a bound graph, authored with the sm.* local-graph ops (sm.get_local_graph
-  on the state node, then wire off the "On State Begin" entry node's then pin). The
+  on the state node, then wire off the "On State Begin" entry node's then pin; On
+  State Update / On State End are not present until spawned with
+  sm.spawn_local_graph_event_node). The
   machine's own OnStateMachineStart lives in the blueprint's top-level event graph,
   reached with generic blueprint tools; it ships already placed (shown disabled), so
   wire off its then pin to activate it. Do NOT add a new override; it already exists
@@ -139,7 +141,7 @@ Read the result back with `sm.get_asset` without opening a bound graph. Each tra
 
 ### Where entry and start logic live
 
-Node logic lives in two different graphs, reached by two different surfaces. A *state's* entry, update, and end logic is a bound graph, authored with the `sm.*` local-graph ops: `sm.get_local_graph` on the state node returns its `On State Begin` / `On State Update` / `On State End` entry nodes, and you wire your logic off `On State Begin`'s output. The *machine's* own `OnStateMachineStart` (and `Tick`) live in the blueprint's ordinary top-level event graph, so they are reached with the generic engine blueprint tools, not `sm.*`. A fresh state machine ships with `OnStateMachineStart` already placed there, shown disabled ("This node is disabled and will not be called") until it is used. Do not add the override again; it already exists and the add fails. Wire your logic off its execution pin instead, which activates it on the next compile. For logic that should run once when the machine begins, `OnStateMachineStart` or the entry state's `OnStateBegin` both work; choose by whether the logic is machine-wide or specific to that first state.
+Node logic lives in two different graphs, reached by two different surfaces. A *state's* entry, update, and end logic is a bound graph, authored with the `sm.*` local-graph ops: `sm.get_local_graph` on the state node lists whatever entry nodes the graph currently holds. `On State Begin` is always present (it is the graph's container), so wire begin logic off its output directly. `On State Update` and `On State End` do not exist on a state with no node class until you create them with `sm.spawn_local_graph_event_node` (types `OnStateUpdate`, `OnStateEnd`); spawn the one you need, then wire off its output. The same op adds a transition's or conduit's lifecycle-event entries (`OnInitialized`, `OnTransitionEntered`, and so on), which are likewise absent until spawned. The *machine's* own `OnStateMachineStart` (and `Tick`) live in the blueprint's ordinary top-level event graph, so they are reached with the generic engine blueprint tools, not `sm.*`. A fresh state machine ships with `OnStateMachineStart` already placed there, shown disabled ("This node is disabled and will not be called") until it is used. Do not add the override again; it already exists and the add fails. Wire your logic off its execution pin instead, which activates it on the next compile. For logic that should run once when the machine begins, `OnStateMachineStart` or the entry state's `OnStateBegin` both work; choose by whether the logic is machine-wide or specific to that first state.
 
 ### Components and running the machine
 
