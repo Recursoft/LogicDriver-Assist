@@ -29,18 +29,18 @@ namespace LD::Assist
 
 	/**
 	 * Result of FindLocalGraphNodeTypes. Read, write, and event-entry kinds are reported separately so
-	 * the caller can route them to the right spawn op (sm.spawn_local_graph_read_node,
-	 * sm.spawn_local_graph_write_node, sm.spawn_local_graph_event_node).
+	 * the caller can route them to the right spawn op (ld.spawn_local_graph_read_node,
+	 * ld.spawn_local_graph_write_node, ld.spawn_local_graph_event_node).
 	 */
 	struct FFindLocalGraphNodeTypesResult
 	{
-		/** Compatible read kinds. Spawn via ISMGraphGeneration::CreateLocalGraphReadNode / sm.spawn_local_graph_read_node. */
+		/** Compatible read kinds. Spawn via ISMGraphGeneration::CreateLocalGraphReadNode / ld.spawn_local_graph_read_node. */
 		TArray<ISMGraphGeneration::ELocalGraphReadNodeType> ReadKinds;
 
-		/** Compatible write kinds. Spawn via ISMGraphGeneration::CreateLocalGraphWriteNode / sm.spawn_local_graph_write_node. */
+		/** Compatible write kinds. Spawn via ISMGraphGeneration::CreateLocalGraphWriteNode / ld.spawn_local_graph_write_node. */
 		TArray<ISMGraphGeneration::ELocalGraphWriteNodeType> WriteKinds;
 
-		/** Compatible lifecycle event-entry kinds. Spawn via ISMGraphGeneration::CreateLocalGraphEventNode / sm.spawn_local_graph_event_node. */
+		/** Compatible lifecycle event-entry kinds. Spawn via ISMGraphGeneration::CreateLocalGraphEventNode / ld.spawn_local_graph_event_node. */
 		TArray<ISMGraphGeneration::ELocalGraphEventNodeType> EventKinds;
 	};
 

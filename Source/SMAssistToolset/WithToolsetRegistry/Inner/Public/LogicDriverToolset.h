@@ -1332,7 +1332,7 @@ public:
 	 *        both.
 	 * @param DelegateOwnerClass Optional. Class owning the delegate property (required when
 	 *        DelegateOwnerInstance is Context). Null = leave alone. This adapter cannot clear the
-	 *        class; for that, call sm.configure_transition_event directly with
+	 *        class; for that, call ld.configure_transition_event directly with
 	 *        delegate_owner_class="".
 	 * @param bUpdateDelegateName Gate for DelegatePropertyName. Must be true for the name field to
 	 *        reach the op.

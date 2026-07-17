@@ -34,7 +34,7 @@ BEGIN_DEFINE_SPEC(FSMGetLocalGraphSpec, "LogicDriver.Assist.GetLocalGraph",
 		Args->SetStringField(TEXT("name"), FGuid::NewGuid().ToString());
 		Args->SetStringField(TEXT("path"), FAssetHandler::DefaultGamePath());
 
-		const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(FName(TEXT("sm.create_blueprint")), Args);
+		const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(FName(TEXT("ld.create_blueprint")), Args);
 		FString AssetPath;
 		if (Result.bSuccess && Result.Payload.IsValid())
 		{
@@ -49,7 +49,7 @@ BEGIN_DEFINE_SPEC(FSMGetLocalGraphSpec, "LogicDriver.Assist.GetLocalGraph",
 		Args->SetStringField(TEXT("asset_path"), InAssetPath);
 		Args->SetStringField(TEXT("state_name"), InStateName);
 
-		const FSMAssistOperationResult Result = GetSubsystem()->ExecuteOperation(FName(TEXT("sm.add_state")), Args);
+		const FSMAssistOperationResult Result = GetSubsystem()->ExecuteOperation(FName(TEXT("ld.add_state")), Args);
 		FString StateGuid;
 		if (Result.bSuccess && Result.Payload.IsValid())
 		{
@@ -64,7 +64,7 @@ BEGIN_DEFINE_SPEC(FSMGetLocalGraphSpec, "LogicDriver.Assist.GetLocalGraph",
 		Args->SetStringField(TEXT("asset_path"), InAssetPath);
 		Args->SetStringField(TEXT("state_name"), InName);
 
-		const FSMAssistOperationResult Result = GetSubsystem()->ExecuteOperation(FName(TEXT("sm.add_conduit")), Args);
+		const FSMAssistOperationResult Result = GetSubsystem()->ExecuteOperation(FName(TEXT("ld.add_conduit")), Args);
 		FString StateGuid;
 		if (Result.bSuccess && Result.Payload.IsValid())
 		{
@@ -80,7 +80,7 @@ BEGIN_DEFINE_SPEC(FSMGetLocalGraphSpec, "LogicDriver.Assist.GetLocalGraph",
 		Args->SetStringField(TEXT("from_state_guid"), InFromGuid);
 		Args->SetStringField(TEXT("to_state_guid"), InToGuid);
 
-		const FSMAssistOperationResult Result = GetSubsystem()->ExecuteOperation(FName(TEXT("sm.add_transition")), Args);
+		const FSMAssistOperationResult Result = GetSubsystem()->ExecuteOperation(FName(TEXT("ld.add_transition")), Args);
 		FString TransitionGuid;
 		if (Result.bSuccess && Result.Payload.IsValid())
 		{
@@ -95,7 +95,7 @@ BEGIN_DEFINE_SPEC(FSMGetLocalGraphSpec, "LogicDriver.Assist.GetLocalGraph",
 		Args->SetStringField(TEXT("asset_path"), InAssetPath);
 		Args->SetStringField(TEXT("transition_guid"), InTransitionGuid);
 
-		const FSMAssistOperationResult Result = GetSubsystem()->ExecuteOperation(FName(TEXT("sm.add_transition_reroute")), Args);
+		const FSMAssistOperationResult Result = GetSubsystem()->ExecuteOperation(FName(TEXT("ld.add_transition_reroute")), Args);
 		FString RerouteGuid;
 		if (Result.bSuccess && Result.Payload.IsValid())
 		{
@@ -115,7 +115,7 @@ BEGIN_DEFINE_SPEC(FSMGetLocalGraphSpec, "LogicDriver.Assist.GetLocalGraph",
 		}
 		Args->SetArrayField(TEXT("node_guids"), GuidValues);
 
-		const FSMAssistOperationResult Result = GetSubsystem()->ExecuteOperation(FName(TEXT("sm.collapse_to_state_machine")), Args);
+		const FSMAssistOperationResult Result = GetSubsystem()->ExecuteOperation(FName(TEXT("ld.collapse_to_state_machine")), Args);
 		FString StateGuid;
 		if (Result.bSuccess && Result.Payload.IsValid())
 		{
@@ -129,7 +129,7 @@ BEGIN_DEFINE_SPEC(FSMGetLocalGraphSpec, "LogicDriver.Assist.GetLocalGraph",
 		const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
 		Args->SetStringField(TEXT("asset_path"), InAssetPath);
 		Args->SetStringField(TEXT("node_guid"), InNodeGuid);
-		return GetSubsystem()->ExecuteOperation(FName(TEXT("sm.get_local_graph")), Args);
+		return GetSubsystem()->ExecuteOperation(FName(TEXT("ld.get_local_graph")), Args);
 	}
 
 	// Return the id of the node flagged is_result, or empty when none is flagged.

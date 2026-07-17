@@ -49,19 +49,19 @@ BEGIN_DEFINE_SPEC(FSMLocalGraphWriteSpec, "LogicDriver.Assist.LocalGraphWrite",
 
 	FString CreateBlueprint()
 	{
-		const FSMAssistOperationResult R = Run(TEXT("sm.create_blueprint"),
+		const FSMAssistOperationResult R = Run(TEXT("ld.create_blueprint"),
 			Obj({ { TEXT("name"), FGuid::NewGuid().ToString() }, { TEXT("path"), FAssetHandler::DefaultGamePath() } }));
 		return Str(R, TEXT("asset_path"));
 	}
 
 	FString AddState(const FString& InAsset, const FString& InName)
 	{
-		return Str(Run(TEXT("sm.add_state"), Obj({ { TEXT("asset_path"), InAsset }, { TEXT("state_name"), InName } })), TEXT("state_guid"));
+		return Str(Run(TEXT("ld.add_state"), Obj({ { TEXT("asset_path"), InAsset }, { TEXT("state_name"), InName } })), TEXT("state_guid"));
 	}
 
 	FString AddTransition(const FString& InAsset, const FString& InFrom, const FString& InTo)
 	{
-		return Str(Run(TEXT("sm.add_transition"),
+		return Str(Run(TEXT("ld.add_transition"),
 			Obj({ { TEXT("asset_path"), InAsset }, { TEXT("from_state_guid"), InFrom }, { TEXT("to_state_guid"), InTo } })), TEXT("transition_guid"));
 	}
 
@@ -200,7 +200,7 @@ void FSMLocalGraphWriteSpec::Define()
 			return;
 		}
 
-		const FSMAssistOperationResult Add = Run(TEXT("sm.add_local_graph_node"),
+		const FSMAssistOperationResult Add = Run(TEXT("ld.add_local_graph_node"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans },
 				  { TEXT("node_class"), TEXT("call_function") }, { TEXT("function_name"), TEXT("Greater_DoubleDouble") } }));
 		if (!TestTrue(TEXT("add success"), Add.bSuccess) || !TestTrue(TEXT("payload valid"), Add.Payload.IsValid()))
@@ -222,7 +222,7 @@ void FSMLocalGraphWriteSpec::Define()
 		const FString Trans = AddTransition(Asset, From, To);
 
 		// A node type with no friendly alias, addressed by its class name; needs no config.
-		const FSMAssistOperationResult Seq = Run(TEXT("sm.add_local_graph_node"),
+		const FSMAssistOperationResult Seq = Run(TEXT("ld.add_local_graph_node"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans }, { TEXT("node_class"), TEXT("K2Node_ExecutionSequence") } }));
 		if (!TestTrue(TEXT("sequence added"), Seq.bSuccess) || !TestTrue(TEXT("payload valid"), Seq.Payload.IsValid()))
 		{
@@ -231,7 +231,7 @@ void FSMLocalGraphWriteSpec::Define()
 		TestEqual(TEXT("class echoed"), Str(Seq, TEXT("node_class")), FString(TEXT("K2Node_ExecutionSequence")));
 
 		// A friendly alias resolves to the concrete class.
-		const FSMAssistOperationResult Branch = Run(TEXT("sm.add_local_graph_node"),
+		const FSMAssistOperationResult Branch = Run(TEXT("ld.add_local_graph_node"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans }, { TEXT("node_class"), TEXT("branch") } }));
 		TestTrue(TEXT("branch added"), Branch.bSuccess);
 		TestEqual(TEXT("branch resolves to IfThenElse"), Str(Branch, TEXT("node_class")), FString(TEXT("K2Node_IfThenElse")));
@@ -244,7 +244,7 @@ void FSMLocalGraphWriteSpec::Define()
 		const FString To = AddState(Asset, TEXT("To"));
 		const FString Trans = AddTransition(Asset, From, To);
 
-		const FSMAssistOperationResult R = Run(TEXT("sm.add_local_graph_node"),
+		const FSMAssistOperationResult R = Run(TEXT("ld.add_local_graph_node"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans }, { TEXT("node_class"), TEXT("K2Node_NotARealNodeXYZ") } }));
 		TestFalse(TEXT("unknown node class fails"), R.bSuccess);
 	});
@@ -262,7 +262,7 @@ void FSMLocalGraphWriteSpec::Define()
 			return;
 		}
 
-		const FSMAssistOperationResult R = Run(TEXT("sm.add_local_graph_node"),
+		const FSMAssistOperationResult R = Run(TEXT("ld.add_local_graph_node"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans },
 				  { TEXT("node_class"), TEXT("AnimGraphNode_SequencePlayer") } }));
 		TestFalse(TEXT("anim node class fails"), R.bSuccess);
@@ -280,7 +280,7 @@ void FSMLocalGraphWriteSpec::Define()
 			return;
 		}
 
-		const FSMAssistOperationResult R = Run(TEXT("sm.add_local_graph_node"),
+		const FSMAssistOperationResult R = Run(TEXT("ld.add_local_graph_node"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans },
 				  { TEXT("node_class"), TEXT("SMGraphK2Node_StateMachineNode") } }));
 		TestFalse(TEXT("structural node class fails"), R.bSuccess);
@@ -302,14 +302,14 @@ void FSMLocalGraphWriteSpec::Define()
 		const TSharedRef<FJsonObject> CollapseArgs = MakeShared<FJsonObject>();
 		CollapseArgs->SetStringField(TEXT("asset_path"), Asset);
 		CollapseArgs->SetArrayField(TEXT("node_guids"), NodeGuids);
-		const FSMAssistOperationResult Collapse = Run(TEXT("sm.collapse_to_state_machine"), CollapseArgs);
+		const FSMAssistOperationResult Collapse = Run(TEXT("ld.collapse_to_state_machine"), CollapseArgs);
 		if (!TestTrue(TEXT("collapse succeeded"), Collapse.bSuccess))
 		{
 			return;
 		}
 		const FString ContainerGuid = Str(Collapse, TEXT("state_guid"));
 
-		const FSMAssistOperationResult R = Run(TEXT("sm.add_local_graph_node"),
+		const FSMAssistOperationResult R = Run(TEXT("ld.add_local_graph_node"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), ContainerGuid },
 				  { TEXT("node_class"), TEXT("K2Node_ExecutionSequence") } }));
 		TestFalse(TEXT("K2 node into state machine graph fails"), R.bSuccess);
@@ -324,7 +324,7 @@ void FSMLocalGraphWriteSpec::Define()
 		const FString To = AddState(Asset, TEXT("To"));
 		const FString Trans = AddTransition(Asset, From, To);
 
-		const FSMAssistOperationResult Add = Run(TEXT("sm.add_local_graph_node"),
+		const FSMAssistOperationResult Add = Run(TEXT("ld.add_local_graph_node"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans },
 				  { TEXT("node_class"), TEXT("call_function") }, { TEXT("function_name"), TEXT("ThisFunctionDoesNotExist_XYZ") } }));
 		TestFalse(TEXT("unresolved function fails"), Add.bSuccess);
@@ -335,7 +335,7 @@ void FSMLocalGraphWriteSpec::Define()
 		const FString Asset = CreateBlueprint();
 		const FString Red = AddState(Asset, TEXT("Red"));
 		const FString Green = AddState(Asset, TEXT("Green"));
-		Run(TEXT("sm.set_initial_state"), Obj({ { TEXT("asset_path"), Asset }, { TEXT("state_guid"), Red } }));
+		Run(TEXT("ld.set_initial_state"), Obj({ { TEXT("asset_path"), Asset }, { TEXT("state_guid"), Red } }));
 		const FString Trans = AddTransition(Asset, Red, Green);
 		if (!TestTrue(TEXT("transition created"), !Trans.IsEmpty()))
 		{
@@ -343,7 +343,7 @@ void FSMLocalGraphWriteSpec::Define()
 		}
 
 		// The wire-into anchor.
-		const FSMAssistOperationResult Before = Run(TEXT("sm.get_local_graph"), Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans } }));
+		const FSMAssistOperationResult Before = Run(TEXT("ld.get_local_graph"), Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans } }));
 		const FString ResultNode = Str(Before, TEXT("result_node_name"));
 		const FString ResultPin = Str(Before, TEXT("result_pin_name"));
 		if (!TestTrue(TEXT("result anchor present"), !ResultNode.IsEmpty() && !ResultPin.IsEmpty()))
@@ -352,14 +352,14 @@ void FSMLocalGraphWriteSpec::Define()
 		}
 
 		// LD special: TimeInState read node.
-		const FSMAssistOperationResult Tis = Run(TEXT("sm.spawn_local_graph_read_node"),
+		const FSMAssistOperationResult Tis = Run(TEXT("ld.spawn_local_graph_read_node"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans }, { TEXT("type"), TEXT("TimeInState") } }));
 		if (!TestTrue(TEXT("TimeInState spawned"), Tis.bSuccess))
 		{
 			return;
 		}
 
-		const FSMAssistOperationResult Mid = Run(TEXT("sm.get_local_graph"), Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans } }));
+		const FSMAssistOperationResult Mid = Run(TEXT("ld.get_local_graph"), Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans } }));
 		FString TisId;
 		FString TisOut;
 		if (!TestTrue(TEXT("TimeInState node found"), FindNodeByClass(Mid.Payload, TEXT("TimeInState"), TisId, TisOut)))
@@ -373,7 +373,7 @@ void FSMLocalGraphWriteSpec::Define()
 		TestEqual(TEXT("spawn read node payload exposes output pin"), FirstOutputPin(Tis.Payload), TisOut);
 
 		// Generic comparison node via the write op.
-		const FSMAssistOperationResult Add = Run(TEXT("sm.add_local_graph_node"),
+		const FSMAssistOperationResult Add = Run(TEXT("ld.add_local_graph_node"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans },
 				  { TEXT("node_class"), TEXT("call_function") }, { TEXT("function_name"), TEXT("Greater_DoubleDouble") } }));
 		const FString GreaterId = Str(Add, TEXT("id"));
@@ -383,24 +383,24 @@ void FSMLocalGraphWriteSpec::Define()
 		}
 
 		// Wire and seed.
-		const FSMAssistOperationResult C1 = Run(TEXT("sm.connect_local_graph_pins"),
+		const FSMAssistOperationResult C1 = Run(TEXT("ld.connect_local_graph_pins"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans },
 				  { TEXT("from_node_id"), TisId }, { TEXT("from_pin"), TisOut }, { TEXT("to_node_id"), GreaterId }, { TEXT("to_pin"), TEXT("A") } }));
 		TestTrue(TEXT("TimeInState -> Greater.A connected"), C1.bSuccess);
 
-		const FSMAssistOperationResult SetB = Run(TEXT("sm.set_local_graph_pin_default"),
+		const FSMAssistOperationResult SetB = Run(TEXT("ld.set_local_graph_pin_default"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans },
 				  { TEXT("node_id"), GreaterId }, { TEXT("pin"), TEXT("B") }, { TEXT("value"), TEXT("2.5") } }));
 		TestTrue(TEXT("Greater.B default set"), SetB.bSuccess);
 		TestEqual(TEXT("Greater.B default is 2.5"), Str(SetB, TEXT("value")), FString(TEXT("2.5")));
 
-		const FSMAssistOperationResult C2 = Run(TEXT("sm.connect_local_graph_pins"),
+		const FSMAssistOperationResult C2 = Run(TEXT("ld.connect_local_graph_pins"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans },
 				  { TEXT("from_node_id"), GreaterId }, { TEXT("from_pin"), TEXT("ReturnValue") }, { TEXT("to_node_id"), ResultNode }, { TEXT("to_pin"), ResultPin } }));
 		TestTrue(TEXT("Greater.ReturnValue -> result connected"), C2.bSuccess);
 
 		// Compiles clean.
-		const FSMAssistOperationResult Compile = Run(TEXT("sm.compile"), Obj({ { TEXT("asset_path"), Asset } }));
+		const FSMAssistOperationResult Compile = Run(TEXT("ld.compile"), Obj({ { TEXT("asset_path"), Asset } }));
 		if (!TestTrue(TEXT("compile success"), Compile.bSuccess))
 		{
 			return;
@@ -410,7 +410,7 @@ void FSMLocalGraphWriteSpec::Define()
 		TestFalse(TEXT("compiles with no errors"), bHasErrors);
 
 		// Read the wiring back.
-		const FSMAssistOperationResult After = Run(TEXT("sm.get_local_graph"), Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans } }));
+		const FSMAssistOperationResult After = Run(TEXT("ld.get_local_graph"), Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans } }));
 		TestTrue(TEXT("result pin wired from the comparison"), ResultPinConnectedFrom(After.Payload, GreaterId));
 	});
 
@@ -419,10 +419,10 @@ void FSMLocalGraphWriteSpec::Define()
 		const FString Asset = CreateBlueprint();
 		const FString A = AddState(Asset, TEXT("A"));
 		const FString B = AddState(Asset, TEXT("B"));
-		Run(TEXT("sm.set_initial_state"), Obj({ { TEXT("asset_path"), Asset }, { TEXT("state_guid"), A } }));
+		Run(TEXT("ld.set_initial_state"), Obj({ { TEXT("asset_path"), Asset }, { TEXT("state_guid"), A } }));
 		const FString Trans = AddTransition(Asset, A, B);
 
-		const FSMAssistOperationResult RR = Run(TEXT("sm.add_transition_reroute"),
+		const FSMAssistOperationResult RR = Run(TEXT("ld.add_transition_reroute"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("transition_guid"), Trans } }));
 		const FString Reroute = Str(RR, TEXT("reroute_guid"));
 		if (!TestTrue(TEXT("reroute created"), !Reroute.IsEmpty()))
@@ -431,11 +431,11 @@ void FSMLocalGraphWriteSpec::Define()
 		}
 
 		// The reroute waypoint owns no graph, so every local-graph op normalizes it to the primary transition.
-		const FSMAssistOperationResult Gl = Run(TEXT("sm.get_local_graph"), Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Reroute } }));
+		const FSMAssistOperationResult Gl = Run(TEXT("ld.get_local_graph"), Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Reroute } }));
 		TestEqual(TEXT("reroute normalizes to primary transition"), Str(Gl, TEXT("node_guid")), Trans);
 
 		// Regression: spawn read must accept the same reroute guid the generic add/connect ops do.
-		const FSMAssistOperationResult Tis = Run(TEXT("sm.spawn_local_graph_read_node"),
+		const FSMAssistOperationResult Tis = Run(TEXT("ld.spawn_local_graph_read_node"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Reroute }, { TEXT("type"), TEXT("TimeInState") } }));
 		if (!TestTrue(TEXT("spawn read node via reroute guid succeeds"), Tis.bSuccess))
 		{
@@ -452,7 +452,7 @@ void FSMLocalGraphWriteSpec::Define()
 		const FString To = AddState(Asset, TEXT("To"));
 		const FString Trans = AddTransition(Asset, From, To);
 
-		const FSMAssistOperationResult C = Run(TEXT("sm.connect_local_graph_pins"),
+		const FSMAssistOperationResult C = Run(TEXT("ld.connect_local_graph_pins"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans },
 				  { TEXT("from_node_id"), TEXT("NoSuchNode") }, { TEXT("from_pin"), TEXT("ReturnValue") },
 				  { TEXT("to_node_id"), TEXT("AlsoNoSuchNode") }, { TEXT("to_pin"), TEXT("bCanEnterTransition") } }));
@@ -466,7 +466,7 @@ void FSMLocalGraphWriteSpec::Define()
 		const FString To = AddState(Asset, TEXT("To"));
 		const FString Trans = AddTransition(Asset, From, To);
 
-		const FSMAssistOperationResult Add = Run(TEXT("sm.add_local_graph_node"),
+		const FSMAssistOperationResult Add = Run(TEXT("ld.add_local_graph_node"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans },
 				  { TEXT("node_class"), TEXT("call_function") }, { TEXT("function_name"), TEXT("Greater_DoubleDouble") } }));
 		const FString AddedId = Str(Add, TEXT("id"));
@@ -475,18 +475,18 @@ void FSMLocalGraphWriteSpec::Define()
 			return;
 		}
 
-		const FSMAssistOperationResult Remove = Run(TEXT("sm.remove_local_graph_node"),
+		const FSMAssistOperationResult Remove = Run(TEXT("ld.remove_local_graph_node"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans }, { TEXT("node_id"), AddedId } }));
 		TestTrue(TEXT("remove succeeds"), Remove.bSuccess);
 
-		const FSMAssistOperationResult After = Run(TEXT("sm.get_local_graph"), Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans } }));
+		const FSMAssistOperationResult After = Run(TEXT("ld.get_local_graph"), Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans } }));
 		FString Ignore1;
 		FString Ignore2;
 		TestFalse(TEXT("removed node no longer present"), FindNodeByClass(After.Payload, TEXT("K2Node_CallFunction"), Ignore1, Ignore2));
 
 		// The result node is a structural root and must be refused.
 		const FString ResultNode = Str(After, TEXT("result_node_name"));
-		const FSMAssistOperationResult RemoveRoot = Run(TEXT("sm.remove_local_graph_node"),
+		const FSMAssistOperationResult RemoveRoot = Run(TEXT("ld.remove_local_graph_node"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans }, { TEXT("node_id"), ResultNode } }));
 		TestFalse(TEXT("result node cannot be removed"), RemoveRoot.bSuccess);
 	});
@@ -498,16 +498,16 @@ void FSMLocalGraphWriteSpec::Define()
 		const FString To = AddState(Asset, TEXT("To"));
 		const FString Trans = AddTransition(Asset, From, To);
 
-		const FSMAssistOperationResult Before = Run(TEXT("sm.get_local_graph"), Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans } }));
+		const FSMAssistOperationResult Before = Run(TEXT("ld.get_local_graph"), Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans } }));
 		const FString ResultNode = Str(Before, TEXT("result_node_name"));
 		const FString ResultPin = Str(Before, TEXT("result_pin_name"));
 
-		const FSMAssistOperationResult Add = Run(TEXT("sm.add_local_graph_node"),
+		const FSMAssistOperationResult Add = Run(TEXT("ld.add_local_graph_node"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans },
 				  { TEXT("node_class"), TEXT("call_function") }, { TEXT("function_name"), TEXT("Greater_DoubleDouble") } }));
 		const FString GreaterId = Str(Add, TEXT("id"));
 
-		const FSMAssistOperationResult C = Run(TEXT("sm.connect_local_graph_pins"),
+		const FSMAssistOperationResult C = Run(TEXT("ld.connect_local_graph_pins"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans },
 				  { TEXT("from_node_id"), GreaterId }, { TEXT("from_pin"), TEXT("ReturnValue") }, { TEXT("to_node_id"), ResultNode }, { TEXT("to_pin"), ResultPin } }));
 		if (!TestTrue(TEXT("connected"), C.bSuccess))
@@ -515,7 +515,7 @@ void FSMLocalGraphWriteSpec::Define()
 			return;
 		}
 
-		const FSMAssistOperationResult D = Run(TEXT("sm.disconnect_local_graph_pins"),
+		const FSMAssistOperationResult D = Run(TEXT("ld.disconnect_local_graph_pins"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans },
 				  { TEXT("from_node_id"), GreaterId }, { TEXT("from_pin"), TEXT("ReturnValue") }, { TEXT("to_node_id"), ResultNode }, { TEXT("to_pin"), ResultPin } }));
 		if (!TestTrue(TEXT("disconnect succeeds"), D.bSuccess))
@@ -526,7 +526,7 @@ void FSMLocalGraphWriteSpec::Define()
 		D.Payload->TryGetBoolField(TEXT("disconnected"), bDisconnected);
 		TestTrue(TEXT("reports disconnected"), bDisconnected);
 
-		const FSMAssistOperationResult After = Run(TEXT("sm.get_local_graph"), Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans } }));
+		const FSMAssistOperationResult After = Run(TEXT("ld.get_local_graph"), Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans } }));
 		TestFalse(TEXT("result pin no longer wired"), ResultPinConnectedFrom(After.Payload, GreaterId));
 	});
 
@@ -537,7 +537,7 @@ void FSMLocalGraphWriteSpec::Define()
 		const FString To = AddState(Asset, TEXT("To"));
 		const FString Trans = AddTransition(Asset, From, To);
 
-		const FSMAssistOperationResult Add = Run(TEXT("sm.add_local_graph_node"),
+		const FSMAssistOperationResult Add = Run(TEXT("ld.add_local_graph_node"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans }, { TEXT("node_class"), TEXT("branch") } }));
 		const FString NodeId = Str(Add, TEXT("id"));
 		if (!TestTrue(TEXT("node added"), !NodeId.IsEmpty()))
@@ -553,7 +553,7 @@ void FSMLocalGraphWriteSpec::Define()
 		Args->SetNumberField(TEXT("position_y"), 456.0);
 		Args->SetStringField(TEXT("comment"), TEXT("gate check"));
 		Args->SetBoolField(TEXT("enabled"), false);
-		const FSMAssistOperationResult Set = Run(TEXT("sm.set_local_graph_node"), Args);
+		const FSMAssistOperationResult Set = Run(TEXT("ld.set_local_graph_node"), Args);
 		if (!TestTrue(TEXT("set succeeds"), Set.bSuccess) || !TestTrue(TEXT("payload valid"), Set.Payload.IsValid()))
 		{
 			return;
@@ -578,11 +578,11 @@ void FSMLocalGraphWriteSpec::Define()
 		const FString To = AddState(Asset, TEXT("To"));
 		const FString Trans = AddTransition(Asset, From, To);
 
-		const FSMAssistOperationResult Add = Run(TEXT("sm.add_local_graph_node"),
+		const FSMAssistOperationResult Add = Run(TEXT("ld.add_local_graph_node"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans }, { TEXT("node_class"), TEXT("branch") } }));
 		const FString NodeId = Str(Add, TEXT("id"));
 
-		const FSMAssistOperationResult Set = Run(TEXT("sm.set_local_graph_node"),
+		const FSMAssistOperationResult Set = Run(TEXT("ld.set_local_graph_node"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans }, { TEXT("node_id"), NodeId } }));
 		TestFalse(TEXT("no-op set fails"), Set.bSuccess);
 	});
@@ -594,10 +594,10 @@ void FSMLocalGraphWriteSpec::Define()
 		const FString To = AddState(Asset, TEXT("To"));
 		const FString Trans = AddTransition(Asset, From, To);
 
-		Run(TEXT("sm.add_sm_variable"), Obj({ { TEXT("asset_path"), Asset }, { TEXT("variable_name"), TEXT("Threshold") }, { TEXT("var_type"), TEXT("float") } }));
-		Run(TEXT("sm.compile"), Obj({ { TEXT("asset_path"), Asset } }));
+		Run(TEXT("ld.add_sm_variable"), Obj({ { TEXT("asset_path"), Asset }, { TEXT("variable_name"), TEXT("Threshold") }, { TEXT("var_type"), TEXT("float") } }));
+		Run(TEXT("ld.compile"), Obj({ { TEXT("asset_path"), Asset } }));
 
-		const FSMAssistOperationResult Get = Run(TEXT("sm.add_local_graph_node"),
+		const FSMAssistOperationResult Get = Run(TEXT("ld.add_local_graph_node"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans },
 				  { TEXT("node_class"), TEXT("get_variable") }, { TEXT("variable_name"), TEXT("Threshold") } }));
 		if (!TestTrue(TEXT("getter added"), Get.bSuccess))
@@ -606,7 +606,7 @@ void FSMLocalGraphWriteSpec::Define()
 		}
 		TestEqual(TEXT("resolves to VariableGet"), Str(Get, TEXT("node_class")), FString(TEXT("K2Node_VariableGet")));
 
-		const FSMAssistOperationResult Missing = Run(TEXT("sm.add_local_graph_node"),
+		const FSMAssistOperationResult Missing = Run(TEXT("ld.add_local_graph_node"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans },
 				  { TEXT("node_class"), TEXT("get_variable") }, { TEXT("variable_name"), TEXT("NoSuchVar") } }));
 		TestFalse(TEXT("unknown variable rejected"), Missing.bSuccess);
@@ -619,7 +619,7 @@ void FSMLocalGraphWriteSpec::Define()
 		const FString To = AddState(Asset, TEXT("To"));
 		const FString Trans = AddTransition(Asset, From, To);
 
-		const FSMAssistOperationResult Cast = Run(TEXT("sm.add_local_graph_node"),
+		const FSMAssistOperationResult Cast = Run(TEXT("ld.add_local_graph_node"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans },
 				  { TEXT("node_class"), TEXT("cast") }, { TEXT("target_class"), TEXT("/Script/Engine.Actor") } }));
 		if (!TestTrue(TEXT("cast added"), Cast.bSuccess))
@@ -628,7 +628,7 @@ void FSMLocalGraphWriteSpec::Define()
 		}
 		TestEqual(TEXT("resolves to DynamicCast"), Str(Cast, TEXT("node_class")), FString(TEXT("K2Node_DynamicCast")));
 
-		const FSMAssistOperationResult NoTarget = Run(TEXT("sm.add_local_graph_node"),
+		const FSMAssistOperationResult NoTarget = Run(TEXT("ld.add_local_graph_node"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans }, { TEXT("node_class"), TEXT("cast") } }));
 		TestFalse(TEXT("cast without target_class rejected"), NoTarget.bSuccess);
 	});
@@ -640,17 +640,17 @@ void FSMLocalGraphWriteSpec::Define()
 		const FString To = AddState(Asset, TEXT("To"));
 		const FString Trans = AddTransition(Asset, From, To);
 
-		const FSMAssistOperationResult Add = Run(TEXT("sm.add_local_graph_node"),
+		const FSMAssistOperationResult Add = Run(TEXT("ld.add_local_graph_node"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans },
 				  { TEXT("node_class"), TEXT("call_function") }, { TEXT("function_name"), TEXT("Greater_DoubleDouble") } }));
 		const FString GreaterId = Str(Add, TEXT("id"));
 
-		const FSMAssistOperationResult Before = Run(TEXT("sm.get_local_graph"), Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans } }));
+		const FSMAssistOperationResult Before = Run(TEXT("ld.get_local_graph"), Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans } }));
 		const FString ResultNode = Str(Before, TEXT("result_node_name"));
 		const FString ResultPin = Str(Before, TEXT("result_pin_name"));
 
 		// These pins were never connected.
-		const FSMAssistOperationResult D = Run(TEXT("sm.disconnect_local_graph_pins"),
+		const FSMAssistOperationResult D = Run(TEXT("ld.disconnect_local_graph_pins"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans },
 				  { TEXT("from_node_id"), GreaterId }, { TEXT("from_pin"), TEXT("ReturnValue") }, { TEXT("to_node_id"), ResultNode }, { TEXT("to_pin"), ResultPin } }));
 		if (!TestTrue(TEXT("disconnect op succeeds"), D.bSuccess))
@@ -669,9 +669,9 @@ void FSMLocalGraphWriteSpec::Define()
 		const FString To = AddState(Asset, TEXT("To"));
 		const FString Trans = AddTransition(Asset, From, To);
 
-		const FSMAssistOperationResult B1 = Run(TEXT("sm.add_local_graph_node"),
+		const FSMAssistOperationResult B1 = Run(TEXT("ld.add_local_graph_node"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans }, { TEXT("node_class"), TEXT("branch") } }));
-		const FSMAssistOperationResult B2 = Run(TEXT("sm.add_local_graph_node"),
+		const FSMAssistOperationResult B2 = Run(TEXT("ld.add_local_graph_node"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans }, { TEXT("node_class"), TEXT("branch") } }));
 		const FString Branch1 = Str(B1, TEXT("id"));
 		const FString Branch2 = Str(B2, TEXT("id"));
@@ -681,7 +681,7 @@ void FSMLocalGraphWriteSpec::Define()
 		}
 
 		// Exec output 'then' into bool input 'Condition' is type-incompatible; the schema must refuse it.
-		const FSMAssistOperationResult C = Run(TEXT("sm.connect_local_graph_pins"),
+		const FSMAssistOperationResult C = Run(TEXT("ld.connect_local_graph_pins"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans },
 				  { TEXT("from_node_id"), Branch1 }, { TEXT("from_pin"), TEXT("then") }, { TEXT("to_node_id"), Branch2 }, { TEXT("to_pin"), TEXT("Condition") } }));
 		TestFalse(TEXT("incompatible connection rejected"), C.bSuccess);
@@ -692,14 +692,14 @@ void FSMLocalGraphWriteSpec::Define()
 		const FString Asset = CreateBlueprint();
 		const FString From = AddState(Asset, TEXT("From"));
 		const FString To = AddState(Asset, TEXT("To"));
-		Run(TEXT("sm.set_initial_state"), Obj({ { TEXT("asset_path"), Asset }, { TEXT("state_guid"), From } }));
+		Run(TEXT("ld.set_initial_state"), Obj({ { TEXT("asset_path"), Asset }, { TEXT("state_guid"), From } }));
 		const FString Trans = AddTransition(Asset, From, To);
 		if (!TestTrue(TEXT("transition created"), !Trans.IsEmpty()))
 		{
 			return;
 		}
 
-		const FSMAssistOperationResult Ev = Run(TEXT("sm.spawn_local_graph_event_node"),
+		const FSMAssistOperationResult Ev = Run(TEXT("ld.spawn_local_graph_event_node"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans }, { TEXT("type"), TEXT("OnInitialized") } }));
 		if (!TestTrue(TEXT("event node spawned"), Ev.bSuccess))
 		{
@@ -708,13 +708,13 @@ void FSMLocalGraphWriteSpec::Define()
 		TestFalse(TEXT("event node returns id"), Str(Ev, TEXT("id")).IsEmpty());
 		TestFalse(TEXT("event node returns node_guid"), Str(Ev, TEXT("node_guid")).IsEmpty());
 
-		const FSMAssistOperationResult Graph = Run(TEXT("sm.get_local_graph"), Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans } }));
+		const FSMAssistOperationResult Graph = Run(TEXT("ld.get_local_graph"), Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans } }));
 		FString Id;
 		FString Ignore;
 		TestTrue(TEXT("OnTransitionInitialized node present in graph"),
 			FindNodeByClass(Graph.Payload, TEXT("TransitionInitialized"), Id, Ignore));
 
-		const FSMAssistOperationResult Compile = Run(TEXT("sm.compile"), Obj({ { TEXT("asset_path"), Asset } }));
+		const FSMAssistOperationResult Compile = Run(TEXT("ld.compile"), Obj({ { TEXT("asset_path"), Asset } }));
 		if (!TestTrue(TEXT("compile success"), Compile.bSuccess))
 		{
 			return;
@@ -733,7 +733,7 @@ void FSMLocalGraphWriteSpec::Define()
 			return;
 		}
 
-		const FSMAssistOperationResult Ev = Run(TEXT("sm.spawn_local_graph_event_node"),
+		const FSMAssistOperationResult Ev = Run(TEXT("ld.spawn_local_graph_event_node"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), State }, { TEXT("type"), TEXT("on_state_update") } }));
 		TestTrue(TEXT("OnStateUpdate spawned in state graph"), Ev.bSuccess);
 		TestFalse(TEXT("event node returns id"), Str(Ev, TEXT("id")).IsEmpty());
@@ -748,7 +748,7 @@ void FSMLocalGraphWriteSpec::Define()
 			return;
 		}
 
-		const FSMAssistOperationResult Ev = Run(TEXT("sm.spawn_local_graph_event_node"),
+		const FSMAssistOperationResult Ev = Run(TEXT("ld.spawn_local_graph_event_node"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), State }, { TEXT("type"), TEXT("on_root_state_machine_start") } }));
 		TestTrue(TEXT("OnRootStateMachineStart spawned in state graph"), Ev.bSuccess);
 		TestFalse(TEXT("event node returns id"), Str(Ev, TEXT("id")).IsEmpty());
@@ -761,7 +761,7 @@ void FSMLocalGraphWriteSpec::Define()
 		const FString To = AddState(Asset, TEXT("To"));
 		const FString Trans = AddTransition(Asset, From, To);
 
-		const FSMAssistOperationResult Ev = Run(TEXT("sm.spawn_local_graph_event_node"),
+		const FSMAssistOperationResult Ev = Run(TEXT("ld.spawn_local_graph_event_node"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans }, { TEXT("type"), TEXT("NotARealEvent") } }));
 		TestFalse(TEXT("unknown event type fails"), Ev.bSuccess);
 	});

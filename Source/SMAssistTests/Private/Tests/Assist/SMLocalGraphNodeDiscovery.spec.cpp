@@ -35,7 +35,7 @@ BEGIN_DEFINE_SPEC(FSMFindNodeTypesSpec, "LogicDriver.Assist.FindNodeTypes",
 		Args->SetStringField(TEXT("path"), FAssetHandler::DefaultGamePath());
 
 		const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-			FName(TEXT("sm.create_blueprint")), Args);
+			FName(TEXT("ld.create_blueprint")), Args);
 		if (!Result.bSuccess || !Result.Payload.IsValid())
 		{
 			return FString();
@@ -55,7 +55,7 @@ BEGIN_DEFINE_SPEC(FSMFindNodeTypesSpec, "LogicDriver.Assist.FindNodeTypes",
 		Args->SetStringField(TEXT("state_name"), InStateName);
 
 		const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-			FName(TEXT("sm.add_state")), Args);
+			FName(TEXT("ld.add_state")), Args);
 		if (!Result.bSuccess || !Result.Payload.IsValid())
 		{
 			return FString();
@@ -75,7 +75,7 @@ BEGIN_DEFINE_SPEC(FSMFindNodeTypesSpec, "LogicDriver.Assist.FindNodeTypes",
 		Args->SetStringField(TEXT("state_name"), InName);
 
 		const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-			FName(TEXT("sm.add_conduit")), Args);
+			FName(TEXT("ld.add_conduit")), Args);
 		if (!Result.bSuccess || !Result.Payload.IsValid())
 		{
 			return FString();
@@ -96,7 +96,7 @@ BEGIN_DEFINE_SPEC(FSMFindNodeTypesSpec, "LogicDriver.Assist.FindNodeTypes",
 		Args->SetStringField(TEXT("to_state_guid"), InToGuid);
 
 		const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-			FName(TEXT("sm.add_transition")), Args);
+			FName(TEXT("ld.add_transition")), Args);
 		if (!Result.bSuccess || !Result.Payload.IsValid())
 		{
 			return FString();
@@ -119,7 +119,7 @@ BEGIN_DEFINE_SPEC(FSMFindNodeTypesSpec, "LogicDriver.Assist.FindNodeTypes",
 			Args->SetStringField(TEXT("type_id_filter"), InTypeIdFilter);
 		}
 
-		return Subsystem->ExecuteOperation(FName(TEXT("sm.find_node_types")), Args);
+		return Subsystem->ExecuteOperation(FName(TEXT("ld.find_node_types")), Args);
 	}
 
 	static bool PayloadContainsKind(const TSharedPtr<FJsonObject>& InPayload, const TCHAR* InArrayField, const TCHAR* InKindName)

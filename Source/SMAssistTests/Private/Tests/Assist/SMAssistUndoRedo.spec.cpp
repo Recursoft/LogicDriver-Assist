@@ -63,7 +63,7 @@ BEGIN_DEFINE_SPEC(FAssistUndoRedoSpec, "LogicDriver.Assist.UndoRedo",
 
 	FString CreateBlueprint()
 	{
-		const FSMAssistOperationResult R = Run(TEXT("sm.create_blueprint"),
+		const FSMAssistOperationResult R = Run(TEXT("ld.create_blueprint"),
 			Obj({ { TEXT("name"), FGuid::NewGuid().ToString() }, { TEXT("path"), FAssetHandler::DefaultGamePath() } }));
 		return Str(R, TEXT("asset_path"));
 	}
@@ -75,12 +75,12 @@ BEGIN_DEFINE_SPEC(FAssistUndoRedoSpec, "LogicDriver.Assist.UndoRedo",
 		{
 			Args->SetBoolField(TEXT("is_entry"), true);
 		}
-		return Str(Run(TEXT("sm.add_state"), Args), TEXT("state_guid"));
+		return Str(Run(TEXT("ld.add_state"), Args), TEXT("state_guid"));
 	}
 
 	FString AddTransition(const FString& InAsset, const FString& InFrom, const FString& InTo)
 	{
-		return Str(Run(TEXT("sm.add_transition"),
+		return Str(Run(TEXT("ld.add_transition"),
 			Obj({ { TEXT("asset_path"), InAsset }, { TEXT("from_state_guid"), InFrom }, { TEXT("to_state_guid"), InTo } })), TEXT("transition_guid"));
 	}
 
@@ -262,7 +262,7 @@ void FAssistUndoRedoSpec::Define()
 			return;
 		}
 
-		const FSMAssistOperationResult Result = Run(TEXT("sm.set_initial_state"),
+		const FSMAssistOperationResult Result = Run(TEXT("ld.set_initial_state"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("state_guid"), BGuid } }));
 		if (!TestTrue(TEXT("set_initial_state succeeded"), Result.bSuccess))
 		{
@@ -297,7 +297,7 @@ void FAssistUndoRedoSpec::Define()
 		UEdGraph* Graph = StateA->GetGraph();
 		TestEqual(TEXT("one transition edge before removal"), CountTransitionEdges(Graph), 1);
 
-		const FSMAssistOperationResult Result = Run(TEXT("sm.remove_node"),
+		const FSMAssistOperationResult Result = Run(TEXT("ld.remove_node"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), BGuid } }));
 		if (!TestTrue(TEXT("remove_node succeeded"), Result.bSuccess))
 		{
@@ -342,7 +342,7 @@ void FAssistUndoRedoSpec::Define()
 		}
 		const int32 CountBefore = BoundGraph->Nodes.Num();
 
-		const FSMAssistOperationResult Result = Run(TEXT("sm.add_local_graph_node"),
+		const FSMAssistOperationResult Result = Run(TEXT("ld.add_local_graph_node"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), TransGuid },
 				  { TEXT("node_class"), TEXT("K2Node_ExecutionSequence") } }));
 		if (!TestTrue(TEXT("node spawned"), Result.bSuccess))
@@ -371,7 +371,7 @@ void FAssistUndoRedoSpec::Define()
 			return;
 		}
 
-		const FSMAssistOperationResult Spawn = Run(TEXT("sm.add_local_graph_node"),
+		const FSMAssistOperationResult Spawn = Run(TEXT("ld.add_local_graph_node"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), TransGuid },
 				  { TEXT("node_class"), TEXT("call_function") }, { TEXT("function_name"), TEXT("Greater_DoubleDouble") } }));
 		if (!TestTrue(TEXT("call node spawned"), Spawn.bSuccess))
@@ -402,7 +402,7 @@ void FAssistUndoRedoSpec::Define()
 		}
 		const FString ResultPinName = ResultInput->PinName.ToString();
 
-		const FSMAssistOperationResult Connect = Run(TEXT("sm.connect_local_graph_pins"),
+		const FSMAssistOperationResult Connect = Run(TEXT("ld.connect_local_graph_pins"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), TransGuid },
 				  { TEXT("from_node_id"), CallGuid }, { TEXT("from_pin"), TEXT("ReturnValue") },
 				  { TEXT("to_node_id"), ResultNode->NodeGuid.ToString() }, { TEXT("to_pin"), ResultPinName } }));
@@ -429,7 +429,7 @@ void FAssistUndoRedoSpec::Define()
 		TestEqual(TEXT("source relinked after redo"), LinkCount().Key, 1);
 		TestEqual(TEXT("dest relinked after redo"), LinkCount().Value, 1);
 
-		const FSMAssistOperationResult Disconnect = Run(TEXT("sm.disconnect_local_graph_pins"),
+		const FSMAssistOperationResult Disconnect = Run(TEXT("ld.disconnect_local_graph_pins"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), TransGuid },
 				  { TEXT("from_node_id"), CallGuid }, { TEXT("from_pin"), TEXT("ReturnValue") },
 				  { TEXT("to_node_id"), ResultNode->NodeGuid.ToString() }, { TEXT("to_pin"), ResultPinName } }));
@@ -458,7 +458,7 @@ void FAssistUndoRedoSpec::Define()
 			return;
 		}
 
-		const FSMAssistOperationResult Spawn = Run(TEXT("sm.add_local_graph_node"),
+		const FSMAssistOperationResult Spawn = Run(TEXT("ld.add_local_graph_node"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), TransGuid },
 				  { TEXT("node_class"), TEXT("call_function") }, { TEXT("function_name"), TEXT("Greater_DoubleDouble") } }));
 		if (!TestTrue(TEXT("call node spawned"), Spawn.bSuccess))
@@ -479,7 +479,7 @@ void FAssistUndoRedoSpec::Define()
 		}
 		const FString OriginalDefault = APin->DefaultValue;
 
-		const FSMAssistOperationResult SetDefault = Run(TEXT("sm.set_local_graph_pin_default"),
+		const FSMAssistOperationResult SetDefault = Run(TEXT("ld.set_local_graph_pin_default"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), TransGuid },
 				  { TEXT("node_id"), CallGuid }, { TEXT("pin"), TEXT("A") }, { TEXT("value"), TEXT("5.0") } }));
 		if (!TestTrue(TEXT("pin default set"), SetDefault.bSuccess))
@@ -508,7 +508,7 @@ void FAssistUndoRedoSpec::Define()
 			return;
 		}
 
-		const FSMAssistOperationResult Spawn = Run(TEXT("sm.add_local_graph_node"),
+		const FSMAssistOperationResult Spawn = Run(TEXT("ld.add_local_graph_node"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), TransGuid },
 				  { TEXT("node_class"), TEXT("K2Node_ExecutionSequence") } }));
 		if (!TestTrue(TEXT("node spawned"), Spawn.bSuccess))
@@ -522,7 +522,7 @@ void FAssistUndoRedoSpec::Define()
 			return;
 		}
 
-		const FSMAssistOperationResult SetComment = Run(TEXT("sm.set_local_graph_node"),
+		const FSMAssistOperationResult SetComment = Run(TEXT("ld.set_local_graph_node"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), TransGuid },
 				  { TEXT("node_id"), SeqGuid }, { TEXT("comment"), TEXT("gate note") } }));
 		TestTrue(TEXT("comment set"), SetComment.bSuccess);
@@ -532,7 +532,7 @@ void FAssistUndoRedoSpec::Define()
 		TestEqual(TEXT("comment cleared after undo"), SeqNode->NodeComment, FString());
 
 		const int32 CountBefore = BoundGraph->Nodes.Num();
-		const FSMAssistOperationResult Remove = Run(TEXT("sm.remove_local_graph_node"),
+		const FSMAssistOperationResult Remove = Run(TEXT("ld.remove_local_graph_node"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), TransGuid }, { TEXT("node_id"), SeqGuid } }));
 		TestTrue(TEXT("node removed"), Remove.bSuccess);
 		TestEqual(TEXT("graph lost one node"), BoundGraph->Nodes.Num(), CountBefore - 1);
@@ -552,7 +552,7 @@ void FAssistUndoRedoSpec::Define()
 			return;
 		}
 
-		const FSMAssistOperationResult Result = Run(TEXT("sm.set_node_property"),
+		const FSMAssistOperationResult Result = Run(TEXT("ld.set_node_property"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), AGuid },
 				  { TEXT("property_name"), TEXT("NodeComment") }, { TEXT("value"), TEXT("authored note") } }));
 		if (!TestTrue(TEXT("property written"), Result.bSuccess))

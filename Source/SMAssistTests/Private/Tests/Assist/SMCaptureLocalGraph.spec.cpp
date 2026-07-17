@@ -52,18 +52,18 @@ BEGIN_DEFINE_SPEC(FSMCaptureLocalGraphSpec, "LogicDriver.Assist.CaptureLocalGrap
 
 	FString CreateBlueprint()
 	{
-		return Str(Run(TEXT("sm.create_blueprint"),
+		return Str(Run(TEXT("ld.create_blueprint"),
 			Obj({ { TEXT("name"), FGuid::NewGuid().ToString() }, { TEXT("path"), FAssetHandler::DefaultGamePath() } })), TEXT("asset_path"));
 	}
 
 	FString AddState(const FString& InAsset, const FString& InName)
 	{
-		return Str(Run(TEXT("sm.add_state"), Obj({ { TEXT("asset_path"), InAsset }, { TEXT("state_name"), InName } })), TEXT("state_guid"));
+		return Str(Run(TEXT("ld.add_state"), Obj({ { TEXT("asset_path"), InAsset }, { TEXT("state_name"), InName } })), TEXT("state_guid"));
 	}
 
 	FString AddTransition(const FString& InAsset, const FString& InFrom, const FString& InTo)
 	{
-		return Str(Run(TEXT("sm.add_transition"),
+		return Str(Run(TEXT("ld.add_transition"),
 			Obj({ { TEXT("asset_path"), InAsset }, { TEXT("from_state_guid"), InFrom }, { TEXT("to_state_guid"), InTo } })), TEXT("transition_guid"));
 	}
 
@@ -76,11 +76,11 @@ BEGIN_DEFINE_SPEC(FSMCaptureLocalGraphSpec, "LogicDriver.Assist.CaptureLocalGrap
 		{
 			Args->SetStringField(TEXT("prefix"), InPrefix);
 		}
-		return Run(TEXT("sm.capture_local_graph"), Args);
+		return Run(TEXT("ld.capture_local_graph"), Args);
 	}
 
 	// Capturing a bound graph has two halves: resolving node_guid to the bound graph (the same resolver
-	// sm.get_local_graph uses, deterministic and headless-safe) and rendering that graph to a PNG, which
+	// ld.get_local_graph uses, deterministic and headless-safe) and rendering that graph to a PNG, which
 	// opens a real asset-editor GUI. Always prove the resolve via get_local_graph. Only exercise the render
 	// half where a real RHI/window platform exists: under -NullRHI the asset editor's deferred
 	// RequestSavePersistentLayout ticker fatals in FGenericWindow::GetRestoredDimensions, so opening an
@@ -88,7 +88,7 @@ BEGIN_DEFINE_SPEC(FSMCaptureLocalGraphSpec, "LogicDriver.Assist.CaptureLocalGrap
 	// !FApp::CanEverRender(); the render half is covered over MCP against a live editor.
 	void VerifyCaptureOnResolvableNode(const FString& InAsset, const FString& InNodeGuid, const FString& InPrefix)
 	{
-		const FSMAssistOperationResult Resolve = Run(TEXT("sm.get_local_graph"),
+		const FSMAssistOperationResult Resolve = Run(TEXT("ld.get_local_graph"),
 			Obj({ { TEXT("asset_path"), InAsset }, { TEXT("node_guid"), InNodeGuid } }));
 		if (!TestTrue(TEXT("bound graph resolves via get_local_graph"), Resolve.bSuccess))
 		{
@@ -149,7 +149,7 @@ void FSMCaptureLocalGraphSpec::Define()
 		// Author a gate inside the transition's CanEnterTransition graph so the captured graph carries real
 		// logic (a TimeInState read node alongside the transition result node), mirroring the inline-gate
 		// scenario this op exists to visualize.
-		const FSMAssistOperationResult Gate = Run(TEXT("sm.spawn_local_graph_read_node"),
+		const FSMAssistOperationResult Gate = Run(TEXT("ld.spawn_local_graph_read_node"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Transition }, { TEXT("type"), TEXT("TimeInState") } }));
 		TestTrue(TEXT("TimeInState gate node spawned into the transition graph"), Gate.bSuccess);
 
@@ -197,7 +197,7 @@ void FSMCaptureLocalGraphSpec::Define()
 
 		const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
 		Args->SetStringField(TEXT("asset_path"), Asset);
-		const FSMAssistOperationResult Result = Run(TEXT("sm.capture_local_graph"), Args);
+		const FSMAssistOperationResult Result = Run(TEXT("ld.capture_local_graph"), Args);
 		TestFalse(TEXT("missing node_guid fails"), Result.bSuccess);
 	});
 }

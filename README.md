@@ -22,7 +22,7 @@ To confirm the plugin loaded before wiring any client, run `LDAssist.List` in th
 ## What it is and isn't
 
 - **Editor-only.** Every module is an editor module. There is no runtime/cooked footprint, so the plugin does nothing in a packaged game.
-- **A thin, generic operation layer.** `sm.*` operations route through Logic Driver's own editor APIs (`ISMGraphGeneration`, the graph schema, blueprint utils) so results are identical to a user editing by hand. The layer stays unopinionated: no vertical-specific (dialogue, combat) logic lives here. Verticals are authored *using* these generic operations.
+- **A thin, generic operation layer.** `ld.*` operations route through Logic Driver's own editor APIs (`ISMGraphGeneration`, the graph schema, blueprint utils) so results are identical to a user editing by hand. The layer stays unopinionated: no vertical-specific (dialogue, combat) logic lives here. Verticals are authored *using* these generic operations.
 - **Transport-agnostic.** The plugin never talks to a model itself. The same operation registry is reachable from console commands, the Monolith MCP bridge, and the engine ToolsetRegistry, each a small adapter over one registry.
 
 ## Architecture
@@ -46,7 +46,7 @@ A single editor subsystem, `USMAssistSubsystem`, owns a registry of `FSMAssistOp
 
 | Module | Type | Loading phase | Purpose |
 |---|---|---|---|
-| `SMAssist` | Editor | Default | Core subsystem, operation registry, all `sm.*` and `ld_ue.*` handlers. Also registers the `LDAssist.Exec` / `LDAssist.List` console commands. |
+| `SMAssist` | Editor | Default | Core subsystem, operation registry, all `ld.*` and `ld_ue.*` handlers. Also registers the `LDAssist.Exec` / `LDAssist.List` console commands. |
 | `SMAssistMonolithBridge` | Editor (Optional) | PostEngineInit | Mirrors every registered operation into the [Monolith](https://github.com/Recursoft/monolith) MCP tool registry, keyed by `namespace.action`. No-op stub when Monolith is absent. |
 | `SMAssistToolset` | Editor (Optional) | PostEngineInit | Exposes operations as `UToolsetDefinition` `AICallable` UFUNCTIONs through the engine-bundled experimental `ToolsetRegistry` (UE 5.8+). No-op shell when ToolsetRegistry is absent. |
 | `SMAssistTests` | UncookedOnly | Default | Automation specs covering the operation handlers and an end-to-end authoring scenario. Enabled locally only (see [Tests](#tests)). |
@@ -94,31 +94,31 @@ LDAssist.Exec <operation> [json_args]
 Example:
 
 ```
-LDAssist.Exec sm.create_blueprint {"name":"SM_Door","path":"/Game/StateMachines"}
-LDAssist.Exec sm.add_state {"asset_path":"/Game/StateMachines/SM_Door.SM_Door","state_name":"Closed","position_x":200}
-LDAssist.Exec sm.get_asset {"asset_path":"/Game/StateMachines/SM_Door.SM_Door"}
+LDAssist.Exec ld.create_blueprint {"name":"SM_Door","path":"/Game/StateMachines"}
+LDAssist.Exec ld.add_state {"asset_path":"/Game/StateMachines/SM_Door.SM_Door","state_name":"Closed","position_x":200}
+LDAssist.Exec ld.get_asset {"asset_path":"/Game/StateMachines/SM_Door.SM_Door"}
 ```
 
 Success prints `[op] ok: <json payload>`. Failure prints `[op] error: <message>`.
 
 ### Monolith MCP bridge
 
-When Monolith is present, each operation registers as `namespace.action` (the dot in the operation name splits namespace from action). An MCP client calls e.g. the `sm` namespace's `add_state` action with the same JSON arguments. The bridge tracks registration/unregistration live, so operations added at runtime appear without a restart.
+When Monolith is present, each operation registers as `namespace.action` (the dot in the operation name splits namespace from action). An MCP client calls e.g. the `ld` namespace's `add_state` action with the same JSON arguments. The bridge tracks registration/unregistration live, so operations added at runtime appear without a restart.
 
-#### Monolith's native `logicdriver` namespace vs LD-Assist's `sm`
+#### Monolith's native `logicdriver` namespace vs LD-Assist's `ld`
 
 <details>
-<summary>Both surfaces appear at once, so prefer <code>sm.*</code>. Expand for why, and the rule that keeps agents on it.</summary>
+<summary>Both surfaces appear at once, so prefer <code>ld.*</code>. Expand for why, and the rule that keeps agents on it.</summary>
 
-Monolith ships its own `MonolithLogicDriver` module that registers a native `logicdriver.*` namespace (scaffold helpers like `logicdriver.scaffold_hello_world_sm`, plus `logicdriver.get_dialogue_flow`, `logicdriver.get_text_graph_content`, and so on). That module auto-enables (`WITH_LOGICDRIVER=1`) whenever Logic Driver is detected (in the project or as an engine plugin), which is the same condition under which LD-Assist is installed. So an MCP client typically sees **both** surfaces at once (the `sm_query` and `logicdriver_query` tools).
+Monolith ships its own `MonolithLogicDriver` module that registers a native `logicdriver.*` namespace (scaffold helpers like `logicdriver.scaffold_hello_world_sm`, plus `logicdriver.get_dialogue_flow`, `logicdriver.get_text_graph_content`, and so on). That module auto-enables (`WITH_LOGICDRIVER=1`) whenever Logic Driver is detected (in the project or as an engine plugin), which is the same condition under which LD-Assist is installed. So an MCP client typically sees **both** surfaces at once (the `ld_query` and `logicdriver_query` tools).
 
-**Prefer the LD-Assist `sm.*` surface.** It is maintained by Recursoft alongside the plugin, tracks the plugin's editor internals, and is the generic, unopinionated primitive set this repo exists to provide. Treat Monolith's native `logicdriver.*` namespace as a fallback only.
+**Prefer the LD-Assist `ld.*` surface.** It is maintained by Recursoft alongside the plugin, tracks the plugin's editor internals, and is the generic, unopinionated primitive set this repo exists to provide. Treat Monolith's native `logicdriver.*` namespace as a fallback only.
 
-You can silence the native `logicdriver.*` namespace on its own without giving up the rest of Monolith: set `bEnableLogicDriver=false` under `[/Script/MonolithCore.MonolithSettings]` (the "Enable Logic Driver Integration" project setting), and the native module registers zero actions, leaving only `sm.*`. No build-time switch targets just this namespace. The one build-time off-switch, `MONOLITH_RELEASE_BUILD=1`, turns off *all* of Monolith's optional integrations at once. If you keep both surfaces live, steer the agent at the instruction layer (see the tip below).
+You can silence the native `logicdriver.*` namespace on its own without giving up the rest of Monolith: set `bEnableLogicDriver=false` under `[/Script/MonolithCore.MonolithSettings]` (the "Enable Logic Driver Integration" project setting), and the native module registers zero actions, leaving only `ld.*`. No build-time switch targets just this namespace. The one build-time off-switch, `MONOLITH_RELEASE_BUILD=1`, turns off *all* of Monolith's optional integrations at once. If you keep both surfaces live, steer the agent at the instruction layer (see the tip below).
 
 **Tip — make the agent actually use it.** Put an explicit rule in the consuming session's instructions (the project `CLAUDE.md`, an `AGENTS.md`, or the MCP client's system prompt). For example:
 
-> For Logic Driver authoring, use the `sm.*` namespace (the `sm_query` tool, backed by LD-Assist). Treat Monolith's native `logicdriver.*` namespace (`logicdriver_query`) as a last-resort fallback, and log a one-line note whenever you fall back to it.
+> For Logic Driver authoring, use the `ld.*` namespace (the `ld_query` tool, backed by LD-Assist). Treat Monolith's native `logicdriver.*` namespace (`logicdriver_query`) as a last-resort fallback, and log a one-line note whenever you fall back to it.
 
 Because both namespaces ride the same Monolith server, a name-level rule like this is what reliably keeps the agent on the LD-Assist path. Tool descriptions alone don't disambiguate the overlap.
 
@@ -141,14 +141,14 @@ The **Monolith bridge** (above) carries the identical payload behind a different
 USMAssistSubsystem* Assist = GEditor->GetEditorSubsystem<USMAssistSubsystem>();
 TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
 Args->SetStringField(TEXT("name"), TEXT("SM_Door"));
-const FSMAssistOperationResult Result = Assist->ExecuteOperation(TEXT("sm.create_blueprint"), Args);
+const FSMAssistOperationResult Result = Assist->ExecuteOperation(TEXT("ld.create_blueprint"), Args);
 ```
 
 You can register your own operations via `USMAssistSubsystem::RegisterOperation` and they flow out through every active transport automatically.
 
 ## Operation surface
 
-The `sm.*` names live in `SMAssistOpKeys.h`, and the `ld_ue.*` fallback names in `SMAssistGenericOpKeys.h`. Each operation carries a detailed description and JSON input schema (the canonical, always-current reference is `RegisterBuiltInOperations` in `SMAssistSubsystem.cpp`). Grouped by area:
+The `ld.*` names live in `SMAssistOpKeys.h`, and the `ld_ue.*` fallback names in `SMAssistGenericOpKeys.h`. Each operation carries a detailed description and JSON input schema (the canonical, always-current reference is `RegisterBuiltInOperations` in `SMAssistSubsystem.cpp`). Grouped by area:
 
 - **Assets / topology** — `create_blueprint`, `list_assets`, `get_asset`, `add_state`, `add_transition`, `add_transition_reroute`, `add_conduit`, `add_reference`, `configure_reference`, `add_any_state`, `add_link_state`, `remove_node`, `rename_state`, `set_initial_state`, `compile`, `collapse_to_state_machine`, `merge_states`, `replace_node`, `convert_to_reference`.
 - **Node configuration** — `set_node_property`, `set_node_class`, `reset_node_property`, `get_node_properties`, `set_transition_condition`, `set_conduit_condition`, `add_state_stack`, `add_transition_stack`.

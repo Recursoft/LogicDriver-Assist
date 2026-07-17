@@ -1890,7 +1890,7 @@ FSMAssistOperationResult LD::Assist::AddReference(const TSharedRef<FJsonObject>&
 	}
 
 	// Reference target is optional. Omitting it creates a state-machine state with no reference yet;
-	// the caller can set the target later via sm.configure_reference.
+	// the caller can set the target later via ld.configure_reference.
 	USMBlueprint* ReferencedBlueprint = nullptr;
 	FString ReferencedPath;
 	if (InArgs->TryGetStringField(Args::ReferenceAssetPath, ReferencedPath) && !ReferencedPath.IsEmpty())
@@ -3573,7 +3573,7 @@ FSMAssistOperationResult LD::Assist::ClearScreenshots(const TSharedRef<FJsonObje
 namespace LD::Assist::Private
 {
 	// Walk the BP and gather every USMGraph reachable through state-machine state nodes. The root
-	// graph is index 0; nested graphs follow in encounter order. Used by sm.layout_states with
+	// graph is index 0; nested graphs follow in encounter order. Used by ld.layout_states with
 	// scope=all so a single op call can lay out an entire hierarchical state machine.
 	static void CollectAllStateMachineGraphs(USMGraph* InRoot, TArray<USMGraph*>& OutGraphs)
 	{
@@ -5830,7 +5830,7 @@ FSMAssistOperationResult LD::Assist::GetLocalGraph(const TSharedRef<FJsonObject>
 	InArgs->TryGetStringField(Args::NodeGuid, NodeGuidStr);
 
 	// For condition-style graphs (transition / conduit) surface the wire-INTO anchor: the evaluation
-	// pin a boolean condition connects to (the same pin sm.set_transition_condition writes a literal to).
+	// pin a boolean condition connects to (the same pin ld.set_transition_condition writes a literal to).
 	FString ResultNodeName;
 	UEdGraphPin* ResultPin = nullptr;
 	if (USMTransitionGraph* TransitionGraph = Cast<USMTransitionGraph>(Graph))
@@ -5902,8 +5902,8 @@ FSMAssistOperationResult LD::Assist::CaptureLocalGraph(const TSharedRef<FJsonObj
 	InArgs->TryGetStringField(Args::Prefix, Prefix);
 
 	// Resolve asset_path + node_guid to the node's bound graph, normalizing reroutes to the primary
-	// transition exactly like sm.get_local_graph. Capturing this graph, rather than the root graph, is the
-	// whole difference between this op and sm.capture_graph_view.
+	// transition exactly like ld.get_local_graph. Capturing this graph, rather than the root graph, is the
+	// whole difference between this op and ld.capture_graph_view.
 	FString Error;
 	LD::Assist::Private::FResolvedLocalGraph Resolved;
 	if (!LD::Assist::Private::ResolveLocalGraph(InArgs, Resolved, Error))
@@ -6028,7 +6028,7 @@ FSMAssistOperationResult LD::Assist::AddLocalGraphNode(const TSharedRef<FJsonObj
 		if (!VarProperty)
 		{
 			return FSMAssistOperationResult::MakeError(FString::Printf(
-				TEXT("Variable '%s' was not found on the FSM blueprint. Add it with sm.add_sm_variable and sm.compile before referencing it."), *VarName));
+				TEXT("Variable '%s' was not found on the FSM blueprint. Add it with ld.add_sm_variable and ld.compile before referencing it."), *VarName));
 		}
 	}
 	else if (NodeClass->IsChildOf(UK2Node_DynamicCast::StaticClass()))
@@ -6113,7 +6113,7 @@ FSMAssistOperationResult LD::Assist::ConnectLocalGraphPins(const TSharedRef<FJso
 		|| !InArgs->TryGetStringField(Args::ToNodeId, ToNodeId) || ToNodeId.IsEmpty()
 		|| !InArgs->TryGetStringField(Args::ToPin, ToPinStr) || ToPinStr.IsEmpty())
 	{
-		return FSMAssistOperationResult::MakeError(TEXT("Requires 'from_node_id', 'from_pin', 'to_node_id', 'to_pin'. Node ids and pins accept the values from sm.get_local_graph (or a node guid / pin id)."));
+		return FSMAssistOperationResult::MakeError(TEXT("Requires 'from_node_id', 'from_pin', 'to_node_id', 'to_pin'. Node ids and pins accept the values from ld.get_local_graph (or a node guid / pin id)."));
 	}
 
 	UEdGraphNode* FromNode = LD::Assist::Private::FindNodeInGraphByIdOrGuid(Graph, FromNodeId);
@@ -6248,7 +6248,7 @@ FSMAssistOperationResult LD::Assist::RemoveLocalGraphNode(const TSharedRef<FJson
 	FString NodeId;
 	if (!InArgs->TryGetStringField(Args::NodeId, NodeId) || NodeId.IsEmpty())
 	{
-		return FSMAssistOperationResult::MakeError(TEXT("Requires 'node_id' (the node id from sm.get_local_graph, or a node guid)."));
+		return FSMAssistOperationResult::MakeError(TEXT("Requires 'node_id' (the node id from ld.get_local_graph, or a node guid)."));
 	}
 
 	UEdGraphNode* Node = LD::Assist::Private::FindNodeInGraphByIdOrGuid(Graph, NodeId);
@@ -6303,7 +6303,7 @@ FSMAssistOperationResult LD::Assist::DisconnectLocalGraphPins(const TSharedRef<F
 		|| !InArgs->TryGetStringField(Args::ToNodeId, ToNodeId) || ToNodeId.IsEmpty()
 		|| !InArgs->TryGetStringField(Args::ToPin, ToPinStr) || ToPinStr.IsEmpty())
 	{
-		return FSMAssistOperationResult::MakeError(TEXT("Requires 'from_node_id', 'from_pin', 'to_node_id', 'to_pin' (the same identifiers sm.connect_local_graph_pins uses)."));
+		return FSMAssistOperationResult::MakeError(TEXT("Requires 'from_node_id', 'from_pin', 'to_node_id', 'to_pin' (the same identifiers ld.connect_local_graph_pins uses)."));
 	}
 
 	UEdGraphNode* FromNode = LD::Assist::Private::FindNodeInGraphByIdOrGuid(Graph, FromNodeId);
@@ -6371,7 +6371,7 @@ FSMAssistOperationResult LD::Assist::SetLocalGraphNode(const TSharedRef<FJsonObj
 	FString NodeId;
 	if (!InArgs->TryGetStringField(Args::NodeId, NodeId) || NodeId.IsEmpty())
 	{
-		return FSMAssistOperationResult::MakeError(TEXT("Requires 'node_id' (the node id from sm.get_local_graph, or a node guid)."));
+		return FSMAssistOperationResult::MakeError(TEXT("Requires 'node_id' (the node id from ld.get_local_graph, or a node guid)."));
 	}
 
 	UEdGraphNode* Node = LD::Assist::Private::FindNodeInGraphByIdOrGuid(Graph, NodeId);
@@ -7177,7 +7177,7 @@ FSMAssistOperationResult LD::Assist::ConnectNodeVariableOutput(const TSharedRef<
 	if (!GraphGen->ConnectNodeVariableOutput(Blueprint, ConnectArgs))
 	{
 		return FSMAssistOperationResult::MakeError(
-			TEXT("ConnectNodeVariableOutput failed. See log for details. Likely causes: source variable not configured as Output (or destination not as Input); pin types incompatible; missing variable; or — for to_owning_blueprint_variable targets — the FSM blueprint has not been compiled since AddSMVariable (AddSMVariable does not auto-compile, call sm.compile to materialize the FProperty)."));
+			TEXT("ConnectNodeVariableOutput failed. See log for details. Likely causes: source variable not configured as Output (or destination not as Input); pin types incompatible; missing variable; or — for to_owning_blueprint_variable targets — the FSM blueprint has not been compiled since AddSMVariable (AddSMVariable does not auto-compile, call ld.compile to materialize the FProperty)."));
 	}
 
 	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();

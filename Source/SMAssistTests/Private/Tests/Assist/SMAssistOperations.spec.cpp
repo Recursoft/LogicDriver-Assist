@@ -76,7 +76,7 @@ BEGIN_DEFINE_SPEC(FAssistOperationsSpec, "LogicDriver.Assist",
 		Args->SetStringField(TEXT("path"), FAssetHandler::DefaultGamePath());
 
 		const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-			FName(TEXT("sm.create_blueprint")), Args);
+			FName(TEXT("ld.create_blueprint")), Args);
 		if (!Result.bSuccess || !Result.Payload.IsValid())
 		{
 			return FString();
@@ -126,7 +126,7 @@ BEGIN_DEFINE_SPEC(FAssistOperationsSpec, "LogicDriver.Assist",
 		}
 
 		const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-			FName(TEXT("sm.add_state")), Args);
+			FName(TEXT("ld.add_state")), Args);
 		if (!Result.bSuccess || !Result.Payload.IsValid())
 		{
 			return FString();
@@ -147,7 +147,7 @@ BEGIN_DEFINE_SPEC(FAssistOperationsSpec, "LogicDriver.Assist",
 
 		const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
 		Args->SetStringField(TEXT("asset_path"), InAssetPath);
-		return Subsystem->ExecuteOperation(FName(TEXT("sm.compile")), Args);
+		return Subsystem->ExecuteOperation(FName(TEXT("ld.compile")), Args);
 	}
 
 	void CompileExpectingNoErrors(const FString& InAssetPath, const TCHAR* InContext)
@@ -177,7 +177,7 @@ BEGIN_DEFINE_SPEC(FAssistOperationsSpec, "LogicDriver.Assist",
 		Args->SetStringField(TEXT("to_state_guid"), InToGuid);
 
 		const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-			FName(TEXT("sm.add_transition")), Args);
+			FName(TEXT("ld.add_transition")), Args);
 		if (!Result.bSuccess || !Result.Payload.IsValid())
 		{
 			return FString();
@@ -201,7 +201,7 @@ BEGIN_DEFINE_SPEC(FAssistOperationsSpec, "LogicDriver.Assist",
 		Args->SetStringField(TEXT("state_name"), InStateName);
 
 		const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-			FName(TEXT("sm.add_any_state")), Args);
+			FName(TEXT("ld.add_any_state")), Args);
 		if (!Result.bSuccess || !Result.Payload.IsValid())
 		{
 			return FString();
@@ -225,7 +225,7 @@ BEGIN_DEFINE_SPEC(FAssistOperationsSpec, "LogicDriver.Assist",
 		Args->SetStringField(TEXT("link_to_state_name"), InLinkToStateName);
 
 		const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-			FName(TEXT("sm.add_link_state")), Args);
+			FName(TEXT("ld.add_link_state")), Args);
 		if (!Result.bSuccess || !Result.Payload.IsValid())
 		{
 			return FString();
@@ -247,7 +247,7 @@ BEGIN_DEFINE_SPEC(FAssistOperationsSpec, "LogicDriver.Assist",
 		const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
 		Args->SetStringField(TEXT("asset_path"), InAssetPath);
 		const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-			FName(TEXT("sm.get_asset")), Args);
+			FName(TEXT("ld.get_asset")), Args);
 		if (!Result.bSuccess || !Result.Payload.IsValid())
 		{
 			return -1;
@@ -273,7 +273,7 @@ BEGIN_DEFINE_SPEC(FAssistOperationsSpec, "LogicDriver.Assist",
 		const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
 		Args->SetStringField(TEXT("asset_path"), InAssetPath);
 		const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-			FName(TEXT("sm.get_asset")), Args);
+			FName(TEXT("ld.get_asset")), Args);
 		if (!Result.bSuccess || !Result.Payload.IsValid())
 		{
 			return Guids;
@@ -294,7 +294,7 @@ BEGIN_DEFINE_SPEC(FAssistOperationsSpec, "LogicDriver.Assist",
 		return Guids;
 	}
 
-	// Reads a template property's exported value back through sm.get_node_properties, so mutation
+	// Reads a template property's exported value back through ld.get_node_properties, so mutation
 	// specs assert the asset state rather than the op's echoed arguments.
 	FString GetNodePropertyValue(const FString& InAssetPath, const FString& InNodeGuid, const FString& InPropertyName, int32 InStackIndex = INDEX_NONE)
 	{
@@ -313,7 +313,7 @@ BEGIN_DEFINE_SPEC(FAssistOperationsSpec, "LogicDriver.Assist",
 		}
 
 		const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-			FName(TEXT("sm.get_node_properties")), Args);
+			FName(TEXT("ld.get_node_properties")), Args);
 		if (!Result.bSuccess || !Result.Payload.IsValid())
 		{
 			return FString();
@@ -353,7 +353,7 @@ BEGIN_DEFINE_SPEC(FAssistOperationsSpec, "LogicDriver.Assist",
 		const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
 		Args->SetStringField(TEXT("asset_path"), InAssetPath);
 		const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-			FName(TEXT("sm.get_asset")), Args);
+			FName(TEXT("ld.get_asset")), Args);
 		if (!Result.bSuccess || !Result.Payload.IsValid())
 		{
 			return Guids;
@@ -389,7 +389,7 @@ BEGIN_DEFINE_SPEC(FAssistOperationsSpec, "LogicDriver.Assist",
 		const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
 		Args->SetStringField(TEXT("asset_path"), InAssetPath);
 		const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-			FName(TEXT("sm.get_asset")), Args);
+			FName(TEXT("ld.get_asset")), Args);
 		if (!Result.bSuccess || !Result.Payload.IsValid())
 		{
 			return FString();
@@ -427,7 +427,7 @@ BEGIN_DEFINE_SPEC(FAssistOperationsSpec, "LogicDriver.Assist",
 		const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
 		Args->SetStringField(TEXT("asset_path"), InAssetPath);
 		const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-			FName(TEXT("sm.get_asset")), Args);
+			FName(TEXT("ld.get_asset")), Args);
 		if (!Result.bSuccess || !Result.Payload.IsValid())
 		{
 			return TOptional<double>();
@@ -467,7 +467,7 @@ BEGIN_DEFINE_SPEC(FAssistOperationsSpec, "LogicDriver.Assist",
 		Args->SetStringField(TEXT("state_name"), InConduitName);
 
 		const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-			FName(TEXT("sm.add_conduit")), Args);
+			FName(TEXT("ld.add_conduit")), Args);
 		if (!Result.bSuccess || !Result.Payload.IsValid())
 		{
 			return FString();
@@ -486,14 +486,14 @@ BEGIN_DEFINE_SPEC(FAssistOperationsSpec, "LogicDriver.Assist",
 			return FString();
 		}
 
-		// sm.add_reference with no reference target mints an inline nested state machine node
+		// ld.add_reference with no reference target mints an inline nested state machine node
 		// (a USMGraphNode_StateMachineStateNode that is not yet a reference), the convertible input.
 		const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
 		Args->SetStringField(TEXT("asset_path"), InAssetPath);
 		Args->SetStringField(TEXT("state_name"), InStateName);
 
 		const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-			FName(TEXT("sm.add_reference")), Args);
+			FName(TEXT("ld.add_reference")), Args);
 		if (!Result.bSuccess || !Result.Payload.IsValid())
 		{
 			return FString();
@@ -606,11 +606,11 @@ void FAssistOperationsSpec::Define()
 
 		const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
 		const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-			FName(TEXT("sm.does_not_exist")), Args);
+			FName(TEXT("ld.does_not_exist")), Args);
 
 		TestFalse("Result is failure", Result.bSuccess);
 		TestTrue("Error message mentions operation name",
-			Result.ErrorMessage.Contains(TEXT("sm.does_not_exist")));
+			Result.ErrorMessage.Contains(TEXT("ld.does_not_exist")));
 	});
 
 	It("Dispatches through a registered handler and returns its payload", [this]()
@@ -648,8 +648,8 @@ void FAssistOperationsSpec::Define()
 			return;
 		}
 
-		const FSMAssistOperationInfo* Info = Subsystem->FindOperationInfo(FName(TEXT("sm.create_blueprint")));
-		if (!TestNotNull("sm.create_blueprint metadata available", Info))
+		const FSMAssistOperationInfo* Info = Subsystem->FindOperationInfo(FName(TEXT("ld.create_blueprint")));
+		if (!TestNotNull("ld.create_blueprint metadata available", Info))
 		{
 			return;
 		}
@@ -702,9 +702,9 @@ void FAssistOperationsSpec::Define()
 
 		const bool bFoundCreate = Infos.ContainsByPredicate([](const FSMAssistOperationInfo& InInfo)
 		{
-			return InInfo.Name == FName(TEXT("sm.create_blueprint"));
+			return InInfo.Name == FName(TEXT("ld.create_blueprint"));
 		});
-		TestTrue("sm.create_blueprint is included", bFoundCreate);
+		TestTrue("ld.create_blueprint is included", bFoundCreate);
 	});
 
 	It("Broadcasts OnOperationRegistered when a new op is registered", [this]()
@@ -789,7 +789,7 @@ void FAssistOperationsSpec::Define()
 		Subsystem->UnregisterOperation(OpName);
 	});
 
-	Describe("sm.create_blueprint", [this]()
+	Describe("ld.create_blueprint", [this]()
 	{
 		It("Fails when the 'name' arg is missing", [this]()
 		{
@@ -801,7 +801,7 @@ void FAssistOperationsSpec::Define()
 
 			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.create_blueprint")), Args);
+				FName(TEXT("ld.create_blueprint")), Args);
 
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error mentions 'name'", Result.ErrorMessage.Contains(TEXT("name")));
@@ -819,7 +819,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("name"), TEXT(""));
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.create_blueprint")), Args);
+				FName(TEXT("ld.create_blueprint")), Args);
 
 			TestFalse("Result is failure", Result.bSuccess);
 		});
@@ -839,7 +839,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("path"), FAssetHandler::DefaultGamePath());
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.create_blueprint")), Args);
+				FName(TEXT("ld.create_blueprint")), Args);
 
 			TestTrue("Result is success", Result.bSuccess);
 			if (!TestTrue("Payload populated", Result.Payload.IsValid()))
@@ -859,7 +859,7 @@ void FAssistOperationsSpec::Define()
 		});
 	});
 
-	Describe("sm.add_state", [this]()
+	Describe("ld.add_state", [this]()
 	{
 		It("Fails when 'asset_path' is missing", [this]()
 		{
@@ -871,7 +871,7 @@ void FAssistOperationsSpec::Define()
 
 			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.add_state")), Args);
+				FName(TEXT("ld.add_state")), Args);
 
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error mentions 'asset_path'", Result.ErrorMessage.Contains(TEXT("asset_path")));
@@ -889,7 +889,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("asset_path"), TEXT("/Game/DoesNotExist.DoesNotExist"));
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.add_state")), Args);
+				FName(TEXT("ld.add_state")), Args);
 
 			TestFalse("Result is failure", Result.bSuccess);
 		});
@@ -912,7 +912,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetNumberField(TEXT("position_y"), 50.0);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.add_state")), Args);
+				FName(TEXT("ld.add_state")), Args);
 
 			TestTrue("Result is success", Result.bSuccess);
 			if (!TestTrue("Payload populated", Result.Payload.IsValid()))
@@ -932,7 +932,7 @@ void FAssistOperationsSpec::Define()
 		});
 	});
 
-	Describe("sm.add_any_state", [this]()
+	Describe("ld.add_any_state", [this]()
 	{
 		// Regression: Any State has no bound graph, so the default USMStateInstance node class must
 		// not be forwarded to the graph schema action. A regression fires a non-fatal ensure at the
@@ -964,7 +964,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetNumberField(TEXT("position_y"), -200.0);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.add_any_state")), Args);
+				FName(TEXT("ld.add_any_state")), Args);
 
 			TestTrue("Result is success", Result.bSuccess);
 			if (!TestTrue("Payload populated", Result.Payload.IsValid()))
@@ -988,7 +988,7 @@ void FAssistOperationsSpec::Define()
 		});
 	});
 
-	Describe("sm.add_link_state", [this]()
+	Describe("ld.add_link_state", [this]()
 	{
 		// Regression: Link State, like Any State, has no bound graph and must not receive the default
 		// USMStateInstance node class. Same ensure caveat as add_any_state (both trip the same deduped
@@ -1017,7 +1017,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetNumberField(TEXT("position_y"), 200.0);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.add_link_state")), Args);
+				FName(TEXT("ld.add_link_state")), Args);
 
 			TestTrue("Result is success", Result.bSuccess);
 			if (!TestTrue("Payload populated", Result.Payload.IsValid()))
@@ -1037,7 +1037,7 @@ void FAssistOperationsSpec::Define()
 		});
 	});
 
-	Describe("sm.add_transition", [this]()
+	Describe("ld.add_transition", [this]()
 	{
 		It("Fails when guids are missing", [this]()
 		{
@@ -1051,7 +1051,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("asset_path"), TEXT("/Game/Whatever.Whatever"));
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.add_transition")), Args);
+				FName(TEXT("ld.add_transition")), Args);
 
 			TestFalse("Result is failure", Result.bSuccess);
 		});
@@ -1080,7 +1080,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("to_state_guid"), ToGuid);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.add_transition")), Args);
+				FName(TEXT("ld.add_transition")), Args);
 
 			TestTrue("Result is success", Result.bSuccess);
 			if (!TestTrue("Payload populated", Result.Payload.IsValid()))
@@ -1116,7 +1116,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("to_state_guid"), ToGuid);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.add_transition")), Args);
+				FName(TEXT("ld.add_transition")), Args);
 
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error mentions 'from'", Result.ErrorMessage.Contains(TEXT("from")));
@@ -1151,7 +1151,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("to_state_guid"), DestGuid);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.add_transition")), Args);
+				FName(TEXT("ld.add_transition")), Args);
 
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error identifies the Link State endpoint",
@@ -1186,7 +1186,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("to_state_guid"), AnyGuid);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.add_transition")), Args);
+				FName(TEXT("ld.add_transition")), Args);
 
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error identifies the Any State endpoint",
@@ -1225,7 +1225,7 @@ void FAssistOperationsSpec::Define()
 			CollapseArgs->SetArrayField(TEXT("node_guids"), NodeGuids);
 
 			const FSMAssistOperationResult CollapseResult = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.collapse_to_state_machine")), CollapseArgs);
+				FName(TEXT("ld.collapse_to_state_machine")), CollapseArgs);
 			if (!TestTrue("States collapsed into a nested state machine", CollapseResult.bSuccess))
 			{
 				return;
@@ -1237,7 +1237,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("to_state_guid"), BGuid);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.add_transition")), Args);
+				FName(TEXT("ld.add_transition")), Args);
 
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error identifies the graph mismatch",
@@ -1245,7 +1245,7 @@ void FAssistOperationsSpec::Define()
 		});
 	});
 
-	Describe("sm.list_assets", [this]()
+	Describe("ld.list_assets", [this]()
 	{
 		It("Lists assets under a path prefix", [this]()
 		{
@@ -1261,7 +1261,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("path_prefix"), FAssetHandler::DefaultGamePath());
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.list_assets")), Args);
+				FName(TEXT("ld.list_assets")), Args);
 
 			TestTrue("Result is success", Result.bSuccess);
 			if (!TestTrue("Payload populated", Result.Payload.IsValid()))
@@ -1297,7 +1297,7 @@ void FAssistOperationsSpec::Define()
 		});
 	});
 
-	Describe("sm.get_asset", [this]()
+	Describe("ld.get_asset", [this]()
 	{
 		It("Returns the asset structure including states and transitions", [this]()
 		{
@@ -1324,7 +1324,7 @@ void FAssistOperationsSpec::Define()
 				TransitionArgs->SetStringField(TEXT("from_state_guid"), FromGuid);
 				TransitionArgs->SetStringField(TEXT("to_state_guid"), ToGuid);
 				const FSMAssistOperationResult TransitionResult = Subsystem->ExecuteOperation(
-					FName(TEXT("sm.add_transition")), TransitionArgs);
+					FName(TEXT("ld.add_transition")), TransitionArgs);
 				TestTrue("Transition added", TransitionResult.bSuccess);
 				if (TransitionResult.Payload.IsValid())
 				{
@@ -1343,7 +1343,7 @@ void FAssistOperationsSpec::Define()
 				ConditionArgs->SetStringField(TEXT("transition_guid"), TransitionGuid);
 				ConditionArgs->SetBoolField(TEXT("condition"), true);
 				const FSMAssistOperationResult ConditionResult = Subsystem->ExecuteOperation(
-					FName(TEXT("sm.set_transition_condition")), ConditionArgs);
+					FName(TEXT("ld.set_transition_condition")), ConditionArgs);
 				TestTrue("Condition set", ConditionResult.bSuccess);
 			}
 
@@ -1351,7 +1351,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("asset_path"), AssetPath);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.get_asset")), Args);
+				FName(TEXT("ld.get_asset")), Args);
 
 			TestTrue("Result is success", Result.bSuccess);
 			if (!TestTrue("Payload populated", Result.Payload.IsValid()))
@@ -1401,10 +1401,10 @@ void FAssistOperationsSpec::Define()
 				ConditionArgs->SetStringField(TEXT("asset_path"), AssetPath);
 				ConditionArgs->SetStringField(TEXT("transition_guid"), TransitionGuid);
 				ConditionArgs->SetBoolField(TEXT("condition"), false);
-				Subsystem->ExecuteOperation(FName(TEXT("sm.set_transition_condition")), ConditionArgs);
+				Subsystem->ExecuteOperation(FName(TEXT("ld.set_transition_condition")), ConditionArgs);
 
 				const FSMAssistOperationResult FalseResult = Subsystem->ExecuteOperation(
-					FName(TEXT("sm.get_asset")), Args);
+					FName(TEXT("ld.get_asset")), Args);
 				const TArray<TSharedPtr<FJsonValue>>* FalseTransitions = nullptr;
 				if (FalseResult.Payload.IsValid()
 					&& FalseResult.Payload->TryGetArrayField(TEXT("transitions"), FalseTransitions)
@@ -1446,7 +1446,7 @@ void FAssistOperationsSpec::Define()
 				TransitionArgs->SetStringField(TEXT("from_state_guid"), FromGuid);
 				TransitionArgs->SetStringField(TEXT("to_state_guid"), ToGuid);
 				const FSMAssistOperationResult TransitionResult = Subsystem->ExecuteOperation(
-					FName(TEXT("sm.add_transition")), TransitionArgs);
+					FName(TEXT("ld.add_transition")), TransitionArgs);
 				TestTrue("Transition added", TransitionResult.bSuccess);
 				if (TransitionResult.Payload.IsValid())
 				{
@@ -1467,7 +1467,7 @@ void FAssistOperationsSpec::Define()
 				EventArgs->SetBoolField(TEXT("event_triggers_targeted_update"), true);
 				EventArgs->SetBoolField(TEXT("event_triggers_full_update"), true);
 				const FSMAssistOperationResult EventResult = Subsystem->ExecuteOperation(
-					FName(TEXT("sm.configure_transition_event")), EventArgs);
+					FName(TEXT("ld.configure_transition_event")), EventArgs);
 				TestTrue("Event configured", EventResult.bSuccess);
 			}
 
@@ -1475,7 +1475,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("asset_path"), AssetPath);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.get_asset")), Args);
+				FName(TEXT("ld.get_asset")), Args);
 
 			if (!TestTrue("Result is success", Result.bSuccess)
 				|| !TestTrue("Payload populated", Result.Payload.IsValid()))
@@ -1511,11 +1511,11 @@ void FAssistOperationsSpec::Define()
 				PropArgs->SetStringField(TEXT("property_name"), TEXT("bDisableTickTransitionEvaluation"));
 				PropArgs->SetBoolField(TEXT("value"), true);
 				const FSMAssistOperationResult PropResult = Subsystem->ExecuteOperation(
-					FName(TEXT("sm.set_node_property")), PropArgs);
+					FName(TEXT("ld.set_node_property")), PropArgs);
 				TestTrue("From-state tick evaluation disabled", PropResult.bSuccess);
 
 				const FSMAssistOperationResult EventOnlyResult = Subsystem->ExecuteOperation(
-					FName(TEXT("sm.get_asset")), Args);
+					FName(TEXT("ld.get_asset")), Args);
 				const TArray<TSharedPtr<FJsonValue>>* EventOnlyTransitions = nullptr;
 				if (EventOnlyResult.Payload.IsValid()
 					&& EventOnlyResult.Payload->TryGetArrayField(TEXT("transitions"), EventOnlyTransitions)
@@ -1568,13 +1568,13 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("asset_path"), TEXT("/Game/DoesNotExist.DoesNotExist"));
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.get_asset")), Args);
+				FName(TEXT("ld.get_asset")), Args);
 
 			TestFalse("Result is failure", Result.bSuccess);
 		});
 	});
 
-	Describe("sm.remove_node", [this]()
+	Describe("ld.remove_node", [this]()
 	{
 		It("Removes a transition by guid", [this]()
 		{
@@ -1601,7 +1601,7 @@ void FAssistOperationsSpec::Define()
 				TransitionArgs->SetStringField(TEXT("from_state_guid"), FromGuid);
 				TransitionArgs->SetStringField(TEXT("to_state_guid"), ToGuid);
 				const FSMAssistOperationResult AddResult = Subsystem->ExecuteOperation(
-					FName(TEXT("sm.add_transition")), TransitionArgs);
+					FName(TEXT("ld.add_transition")), TransitionArgs);
 				if (!TestTrue("Transition added", AddResult.bSuccess && AddResult.Payload.IsValid()))
 				{
 					return;
@@ -1614,13 +1614,13 @@ void FAssistOperationsSpec::Define()
 			RemoveArgs->SetStringField(TEXT("node_guid"), TransitionGuid);
 
 			const FSMAssistOperationResult RemoveResult = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.remove_node")), RemoveArgs);
+				FName(TEXT("ld.remove_node")), RemoveArgs);
 			TestTrue("Remove result is success", RemoveResult.bSuccess);
 
 			const TSharedRef<FJsonObject> GetArgs = MakeShared<FJsonObject>();
 			GetArgs->SetStringField(TEXT("asset_path"), AssetPath);
 			const FSMAssistOperationResult GetResult = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.get_asset")), GetArgs);
+				FName(TEXT("ld.get_asset")), GetArgs);
 
 			const TArray<TSharedPtr<FJsonValue>>* Transitions = nullptr;
 			if (GetResult.Payload.IsValid()
@@ -1645,7 +1645,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("node_guid"), FGuid::NewGuid().ToString());
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.remove_node")), Args);
+				FName(TEXT("ld.remove_node")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 		});
 
@@ -1664,13 +1664,13 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("node_guid"), TEXT("not-a-guid"));
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.remove_node")), Args);
+				FName(TEXT("ld.remove_node")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error mentions the bad guid", Result.ErrorMessage.Contains(TEXT("not-a-guid")));
 		});
 	});
 
-	Describe("sm.set_node_property", [this]()
+	Describe("ld.set_node_property", [this]()
 	{
 		It("Fails when the property does not exist on the node", [this]()
 		{
@@ -1698,7 +1698,7 @@ void FAssistOperationsSpec::Define()
 				EAutomationExpectedErrorFlags::Contains, 1);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.set_node_property")), Args);
+				FName(TEXT("ld.set_node_property")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error names the property", Result.ErrorMessage.Contains(TEXT("DefinitelyNotAProperty")));
 		});
@@ -1726,7 +1726,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetObjectField(TEXT("value"), MakeShared<FJsonObject>());
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.set_node_property")), Args);
+				FName(TEXT("ld.set_node_property")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error mentions value types", Result.ErrorMessage.Contains(TEXT("Value must be")));
 		});
@@ -1760,7 +1760,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetArrayField(TEXT("value"), Elements);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.set_node_property")), Args);
+				FName(TEXT("ld.set_node_property")), Args);
 			TestTrue("Result is success", Result.bSuccess);
 			if (!TestTrue("Payload populated", Result.Payload.IsValid()))
 			{
@@ -1807,7 +1807,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetNumberField(TEXT("array_index"), 2);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.set_node_property")), Args);
+				FName(TEXT("ld.set_node_property")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error mentions array_index",
 				Result.ErrorMessage.Contains(TEXT("array_index")));
@@ -1837,7 +1837,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetNumberField(TEXT("array_index"), 2);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.set_node_property")), Args);
+				FName(TEXT("ld.set_node_property")), Args);
 			TestFalse("Result is failure rather than a crash", Result.bSuccess);
 			TestTrue("Error reports the out-of-range index",
 				Result.ErrorMessage.Contains(TEXT("out of range")));
@@ -1866,7 +1866,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("value"), FGuid::NewGuid().ToString());
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.set_node_property")), Args);
+				FName(TEXT("ld.set_node_property")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error names the internal field",
 				Result.ErrorMessage.Contains(TEXT("internal graph-node field")));
@@ -1895,7 +1895,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("value"), TEXT("None"));
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.set_node_property")), Args);
+				FName(TEXT("ld.set_node_property")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error names the internal field",
 				Result.ErrorMessage.Contains(TEXT("internal graph-node field")));
@@ -1924,7 +1924,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("value"), TEXT("()"));
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.set_node_property")), Args);
+				FName(TEXT("ld.set_node_property")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error names the internal field",
 				Result.ErrorMessage.Contains(TEXT("internal graph-node field")));
@@ -1953,7 +1953,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("value"), TEXT("()"));
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.set_node_property")), Args);
+				FName(TEXT("ld.set_node_property")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error names the internal field",
 				Result.ErrorMessage.Contains(TEXT("internal graph-node field")));
@@ -1982,7 +1982,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("value"), TEXT("banana"));
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.set_node_property")), Args);
+				FName(TEXT("ld.set_node_property")), Args);
 			TestFalse("Result is failure rather than a silent no-op success", Result.bSuccess);
 			TestTrue("Error reports the parse failure",
 				Result.ErrorMessage.Contains(TEXT("Could not parse")));
@@ -2011,7 +2011,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("value"), TEXT("128"));
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.set_node_property")), Args);
+				FName(TEXT("ld.set_node_property")), Args);
 			TestTrue("Result is success", Result.bSuccess);
 
 			const TOptional<double> PositionX = GetRootStatePositionX(AssetPath, StateGuid);
@@ -2044,7 +2044,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("value"), TEXT("0x10"));
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.set_node_property")), Args);
+				FName(TEXT("ld.set_node_property")), Args);
 			TestTrue("Result is success", Result.bSuccess);
 
 			const TOptional<double> PositionX = GetRootStatePositionX(AssetPath, StateGuid);
@@ -2081,7 +2081,7 @@ void FAssistOperationsSpec::Define()
 			SetArgs->SetStringField(TEXT("property_name"), TEXT("StringArray"));
 			SetArgs->SetArrayField(TEXT("value"), Elements);
 			const FSMAssistOperationResult SetResult = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.set_node_property")), SetArgs);
+				FName(TEXT("ld.set_node_property")), SetArgs);
 			if (!TestTrue("Seed array succeeded", SetResult.bSuccess))
 			{
 				return;
@@ -2095,7 +2095,7 @@ void FAssistOperationsSpec::Define()
 			RemoveArgs->SetNumberField(TEXT("array_index"), 0);
 
 			const FSMAssistOperationResult RemoveResult = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.set_node_property")), RemoveArgs);
+				FName(TEXT("ld.set_node_property")), RemoveArgs);
 			TestTrue("Remove result is success", RemoveResult.bSuccess);
 			if (!TestTrue("Remove payload populated", RemoveResult.Payload.IsValid()))
 			{
@@ -2135,7 +2135,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("array_action"), TEXT("remove"));
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.set_node_property")), Args);
+				FName(TEXT("ld.set_node_property")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error mentions array_index",
 				Result.ErrorMessage.Contains(TEXT("array_index")));
@@ -2168,7 +2168,7 @@ void FAssistOperationsSpec::Define()
 			SeedArgs->SetStringField(TEXT("property_name"), TEXT("StringArray"));
 			SeedArgs->SetArrayField(TEXT("value"), Elements);
 			if (!TestTrue("Seed array succeeded",
-				Subsystem->ExecuteOperation(FName(TEXT("sm.set_node_property")), SeedArgs).bSuccess))
+				Subsystem->ExecuteOperation(FName(TEXT("ld.set_node_property")), SeedArgs).bSuccess))
 			{
 				return;
 			}
@@ -2180,7 +2180,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("array_action"), TEXT("clear"));
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.set_node_property")), Args);
+				FName(TEXT("ld.set_node_property")), Args);
 			TestTrue("Result is success", Result.bSuccess);
 			if (!TestTrue("Payload populated", Result.Payload.IsValid()))
 			{
@@ -2199,7 +2199,7 @@ void FAssistOperationsSpec::Define()
 			AnchorArgs->SetStringField(TEXT("property_name"), TEXT("SingleString"));
 			AnchorArgs->SetStringField(TEXT("value"), TEXT("anchor"));
 			TestTrue("Anchor property written",
-				Subsystem->ExecuteOperation(FName(TEXT("sm.set_node_property")), AnchorArgs).bSuccess);
+				Subsystem->ExecuteOperation(FName(TEXT("ld.set_node_property")), AnchorArgs).bSuccess);
 			TestEqual("Readback path proven by the anchor property",
 				GetNodePropertyValue(AssetPath, StateGuid, TEXT("SingleString")), FString(TEXT("anchor")));
 
@@ -2233,14 +2233,14 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("value"), TEXT("x"));
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.set_node_property")), Args);
+				FName(TEXT("ld.set_node_property")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error mentions unknown action",
 				Result.ErrorMessage.Contains(TEXT("array_action")));
 		});
 	});
 
-	Describe("sm.compile", [this]()
+	Describe("ld.compile", [this]()
 	{
 		It("Compiles a freshly created blueprint successfully", [this]()
 		{
@@ -2258,7 +2258,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("asset_path"), AssetPath);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.compile")), Args);
+				FName(TEXT("ld.compile")), Args);
 			TestTrue("Result is success", Result.bSuccess);
 			if (!TestTrue("Payload populated", Result.Payload.IsValid()))
 			{
@@ -2285,7 +2285,7 @@ void FAssistOperationsSpec::Define()
 
 			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.compile")), Args);
+				FName(TEXT("ld.compile")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 		});
 
@@ -2306,7 +2306,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("asset_path"), NodeBP->GetPathName());
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.compile")), Args);
+				FName(TEXT("ld.compile")), Args);
 			TestTrue("Result is success", Result.bSuccess);
 			if (TestTrue("Payload populated", Result.Payload.IsValid()))
 			{
@@ -2338,7 +2338,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("asset_path"), NodeBP->GetPathName());
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.compile")), Args);
+				FName(TEXT("ld.compile")), Args);
 			TestTrue("Result is success", Result.bSuccess);
 			if (TestTrue("Payload populated", Result.Payload.IsValid()))
 			{
@@ -2370,7 +2370,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("asset_path"), ActorBP->GetPathName());
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.compile")), Args);
+				FName(TEXT("ld.compile")), Args);
 			TestTrue("Result is success", Result.bSuccess);
 			if (TestTrue("Payload populated", Result.Payload.IsValid()))
 			{
@@ -2393,14 +2393,14 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("asset_path"), TEXT("/Engine/EngineMaterials/DefaultMaterial.DefaultMaterial"));
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.compile")), Args);
+				FName(TEXT("ld.compile")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error mentions blueprint requirement",
 				Result.ErrorMessage.Contains(TEXT("not a blueprint")));
 		});
 	});
 
-	Describe("sm.rename_state", [this]()
+	Describe("ld.rename_state", [this]()
 	{
 		It("Renames a state node and returns the new name", [this]()
 		{
@@ -2424,7 +2424,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("new_name"), TEXT("NewShiny"));
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.rename_state")), Args);
+				FName(TEXT("ld.rename_state")), Args);
 			TestTrue("Result is success", Result.bSuccess);
 			if (!TestTrue("Payload populated", Result.Payload.IsValid()))
 			{
@@ -2453,12 +2453,12 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("new_name"), TEXT("Anything"));
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.rename_state")), Args);
+				FName(TEXT("ld.rename_state")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 		});
 	});
 
-	Describe("sm.set_initial_state", [this]()
+	Describe("ld.set_initial_state", [this]()
 	{
 		It("Rewires the entry pin to the target state", [this]()
 		{
@@ -2482,7 +2482,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("state_guid"), SecondGuid);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.set_initial_state")), Args);
+				FName(TEXT("ld.set_initial_state")), Args);
 			TestTrue("Result is success", Result.bSuccess);
 
 			// Compile success alone is insensitive to the rewire; assert the entry actually moved.
@@ -2493,7 +2493,7 @@ void FAssistOperationsSpec::Define()
 			const TSharedRef<FJsonObject> CompileArgs = MakeShared<FJsonObject>();
 			CompileArgs->SetStringField(TEXT("asset_path"), AssetPath);
 			const FSMAssistOperationResult CompileResult = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.compile")), CompileArgs);
+				FName(TEXT("ld.compile")), CompileArgs);
 			TestTrue("Compile after re-wire succeeded", CompileResult.bSuccess);
 		});
 
@@ -2512,7 +2512,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("state_guid"), FGuid::NewGuid().ToString());
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.set_initial_state")), Args);
+				FName(TEXT("ld.set_initial_state")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 		});
 
@@ -2541,7 +2541,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("state_guid"), AnyGuid);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.set_initial_state")), Args);
+				FName(TEXT("ld.set_initial_state")), Args);
 
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error identifies the Any State target",
@@ -2552,7 +2552,7 @@ void FAssistOperationsSpec::Define()
 		});
 	});
 
-	Describe("sm.add_state_stack", [this]()
+	Describe("ld.add_state_stack", [this]()
 	{
 		It("Adds a state stack entry and returns its index and template guid", [this]()
 		{
@@ -2577,7 +2577,7 @@ void FAssistOperationsSpec::Define()
 				USMAssistArrayStateInstance::StaticClass()->GetPathName());
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.add_state_stack")), Args);
+				FName(TEXT("ld.add_state_stack")), Args);
 			TestTrue("Result is success", Result.bSuccess);
 			if (!TestTrue("Payload populated", Result.Payload.IsValid()))
 			{
@@ -2595,7 +2595,7 @@ void FAssistOperationsSpec::Define()
 			TestFalse("Template guid is populated", TemplateGuid.IsEmpty());
 		});
 
-		It("Targets a stack template when sm.set_node_property passes stack_index", [this]()
+		It("Targets a stack template when ld.set_node_property passes stack_index", [this]()
 		{
 			const FString AssetPath = CreateTransientBlueprint();
 			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
@@ -2618,7 +2618,7 @@ void FAssistOperationsSpec::Define()
 				USMAssistArrayStateInstance::StaticClass()->GetPathName());
 
 			const FSMAssistOperationResult StackResult = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.add_state_stack")), StackArgs);
+				FName(TEXT("ld.add_state_stack")), StackArgs);
 			if (!TestTrue("Stack add succeeded", StackResult.bSuccess))
 			{
 				return;
@@ -2632,7 +2632,7 @@ void FAssistOperationsSpec::Define()
 			PropArgs->SetNumberField(TEXT("stack_index"), 0);
 
 			const FSMAssistOperationResult PropResult = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.set_node_property")), PropArgs);
+				FName(TEXT("ld.set_node_property")), PropArgs);
 			TestTrue("Set via stack_index succeeded", PropResult.bSuccess);
 			if (!TestTrue("Payload populated", PropResult.Payload.IsValid()))
 			{
@@ -2675,14 +2675,14 @@ void FAssistOperationsSpec::Define()
 			Args->SetNumberField(TEXT("stack_index"), 5);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.set_node_property")), Args);
+				FName(TEXT("ld.set_node_property")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error names stack_index",
 				Result.ErrorMessage.Contains(TEXT("stack template at index")));
 		});
 	});
 
-	Describe("sm.add_transition_stack", [this]()
+	Describe("ld.add_transition_stack", [this]()
 	{
 		It("Adds a transition stack entry and returns its index and template guid", [this]()
 		{
@@ -2709,7 +2709,7 @@ void FAssistOperationsSpec::Define()
 				TransitionArgs->SetStringField(TEXT("from_state_guid"), FromGuid);
 				TransitionArgs->SetStringField(TEXT("to_state_guid"), ToGuid);
 				const FSMAssistOperationResult TransitionResult = Subsystem->ExecuteOperation(
-					FName(TEXT("sm.add_transition")), TransitionArgs);
+					FName(TEXT("ld.add_transition")), TransitionArgs);
 				if (!TestTrue("Transition added", TransitionResult.bSuccess)
 					|| !TestTrue("Payload populated", TransitionResult.Payload.IsValid()))
 				{
@@ -2726,7 +2726,7 @@ void FAssistOperationsSpec::Define()
 				USMAssistTestTransitionInstance::StaticClass()->GetPathName());
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.add_transition_stack")), Args);
+				FName(TEXT("ld.add_transition_stack")), Args);
 			TestTrue("Result is success", Result.bSuccess);
 			if (!TestTrue("Payload populated", Result.Payload.IsValid()))
 			{
@@ -2761,7 +2761,7 @@ void FAssistOperationsSpec::Define()
 				USMAssistTestTransitionInstance::StaticClass()->GetPathName());
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.add_transition_stack")), Args);
+				FName(TEXT("ld.add_transition_stack")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 		});
 
@@ -2783,7 +2783,7 @@ void FAssistOperationsSpec::Define()
 				Args->SetStringField(TEXT("state_name"), TEXT("Start"));
 				Args->SetBoolField(TEXT("is_entry"), true);
 				const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-					FName(TEXT("sm.add_state")), Args);
+					FName(TEXT("ld.add_state")), Args);
 				if (!TestTrue("Start state added", Result.bSuccess && Result.Payload.IsValid()))
 				{
 					return;
@@ -2807,7 +2807,7 @@ void FAssistOperationsSpec::Define()
 				Args->SetStringField(TEXT("transition_class"),
 					USMAssistTestTransitionInstance::StaticClass()->GetPathName());
 				const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-					FName(TEXT("sm.add_transition")), Args);
+					FName(TEXT("ld.add_transition")), Args);
 				if (!TestTrue("Transition added", Result.bSuccess && Result.Payload.IsValid()))
 				{
 					return;
@@ -2823,7 +2823,7 @@ void FAssistOperationsSpec::Define()
 				Args->SetStringField(TEXT("transition_class"),
 					USMAssistTestTransitionInstance::StaticClass()->GetPathName());
 				const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-					FName(TEXT("sm.add_transition_stack")), Args);
+					FName(TEXT("ld.add_transition_stack")), Args);
 				if (!TestTrue("Stack entry added", Result.bSuccess))
 				{
 					return;
@@ -2871,7 +2871,7 @@ void FAssistOperationsSpec::Define()
 				Args->SetStringField(TEXT("transition_class"),
 					USMAssistTestTransitionInstance::StaticClass()->GetPathName());
 				const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-					FName(TEXT("sm.add_transition")), Args);
+					FName(TEXT("ld.add_transition")), Args);
 				if (!TestTrue("Transition added", Result.bSuccess && Result.Payload.IsValid()))
 				{
 					return;
@@ -2886,7 +2886,7 @@ void FAssistOperationsSpec::Define()
 				Args->SetStringField(TEXT("transition_class"),
 					USMAssistFalseTransitionInstance::StaticClass()->GetPathName());
 				const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-					FName(TEXT("sm.add_transition_stack")), Args);
+					FName(TEXT("ld.add_transition_stack")), Args);
 				if (!TestTrue("False stack entry added", Result.bSuccess))
 				{
 					return;
@@ -2913,7 +2913,7 @@ void FAssistOperationsSpec::Define()
 		});
 	});
 
-	Describe("sm.add_conduit", [this]()
+	Describe("ld.add_conduit", [this]()
 	{
 		It("Fails when 'asset_path' is missing", [this]()
 		{
@@ -2925,7 +2925,7 @@ void FAssistOperationsSpec::Define()
 
 			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.add_conduit")), Args);
+				FName(TEXT("ld.add_conduit")), Args);
 
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error mentions 'asset_path'", Result.ErrorMessage.Contains(TEXT("asset_path")));
@@ -2947,7 +2947,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetBoolField(TEXT("eval_with_transitions"), true);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.add_conduit")), Args);
+				FName(TEXT("ld.add_conduit")), Args);
 
 			TestTrue("Result is success", Result.bSuccess);
 			if (!TestTrue("Payload populated", Result.Payload.IsValid()))
@@ -2987,14 +2987,14 @@ void FAssistOperationsSpec::Define()
 				USMAssistArrayStateInstance::StaticClass()->GetPathName());
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.add_conduit")), Args);
+				FName(TEXT("ld.add_conduit")), Args);
 
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error mentions conduit", Result.ErrorMessage.Contains(TEXT("Conduit")));
 		});
 	});
 
-	Describe("sm.add_reference", [this]()
+	Describe("ld.add_reference", [this]()
 	{
 		It("Adds a reference state with no target when 'reference_asset_path' is omitted", [this]()
 		{
@@ -3010,7 +3010,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("asset_path"), AssetPath);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.add_reference")), Args);
+				FName(TEXT("ld.add_reference")), Args);
 
 			TestTrue("Result is success", Result.bSuccess);
 			if (TestTrue("Payload present", Result.Payload.IsValid()))
@@ -3040,7 +3040,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("state_name"), TEXT("RefNode"));
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.add_reference")), Args);
+				FName(TEXT("ld.add_reference")), Args);
 
 			TestTrue("Result is success", Result.bSuccess);
 			if (!TestTrue("Payload populated", Result.Payload.IsValid()))
@@ -3075,7 +3075,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("reference_asset_path"), AssetPath);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.add_reference")), Args);
+				FName(TEXT("ld.add_reference")), Args);
 
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error mentions self-reference",
@@ -3083,7 +3083,7 @@ void FAssistOperationsSpec::Define()
 		});
 	});
 
-	Describe("sm.get_node_properties", [this]()
+	Describe("ld.get_node_properties", [this]()
 	{
 		It("Fails when 'node_guid' is missing", [this]()
 		{
@@ -3099,7 +3099,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("asset_path"), AssetPath);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.get_node_properties")), Args);
+				FName(TEXT("ld.get_node_properties")), Args);
 
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error mentions 'node_guid'", Result.ErrorMessage.Contains(TEXT("node_guid")));
@@ -3127,7 +3127,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("node_guid"), StateGuid);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.get_node_properties")), Args);
+				FName(TEXT("ld.get_node_properties")), Args);
 
 			TestTrue("Result is success", Result.bSuccess);
 			if (!TestTrue("Payload populated", Result.Payload.IsValid()))
@@ -3193,7 +3193,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetNumberField(TEXT("max_depth"), 2);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.get_node_properties")), Args);
+				FName(TEXT("ld.get_node_properties")), Args);
 
 			TestTrue("Result is success", Result.bSuccess);
 			if (!TestTrue("Payload populated", Result.Payload.IsValid()))
@@ -3308,7 +3308,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("node_guid"), StateGuid);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.get_node_properties")), Args);
+				FName(TEXT("ld.get_node_properties")), Args);
 
 			if (!TestTrue("Result is success", Result.bSuccess) || !TestTrue("Payload populated", Result.Payload.IsValid()))
 			{
@@ -3353,7 +3353,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("node_guid"), FGuid::NewGuid().ToString());
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.get_node_properties")), Args);
+				FName(TEXT("ld.get_node_properties")), Args);
 
 			TestFalse("Result is failure", Result.bSuccess);
 		});
@@ -3381,7 +3381,7 @@ void FAssistOperationsSpec::Define()
 				USMAssistArrayStateInstance::StaticClass()->GetPathName());
 
 			const FSMAssistOperationResult StackResult = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.add_state_stack")), StackArgs);
+				FName(TEXT("ld.add_state_stack")), StackArgs);
 			if (!TestTrue("Stack add succeeded", StackResult.bSuccess))
 			{
 				return;
@@ -3393,7 +3393,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetNumberField(TEXT("stack_index"), 0);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.get_node_properties")), Args);
+				FName(TEXT("ld.get_node_properties")), Args);
 
 			TestTrue("Result is success", Result.bSuccess);
 			if (!TestTrue("Payload populated", Result.Payload.IsValid()))
@@ -3408,7 +3408,7 @@ void FAssistOperationsSpec::Define()
 		});
 	});
 
-	Describe("sm.set_transition_condition", [this]()
+	Describe("ld.set_transition_condition", [this]()
 	{
 		It("Fails when 'transition_guid' is missing", [this]()
 		{
@@ -3425,7 +3425,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetBoolField(TEXT("condition"), true);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.set_transition_condition")), Args);
+				FName(TEXT("ld.set_transition_condition")), Args);
 
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error mentions 'transition_guid'",
@@ -3447,7 +3447,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("transition_guid"), FGuid::NewGuid().ToString());
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.set_transition_condition")), Args);
+				FName(TEXT("ld.set_transition_condition")), Args);
 
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error mentions 'condition'", Result.ErrorMessage.Contains(TEXT("condition")));
@@ -3475,7 +3475,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetBoolField(TEXT("condition"), true);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.set_transition_condition")), Args);
+				FName(TEXT("ld.set_transition_condition")), Args);
 
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error mentions 'transition edge'",
@@ -3499,7 +3499,7 @@ void FAssistOperationsSpec::Define()
 				Args->SetStringField(TEXT("state_name"), TEXT("Start"));
 				Args->SetBoolField(TEXT("is_entry"), true);
 				const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-					FName(TEXT("sm.add_state")), Args);
+					FName(TEXT("ld.add_state")), Args);
 				if (!TestTrue("Start state added", Result.bSuccess && Result.Payload.IsValid()))
 				{
 					return;
@@ -3520,7 +3520,7 @@ void FAssistOperationsSpec::Define()
 				Args->SetStringField(TEXT("from_state_guid"), StartGuid);
 				Args->SetStringField(TEXT("to_state_guid"), EndGuid);
 				const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-					FName(TEXT("sm.add_transition")), Args);
+					FName(TEXT("ld.add_transition")), Args);
 				if (!TestTrue("Transition added", Result.bSuccess && Result.Payload.IsValid()))
 				{
 					return;
@@ -3534,7 +3534,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetBoolField(TEXT("condition"), true);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.set_transition_condition")), Args);
+				FName(TEXT("ld.set_transition_condition")), Args);
 
 			TestTrue("Result is success", Result.bSuccess);
 			if (!TestTrue("Payload populated", Result.Payload.IsValid()))
@@ -3560,7 +3560,7 @@ void FAssistOperationsSpec::Define()
 		});
 	});
 
-	Describe("sm.split_pin / sm.recombine_pin", [this]()
+	Describe("ld.split_pin / ld.recombine_pin", [this]()
 	{
 		auto AddSplitState = [this](const FString& InAssetPath) -> FString
 		{
@@ -3576,7 +3576,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("state_class"), USMAssistSplitTestState::StaticClass()->GetPathName());
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.add_state")), Args);
+				FName(TEXT("ld.add_state")), Args);
 			if (!Result.bSuccess || !Result.Payload.IsValid())
 			{
 				return FString();
@@ -3598,7 +3598,7 @@ void FAssistOperationsSpec::Define()
 			{
 				Args->SetStringField(TEXT("pin_id"), InPinId);
 			}
-			return Subsystem->ExecuteOperation(FName(TEXT("sm.split_pin")), Args);
+			return Subsystem->ExecuteOperation(FName(TEXT("ld.split_pin")), Args);
 		};
 
 		auto Recombine = [this](const FString& InAssetPath, const FString& InStateGuid, const FString& InVar, const FString& InPinId = FString())
@@ -3612,7 +3612,7 @@ void FAssistOperationsSpec::Define()
 			{
 				Args->SetStringField(TEXT("pin_id"), InPinId);
 			}
-			return Subsystem->ExecuteOperation(FName(TEXT("sm.recombine_pin")), Args);
+			return Subsystem->ExecuteOperation(FName(TEXT("ld.recombine_pin")), Args);
 		};
 
 		auto FindSubPinIdByName = [](const TSharedPtr<FJsonObject>& InResultPin, const FString& InEndsWith) -> FString
@@ -3746,7 +3746,7 @@ void FAssistOperationsSpec::Define()
 			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
 			Args->SetStringField(TEXT("node_guid"), FGuid::NewGuid().ToString());
 			Args->SetStringField(TEXT("variable_name"), TEXT("OurStruct"));
-			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(FName(TEXT("sm.split_pin")), Args);
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(FName(TEXT("ld.split_pin")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error mentions 'asset_path'", Result.ErrorMessage.Contains(TEXT("asset_path")));
 		});
@@ -3763,7 +3763,7 @@ void FAssistOperationsSpec::Define()
 			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
 			Args->SetStringField(TEXT("asset_path"), AssetPath);
 			Args->SetStringField(TEXT("node_guid"), StateGuid);
-			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(FName(TEXT("sm.split_pin")), Args);
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(FName(TEXT("ld.split_pin")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error mentions 'variable_name'", Result.ErrorMessage.Contains(TEXT("variable_name")));
 		});
@@ -3809,7 +3809,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("node_guid"), StateGuid);
 			Args->SetStringField(TEXT("variable_name"), TEXT("OurStruct"));
 			Args->SetStringField(TEXT("pin_id"), TEXT("not-a-guid"));
-			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(FName(TEXT("sm.split_pin")), Args);
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(FName(TEXT("ld.split_pin")), Args);
 			TestFalse("Split is rejected", Result.bSuccess);
 			TestTrue("Error mentions pin_id", Result.ErrorMessage.Contains(TEXT("pin_id")));
 		});
@@ -3850,7 +3850,7 @@ void FAssistOperationsSpec::Define()
 				Args->SetStringField(TEXT("node_guid"), StateGuid);
 				Args->SetStringField(TEXT("property_name"), TEXT("StructArray"));
 				Args->SetStringField(TEXT("array_action"), TEXT("add"));
-				return Subsystem->ExecuteOperation(FName(TEXT("sm.set_node_property")), Args).bSuccess;
+				return Subsystem->ExecuteOperation(FName(TEXT("ld.set_node_property")), Args).bSuccess;
 			};
 			TestTrue("Add element 0", AddArrayElement());
 			TestTrue("Add element 1", AddArrayElement());
@@ -3861,7 +3861,7 @@ void FAssistOperationsSpec::Define()
 				Args->SetStringField(TEXT("asset_path"), AssetPath);
 				Args->SetStringField(TEXT("node_guid"), StateGuid);
 				Args->SetStringField(TEXT("variable_name"), TEXT("StructArray"));
-				return Subsystem->ExecuteOperation(FName(TEXT("sm.get_property_pins")), Args).Payload;
+				return Subsystem->ExecuteOperation(FName(TEXT("ld.get_property_pins")), Args).Payload;
 			};
 
 			{
@@ -3971,13 +3971,13 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("variable_name"), TEXT("OurStruct"));
 			Args->SetStringField(TEXT("pin_id"), FGuid::NewGuid().ToString());
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.split_pin")), Args);
+				FName(TEXT("ld.split_pin")), Args);
 			TestFalse("Split with unknown pin_id is rejected", Result.bSuccess);
 			TestTrue("Error mentions 'not found'", Result.ErrorMessage.Contains(TEXT("not found")));
 		});
 	});
 
-	Describe("sm.set_node_property with property_path", [this]()
+	Describe("ld.set_node_property with property_path", [this]()
 	{
 		auto AddStructSplitTestState = [this](const FString& InAssetPath) -> FString
 		{
@@ -3991,7 +3991,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("state_name"), TEXT("DeepState"));
 			Args->SetStringField(TEXT("state_class"), USMStructSplitTestState::StaticClass()->GetPathName());
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.add_state")), Args);
+				FName(TEXT("ld.add_state")), Args);
 			if (!Result.bSuccess || !Result.Payload.IsValid())
 			{
 				return FString();
@@ -4012,7 +4012,7 @@ void FAssistOperationsSpec::Define()
 			{
 				Args->SetStringField(TEXT("pin_id"), InPinId);
 			}
-			return Subsystem->ExecuteOperation(FName(TEXT("sm.split_pin")), Args);
+			return Subsystem->ExecuteOperation(FName(TEXT("ld.split_pin")), Args);
 		};
 
 		auto SetProperty = [this](const FString& InAssetPath, const FString& InStateGuid,
@@ -4033,7 +4033,7 @@ void FAssistOperationsSpec::Define()
 			{
 				Args->SetField(TEXT("value"), Wrapper->TryGetField(TEXT("v")));
 			}
-			return Subsystem->ExecuteOperation(FName(TEXT("sm.set_node_property")), Args);
+			return Subsystem->ExecuteOperation(FName(TEXT("ld.set_node_property")), Args);
 		};
 
 		auto FindSubPinId = [](const TSharedPtr<FJsonObject>& InResultPin, const FString& InEndsWith) -> FString
@@ -4296,7 +4296,7 @@ void FAssistOperationsSpec::Define()
 			// get reverted here.
 			const TSharedRef<FJsonObject> CompileArgs = MakeShared<FJsonObject>();
 			CompileArgs->SetStringField(TEXT("asset_path"), AssetPath);
-			GetSubsystem()->ExecuteOperation(FName(TEXT("sm.compile")), CompileArgs);
+			GetSubsystem()->ExecuteOperation(FName(TEXT("ld.compile")), CompileArgs);
 
 			TestEqual("Template OuterInt survives compile under two-level split",
 				TemplateState->NestedTextGraphStruct.OuterInt, 99);
@@ -4358,7 +4358,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("property_path"), TEXT("InnerTextStruct.ScalarValue"));
 			Args->SetStringField(TEXT("array_action"), TEXT("clear"));
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.set_node_property")), Args);
+				FName(TEXT("ld.set_node_property")), Args);
 			TestFalse("Set rejected", Result.bSuccess);
 		});
 
@@ -4405,7 +4405,7 @@ void FAssistOperationsSpec::Define()
 			{
 				Args->SetNumberField(TEXT("target_index"), InTargetIndex.GetValue());
 			}
-			return Subsystem->ExecuteOperation(FName(TEXT("sm.set_node_property")), Args);
+			return Subsystem->ExecuteOperation(FName(TEXT("ld.set_node_property")), Args);
 		};
 
 		It("Adds elements to a nested array via property_path", [=, this]()
@@ -4513,7 +4513,7 @@ void FAssistOperationsSpec::Define()
 				Args->SetStringField(TEXT("property_path"), InPath);
 			}
 			Args->SetBoolField(TEXT("include_pin_tree"), bIncludePinTree);
-			return Subsystem->ExecuteOperation(FName(TEXT("sm.get_property_graph")), Args);
+			return Subsystem->ExecuteOperation(FName(TEXT("ld.get_property_graph")), Args);
 		};
 
 		auto SetEditMode = [this](const FString& InAssetPath, const FString& InStateGuid,
@@ -4528,7 +4528,7 @@ void FAssistOperationsSpec::Define()
 			{
 				Args->SetBoolField(TEXT("b_enable"), bEnable);
 			}
-			return Subsystem->ExecuteOperation(FName(TEXT("sm.set_property_graph_edit_mode")), Args);
+			return Subsystem->ExecuteOperation(FName(TEXT("ld.set_property_graph_edit_mode")), Args);
 		};
 
 		auto LoadResolvedGraph = [](const FSMAssistOperationResult& InResult) -> USMPropertyGraph*
@@ -4732,7 +4732,7 @@ void FAssistOperationsSpec::Define()
 		});
 	});
 
-	Describe("sm.add_sm_variable container types", [this]()
+	Describe("ld.add_sm_variable container types", [this]()
 	{
 		It("Echoes container_type=Array in the payload for TArray variables", [this]()
 		{
@@ -4750,7 +4750,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("container_type"), TEXT("Array"));
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.add_sm_variable")), Args);
+				FName(TEXT("ld.add_sm_variable")), Args);
 			TestTrue("Result is success", Result.bSuccess);
 			if (TestTrue("Payload populated", Result.Payload.IsValid()))
 			{
@@ -4778,7 +4778,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("key_type"), TEXT("name"));
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.add_sm_variable")), Args);
+				FName(TEXT("ld.add_sm_variable")), Args);
 			TestTrue("Result is success", Result.bSuccess);
 			if (TestTrue("Payload populated", Result.Payload.IsValid()))
 			{
@@ -4810,7 +4810,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("container_type"), TEXT("Set"));
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.add_sm_variable")), Args);
+				FName(TEXT("ld.add_sm_variable")), Args);
 			TestTrue("Result is success", Result.bSuccess);
 			if (TestTrue("Payload populated", Result.Payload.IsValid()))
 			{
@@ -4837,7 +4837,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("container_type"), TEXT("Bag"));
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.add_sm_variable")), Args);
+				FName(TEXT("ld.add_sm_variable")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error mentions container_type", Result.ErrorMessage.Contains(TEXT("container_type")));
 		});
@@ -4858,7 +4858,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("container_type"), TEXT("Map"));
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.add_sm_variable")), Args);
+				FName(TEXT("ld.add_sm_variable")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error mentions key_type", Result.ErrorMessage.Contains(TEXT("key_type")));
 		});
@@ -4880,13 +4880,13 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("key_type"), TEXT("name"));
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.add_sm_variable")), Args);
+				FName(TEXT("ld.add_sm_variable")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error mentions key_type", Result.ErrorMessage.Contains(TEXT("key_type")));
 		});
 	});
 
-	Describe("sm.add_blueprint_variable container types on a plain Actor blueprint", [this]()
+	Describe("ld.add_blueprint_variable container types on a plain Actor blueprint", [this]()
 	{
 		It("Adds a TMap<FName,bool> with the correct key and value pin types", [this]()
 		{
@@ -4908,7 +4908,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("key_type"), TEXT("name"));
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.add_blueprint_variable")), Args);
+				FName(TEXT("ld.add_blueprint_variable")), Args);
 			TestTrue("Result is success", Result.bSuccess);
 
 			const FBPVariableDescription* Var = ActorBP->NewVariables.FindByPredicate(
@@ -4941,7 +4941,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("container_type"), TEXT("Array"));
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.add_blueprint_variable")), Args);
+				FName(TEXT("ld.add_blueprint_variable")), Args);
 			TestTrue("Result is success", Result.bSuccess);
 
 			const FBPVariableDescription* Var = ActorBP->NewVariables.FindByPredicate(
@@ -4972,7 +4972,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("container_type"), TEXT("Set"));
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.add_blueprint_variable")), Args);
+				FName(TEXT("ld.add_blueprint_variable")), Args);
 			TestTrue("Result is success", Result.bSuccess);
 
 			const FBPVariableDescription* Var = ActorBP->NewVariables.FindByPredicate(
@@ -4985,7 +4985,7 @@ void FAssistOperationsSpec::Define()
 		});
 	});
 
-	Describe("sm.add_node_variable container types", [this]()
+	Describe("ld.add_node_variable container types", [this]()
 	{
 		It("Adds a plain TArray<FName> variable on a state class", [this]()
 		{
@@ -5006,7 +5006,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("container_type"), TEXT("Array"));
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.add_node_variable")), Args);
+				FName(TEXT("ld.add_node_variable")), Args);
 			TestTrue("Result is success", Result.bSuccess);
 			if (TestTrue("Payload populated", Result.Payload.IsValid()))
 			{
@@ -5037,7 +5037,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("direction"), TEXT("Input"));
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.add_node_variable")), Args);
+				FName(TEXT("ld.add_node_variable")), Args);
 			TestTrue("Result is success", Result.bSuccess);
 		});
 
@@ -5062,7 +5062,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("direction"), TEXT("Input"));
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.add_node_variable")), Args);
+				FName(TEXT("ld.add_node_variable")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error mentions graph node exposure",
 				Result.ErrorMessage.Contains(TEXT("cannot be exposed on the graph node")));
@@ -5088,7 +5088,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("key_type"), TEXT("name"));
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.add_node_variable")), Args);
+				FName(TEXT("ld.add_node_variable")), Args);
 			TestTrue("Result is success", Result.bSuccess);
 		});
 
@@ -5112,14 +5112,14 @@ void FAssistOperationsSpec::Define()
 			Args->SetBoolField(TEXT("b_hidden"), true);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.add_node_variable")), Args);
+				FName(TEXT("ld.add_node_variable")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error mentions graph node exposure",
 				Result.ErrorMessage.Contains(TEXT("cannot be exposed on the graph node")));
 		});
 	});
 
-	Describe("sm.collapse_to_state_machine", [this]()
+	Describe("ld.collapse_to_state_machine", [this]()
 	{
 		It("Collapses a set of states into a nested state machine and returns the container", [this]()
 		{
@@ -5152,7 +5152,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetArrayField(TEXT("node_guids"), NodeGuids);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.collapse_to_state_machine")), Args);
+				FName(TEXT("ld.collapse_to_state_machine")), Args);
 
 			TestTrue("Result is success", Result.bSuccess);
 			if (!TestTrue("Payload populated", Result.Payload.IsValid()))
@@ -5187,7 +5187,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("asset_path"), AssetPath);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.collapse_to_state_machine")), Args);
+				FName(TEXT("ld.collapse_to_state_machine")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 		});
 
@@ -5209,7 +5209,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetArrayField(TEXT("node_guids"), NodeGuids);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.collapse_to_state_machine")), Args);
+				FName(TEXT("ld.collapse_to_state_machine")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 		});
 
@@ -5229,12 +5229,12 @@ void FAssistOperationsSpec::Define()
 			Args->SetArrayField(TEXT("node_guids"), Empty);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.collapse_to_state_machine")), Args);
+				FName(TEXT("ld.collapse_to_state_machine")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 		});
 	});
 
-	Describe("sm.set_node_class", [this]()
+	Describe("ld.set_node_class", [this]()
 	{
 		It("Assigns a custom state class to an existing state and reports it back", [this]()
 		{
@@ -5258,7 +5258,7 @@ void FAssistOperationsSpec::Define()
 				USMAssistArrayStateInstance::StaticClass()->GetPathName());
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.set_node_class")), Args);
+				FName(TEXT("ld.set_node_class")), Args);
 			TestTrue("Result is success", Result.bSuccess);
 			if (!TestTrue("Payload populated", Result.Payload.IsValid()))
 			{
@@ -5297,7 +5297,7 @@ void FAssistOperationsSpec::Define()
 			CollapseArgs->SetStringField(TEXT("asset_path"), AssetPath);
 			CollapseArgs->SetArrayField(TEXT("node_guids"), NodeGuids);
 			const FSMAssistOperationResult CollapseResult = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.collapse_to_state_machine")), CollapseArgs);
+				FName(TEXT("ld.collapse_to_state_machine")), CollapseArgs);
 			if (!TestTrue("Collapse succeeded", CollapseResult.bSuccess && CollapseResult.Payload.IsValid()))
 			{
 				return;
@@ -5311,7 +5311,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("node_class"),
 				USMAssistTestStateMachineInstance::StaticClass()->GetPathName());
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.set_node_class")), Args);
+				FName(TEXT("ld.set_node_class")), Args);
 			TestTrue("Result is success", Result.bSuccess);
 
 			FString AppliedClass;
@@ -5347,7 +5347,7 @@ void FAssistOperationsSpec::Define()
 				USMAssistTestTransitionInstance::StaticClass()->GetPathName());
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.set_node_class")), Args);
+				FName(TEXT("ld.set_node_class")), Args);
 			TestFalse("A transition class is rejected on a state node", Result.bSuccess);
 		});
 
@@ -5373,7 +5373,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("node_class"), FString());
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.set_node_class")), Args);
+				FName(TEXT("ld.set_node_class")), Args);
 			TestTrue("Result is success", Result.bSuccess);
 
 			FString AppliedClass;
@@ -5407,7 +5407,7 @@ void FAssistOperationsSpec::Define()
 				USMAssistAbstractStateInstance::StaticClass()->GetPathName());
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.set_node_class")), Args);
+				FName(TEXT("ld.set_node_class")), Args);
 			TestFalse("An abstract class is rejected", Result.bSuccess);
 		});
 
@@ -5428,7 +5428,7 @@ void FAssistOperationsSpec::Define()
 			RefArgs->SetStringField(TEXT("reference_asset_path"), TargetPath);
 			RefArgs->SetStringField(TEXT("state_name"), TEXT("Ref"));
 			const FSMAssistOperationResult RefResult = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.add_reference")), RefArgs);
+				FName(TEXT("ld.add_reference")), RefArgs);
 			FString RefGuid;
 			if (!TestTrue("Reference created", RefResult.bSuccess && RefResult.Payload.IsValid())
 				|| !RefResult.Payload->TryGetStringField(TEXT("state_guid"), RefGuid))
@@ -5443,7 +5443,7 @@ void FAssistOperationsSpec::Define()
 				USMAssistTestStateMachineInstance::StaticClass()->GetPathName());
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.set_node_class")), Args);
+				FName(TEXT("ld.set_node_class")), Args);
 			TestFalse("A reference node's class cannot be set directly", Result.bSuccess);
 		});
 
@@ -5463,12 +5463,12 @@ void FAssistOperationsSpec::Define()
 				USMAssistArrayStateInstance::StaticClass()->GetPathName());
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.set_node_class")), Args);
+				FName(TEXT("ld.set_node_class")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 		});
 	});
 
-	Describe("sm.merge_states", [this]()
+	Describe("ld.merge_states", [this]()
 	{
 		It("Copies a source state's template into the destination stack and leaves the source in place", [this]()
 		{
@@ -5498,7 +5498,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetArrayField(TEXT("source_state_guids"), SourceGuids);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.merge_states")), Args);
+				FName(TEXT("ld.merge_states")), Args);
 
 			TestTrue("Result is success", Result.bSuccess);
 			if (!TestTrue("Payload populated", Result.Payload.IsValid()))
@@ -5553,7 +5553,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetBoolField(TEXT("b_destroy_states"), true);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.merge_states")), Args);
+				FName(TEXT("ld.merge_states")), Args);
 			TestTrue("Result is success", Result.bSuccess);
 
 			const TArray<FString> RootGuids = GetRootStateGuids(AssetPath);
@@ -5585,7 +5585,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetArrayField(TEXT("source_state_guids"), SourceGuids);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.merge_states")), Args);
+				FName(TEXT("ld.merge_states")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 		});
 
@@ -5610,7 +5610,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("destination_state_guid"), DestGuid);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.merge_states")), Args);
+				FName(TEXT("ld.merge_states")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 		});
 
@@ -5642,7 +5642,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetArrayField(TEXT("source_state_guids"), SourceGuids);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.merge_states")), Args);
+				FName(TEXT("ld.merge_states")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 		});
 
@@ -5669,7 +5669,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetArrayField(TEXT("source_state_guids"), Empty);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.merge_states")), Args);
+				FName(TEXT("ld.merge_states")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 		});
 
@@ -5700,12 +5700,12 @@ void FAssistOperationsSpec::Define()
 			Args->SetArrayField(TEXT("source_state_guids"), SourceGuids);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.merge_states")), Args);
+				FName(TEXT("ld.merge_states")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 		});
 	});
 
-	Describe("sm.replace_node", [this]()
+	Describe("ld.replace_node", [this]()
 	{
 		It("Replaces a state with a conduit", [this]()
 		{
@@ -5729,7 +5729,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("kind"), TEXT("conduit"));
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.replace_node")), Args);
+				FName(TEXT("ld.replace_node")), Args);
 
 			TestTrue("Result is success", Result.bSuccess);
 			if (!TestTrue("Payload populated", Result.Payload.IsValid()))
@@ -5770,7 +5770,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("kind"), TEXT("state_machine"));
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.replace_node")), Args);
+				FName(TEXT("ld.replace_node")), Args);
 
 			TestTrue("Result is success", Result.bSuccess);
 			if (!TestTrue("Payload populated", Result.Payload.IsValid()))
@@ -5805,7 +5805,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("node_guid"), StateGuid);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.replace_node")), Args);
+				FName(TEXT("ld.replace_node")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 		});
 
@@ -5831,7 +5831,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("kind"), TEXT("banana"));
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.replace_node")), Args);
+				FName(TEXT("ld.replace_node")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error names the bad kind", Result.ErrorMessage.Contains(TEXT("banana")));
 		});
@@ -5852,7 +5852,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("kind"), TEXT("conduit"));
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.replace_node")), Args);
+				FName(TEXT("ld.replace_node")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 		});
 
@@ -5871,12 +5871,12 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("kind"), TEXT("conduit"));
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.replace_node")), Args);
+				FName(TEXT("ld.replace_node")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 		});
 	});
 
-	Describe("sm.convert_to_reference", [this]()
+	Describe("ld.convert_to_reference", [this]()
 	{
 		It("Converts an inline nested state machine into a reference asset and preserves the node guid", [this]()
 		{
@@ -5899,7 +5899,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("node_guid"), InlineGuid);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.convert_to_reference")), Args);
+				FName(TEXT("ld.convert_to_reference")), Args);
 
 			TestTrue("Result is success", Result.bSuccess);
 			if (!TestTrue("Payload populated", Result.Payload.IsValid()))
@@ -5941,7 +5941,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("name"), ExplicitName);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.convert_to_reference")), Args);
+				FName(TEXT("ld.convert_to_reference")), Args);
 
 			TestTrue("Result is success", Result.bSuccess);
 			if (!TestTrue("Payload populated", Result.Payload.IsValid()))
@@ -5968,7 +5968,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("asset_path"), AssetPath);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.convert_to_reference")), Args);
+				FName(TEXT("ld.convert_to_reference")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 		});
 
@@ -5993,7 +5993,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("node_guid"), StateGuid);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.convert_to_reference")), Args);
+				FName(TEXT("ld.convert_to_reference")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 		});
 
@@ -6012,7 +6012,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("node_guid"), FGuid::NewGuid().ToString());
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.convert_to_reference")), Args);
+				FName(TEXT("ld.convert_to_reference")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 		});
 
@@ -6038,13 +6038,13 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("parent_class"), TEXT("/Script/SMSystem.ThisClassDoesNotExist"));
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.convert_to_reference")), Args);
+				FName(TEXT("ld.convert_to_reference")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error names parent_class", Result.ErrorMessage.Contains(TEXT("parent_class")));
 		});
 	});
 
-	Describe("sm.clear_screenshots", [this]()
+	Describe("ld.clear_screenshots", [this]()
 	{
 		It("Rejects an output_subdir that escapes the screenshots directory", [this]()
 		{
@@ -6059,7 +6059,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetBoolField(TEXT("dry_run"), true);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.clear_screenshots")), Args);
+				FName(TEXT("ld.clear_screenshots")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error reports the containment rejection",
 				Result.ErrorMessage.Contains(TEXT("outside the screenshots directory")));
@@ -6080,7 +6080,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetBoolField(TEXT("dry_run"), true);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.clear_screenshots")), Args);
+				FName(TEXT("ld.clear_screenshots")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error reports the root rejection",
 				Result.ErrorMessage.Contains(TEXT("root")));
@@ -6098,12 +6098,12 @@ void FAssistOperationsSpec::Define()
 			Args->SetBoolField(TEXT("dry_run"), true);
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.clear_screenshots")), Args);
+				FName(TEXT("ld.clear_screenshots")), Args);
 			TestTrue("Dry run against the default subdir succeeds", Result.bSuccess);
 		});
 	});
 
-	Describe("sm.configure_sm_component_on_actor", [this]()
+	Describe("ld.configure_sm_component_on_actor", [this]()
 	{
 		// Regression: extra_config_json wrote through raw reflection with no editability filter, so an
 		// internal UPROPERTY name (CreationMethod, replication internals) wrote straight into the SCS
@@ -6134,7 +6134,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("extra_config_json"), TEXT("{\"CreationMethod\":\"Instance\"}"));
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.configure_sm_component_on_actor")), Args);
+				FName(TEXT("ld.configure_sm_component_on_actor")), Args);
 			TestTrue("Result is success", Result.bSuccess);
 			if (!TestTrue("Payload populated", Result.Payload.IsValid()))
 			{
@@ -6208,7 +6208,7 @@ void FAssistOperationsSpec::Define()
 			SetArgs->SetStringField(TEXT("component_name"), TEXT("SMComp"));
 			SetArgs->SetStringField(TEXT("state_machine_class"), SMAssetPath);
 			if (!TestTrue("Class-setting call succeeded",
-				Subsystem->ExecuteOperation(FName(TEXT("sm.configure_sm_component_on_actor")), SetArgs).bSuccess))
+				Subsystem->ExecuteOperation(FName(TEXT("ld.configure_sm_component_on_actor")), SetArgs).bSuccess))
 			{
 				return;
 			}
@@ -6226,7 +6226,7 @@ void FAssistOperationsSpec::Define()
 			ConfigArgs->SetStringField(TEXT("component_name"), TEXT("SMComp"));
 			ConfigArgs->SetBoolField(TEXT("b_stop_on_end_play"), true);
 			TestTrue("Config-only call succeeded",
-				Subsystem->ExecuteOperation(FName(TEXT("sm.configure_sm_component_on_actor")), ConfigArgs).bSuccess);
+				Subsystem->ExecuteOperation(FName(TEXT("ld.configure_sm_component_on_actor")), ConfigArgs).bSuccess);
 
 			TestTrue("StateMachineClass untouched by the config-only call",
 				Template->StateMachineClass.Get() == AssignedClass);
@@ -6250,7 +6250,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("asset_path"), FString::ChrN(1100, TEXT('a')));
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.get_asset")), Args);
+				FName(TEXT("ld.get_asset")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error reports the length bound", Result.ErrorMessage.Contains(TEXT("characters")));
 		});
@@ -6278,7 +6278,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("value"), TEXT("1"));
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.set_node_property")), Args);
+				FName(TEXT("ld.set_node_property")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error reports the length bound", Result.ErrorMessage.Contains(TEXT("characters")));
 		});
@@ -6301,7 +6301,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("state_name"), FString::ChrN(1100, TEXT('s')));
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.add_state")), Args);
+				FName(TEXT("ld.add_state")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error reports the length bound", Result.ErrorMessage.Contains(TEXT("characters")));
 		});
@@ -6328,7 +6328,7 @@ void FAssistOperationsSpec::Define()
 			Args->SetStringField(TEXT("new_name"), FString::ChrN(1100, TEXT('n')));
 
 			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-				FName(TEXT("sm.rename_state")), Args);
+				FName(TEXT("ld.rename_state")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error reports the length bound", Result.ErrorMessage.Contains(TEXT("characters")));
 		});
