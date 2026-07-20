@@ -885,6 +885,13 @@ public:
 	 * Transition-class Blueprints are not supported (the function only sets directional /
 	 * hidden / read-only state, which transition-class variables do not have).
 	 *
+	 * The variable must already be displayed on the graph node, since direction / hidden / read-only
+	 * are attributes of that display and mean nothing without it. A variable qualifies by being
+	 * instance editable, or by being a graph-property type such as FSMTextGraphProperty. Variables
+	 * added through AddNodeVariable with a Direction are exposed automatically. One added without a
+	 * Direction is a plain Blueprint variable and is refused, so pass Direction at creation or re-add
+	 * it. The Blueprint must also have been compiled since the variable was added.
+	 *
 	 * @param NodeClassBlueprint The node-class Blueprint. Required.
 	 * @param VarName Existing variable name. Required.
 	 * @param bUpdateDirection Gate for Direction; must be true for Direction to apply.

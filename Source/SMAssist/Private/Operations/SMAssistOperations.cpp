@@ -6975,8 +6975,10 @@ FSMAssistOperationResult LD::Assist::ConfigureNodeVariable(const TSharedRef<FJso
 		return FSMAssistOperationResult::MakeError(LengthError);
 	}
 
+	const FName VarFName(*VarName);
+
 	ISMGraphGeneration::FConfigureNodeClassVariableArgs ConfigureArgs;
-	ConfigureArgs.VariableName = FName(*VarName);
+	ConfigureArgs.VariableName = VarFName;
 	TArray<FString> Applied;
 
 	bool bUpdateDirection = false;
@@ -7015,6 +7017,28 @@ FSMAssistOperationResult LD::Assist::ConfigureNodeVariable(const TSharedRef<FJso
 	if (Applied.Num() == 0)
 	{
 		return FSMAssistOperationResult::MakeError(TEXT("configure_node_variable requires at least one of 'b_update_direction', 'b_update_hidden', 'b_update_read_only' set to true."));
+	}
+
+	// 'direction' / 'b_hidden' / 'b_read_only' describe how a variable is displayed on the graph node, so
+	// they only apply to a variable that appears there. The editor hides these fields otherwise. Refuse
+	// rather than stamp an override whose effect the caller could never observe.
+	const FProperty* Property = Blueprint->GeneratedClass
+		? FindFProperty<FProperty>(Blueprint->GeneratedClass, VarFName)
+		: nullptr;
+	if (!Property)
+	{
+		if (FBlueprintEditorUtils::FindNewVariableIndex(Blueprint, VarFName) != INDEX_NONE)
+		{
+			return FSMAssistOperationResult::MakeError(
+				FString::Printf(TEXT("Variable '%s' exists on '%s' but its FProperty is not yet materialized on the GeneratedClass. Compile the blueprint before configuring it."), *VarName, *AssetPath));
+		}
+		return FSMAssistOperationResult::MakeError(
+			FString::Printf(TEXT("No variable '%s' on '%s'."), *VarName, *AssetPath));
+	}
+	if (!LD::Editor::PropertyUtils::IsPropertyDisplayedOnGraphNode(Property))
+	{
+		return FSMAssistOperationResult::MakeError(
+			FString::Printf(TEXT("Variable '%s' on '%s' is not displayed on the graph node, so it cannot take a 'direction' / 'b_hidden' / 'b_read_only' setting. Re-add it through ld.add_node_variable passing 'direction', which exposes it. A variable qualifies by being instance editable, or by being a graph-property type such as FSMTextGraphProperty; 'HideOnNode' metadata and non-blueprint-visible properties are excluded."), *VarName, *AssetPath));
 	}
 
 	FString GraphGenError;

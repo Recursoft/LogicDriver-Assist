@@ -5119,6 +5119,176 @@ void FAssistOperationsSpec::Define()
 		});
 	});
 
+	Describe("ld.configure_node_variable", [this]()
+	{
+		It("Refuses a variable that is not instance editable", [this]()
+		{
+			UBlueprint* NodeBP = CreateTransientBlueprintOfType(
+				USMStateInstance::StaticClass(),
+				USMNodeBlueprint::StaticClass(),
+				USMNodeBlueprintGeneratedClass::StaticClass());
+			if (!TestNotNull("State node-class blueprint created", NodeBP))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			const TSharedRef<FJsonObject> AddArgs = MakeShared<FJsonObject>();
+			AddArgs->SetStringField(TEXT("asset_path"), NodeBP->GetPathName());
+			AddArgs->SetStringField(TEXT("variable_name"), TEXT("PlainCounter"));
+			AddArgs->SetStringField(TEXT("var_type"), TEXT("int"));
+			TestTrue("Plain add succeeded",
+				Subsystem->ExecuteOperation(FName(TEXT("ld.add_node_variable")), AddArgs).bSuccess);
+			FKismetEditorUtilities::CompileBlueprint(NodeBP);
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), NodeBP->GetPathName());
+			Args->SetStringField(TEXT("variable_name"), TEXT("PlainCounter"));
+			Args->SetBoolField(TEXT("b_update_direction"), true);
+			Args->SetStringField(TEXT("direction"), TEXT("Input"));
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("ld.configure_node_variable")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+			TestTrue("Error mentions graph node display",
+				Result.ErrorMessage.Contains(TEXT("is not displayed on the graph node")));
+		});
+
+		It("Configures a variable that was added with a direction", [this]()
+		{
+			UBlueprint* NodeBP = CreateTransientBlueprintOfType(
+				USMStateInstance::StaticClass(),
+				USMNodeBlueprint::StaticClass(),
+				USMNodeBlueprintGeneratedClass::StaticClass());
+			if (!TestNotNull("State node-class blueprint created", NodeBP))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			const TSharedRef<FJsonObject> AddArgs = MakeShared<FJsonObject>();
+			AddArgs->SetStringField(TEXT("asset_path"), NodeBP->GetPathName());
+			AddArgs->SetStringField(TEXT("variable_name"), TEXT("Threshold"));
+			AddArgs->SetStringField(TEXT("var_type"), TEXT("float"));
+			AddArgs->SetStringField(TEXT("direction"), TEXT("Input"));
+			TestTrue("Directional add succeeded",
+				Subsystem->ExecuteOperation(FName(TEXT("ld.add_node_variable")), AddArgs).bSuccess);
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), NodeBP->GetPathName());
+			Args->SetStringField(TEXT("variable_name"), TEXT("Threshold"));
+			Args->SetBoolField(TEXT("b_update_direction"), true);
+			Args->SetStringField(TEXT("direction"), TEXT("Output"));
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("ld.configure_node_variable")), Args);
+			TestTrue("Result is success", Result.bSuccess);
+			if (TestTrue("Payload populated", Result.Payload.IsValid()))
+			{
+				FString AppliedDirection;
+				TestTrue("Payload has 'direction'",
+					Result.Payload->TryGetStringField(TEXT("direction"), AppliedDirection));
+				TestEqual("direction echoed as Output", AppliedDirection, FString(TEXT("Output")));
+
+				const TArray<TSharedPtr<FJsonValue>>* AppliedFields = nullptr;
+				if (TestTrue("Payload has 'applied'", Result.Payload->TryGetArrayField(TEXT("applied"), AppliedFields)))
+				{
+					TestEqual("One field applied", AppliedFields->Num(), 1);
+				}
+			}
+		});
+
+		It("Refuses a variable whose blueprint has not been compiled since it was added", [this]()
+		{
+			UBlueprint* NodeBP = CreateTransientBlueprintOfType(
+				USMStateInstance::StaticClass(),
+				USMNodeBlueprint::StaticClass(),
+				USMNodeBlueprintGeneratedClass::StaticClass());
+			if (!TestNotNull("State node-class blueprint created", NodeBP))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			const TSharedRef<FJsonObject> AddArgs = MakeShared<FJsonObject>();
+			AddArgs->SetStringField(TEXT("asset_path"), NodeBP->GetPathName());
+			AddArgs->SetStringField(TEXT("variable_name"), TEXT("Uncompiled"));
+			AddArgs->SetStringField(TEXT("var_type"), TEXT("int"));
+			TestTrue("Plain add succeeded",
+				Subsystem->ExecuteOperation(FName(TEXT("ld.add_node_variable")), AddArgs).bSuccess);
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), NodeBP->GetPathName());
+			Args->SetStringField(TEXT("variable_name"), TEXT("Uncompiled"));
+			Args->SetBoolField(TEXT("b_update_direction"), true);
+			Args->SetStringField(TEXT("direction"), TEXT("Input"));
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("ld.configure_node_variable")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+			TestTrue("Error mentions compiling the blueprint",
+				Result.ErrorMessage.Contains(TEXT("not yet materialized")));
+		});
+
+		It("Refuses an unknown variable name", [this]()
+		{
+			UBlueprint* NodeBP = CreateTransientBlueprintOfType(
+				USMStateInstance::StaticClass(),
+				USMNodeBlueprint::StaticClass(),
+				USMNodeBlueprintGeneratedClass::StaticClass());
+			if (!TestNotNull("State node-class blueprint created", NodeBP))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), NodeBP->GetPathName());
+			Args->SetStringField(TEXT("variable_name"), TEXT("NoSuchVariable"));
+			Args->SetBoolField(TEXT("b_update_direction"), true);
+			Args->SetStringField(TEXT("direction"), TEXT("Input"));
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("ld.configure_node_variable")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+			TestTrue("Error names the missing variable",
+				Result.ErrorMessage.Contains(TEXT("No variable 'NoSuchVariable'")));
+		});
+
+		It("Configures a plain variable once it is made instance editable", [this]()
+		{
+			UBlueprint* NodeBP = CreateTransientBlueprintOfType(
+				USMStateInstance::StaticClass(),
+				USMNodeBlueprint::StaticClass(),
+				USMNodeBlueprintGeneratedClass::StaticClass());
+			if (!TestNotNull("State node-class blueprint created", NodeBP))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			const TSharedRef<FJsonObject> AddArgs = MakeShared<FJsonObject>();
+			AddArgs->SetStringField(TEXT("asset_path"), NodeBP->GetPathName());
+			AddArgs->SetStringField(TEXT("variable_name"), TEXT("PlainCounter"));
+			AddArgs->SetStringField(TEXT("var_type"), TEXT("int"));
+			TestTrue("Plain add succeeded",
+				Subsystem->ExecuteOperation(FName(TEXT("ld.add_node_variable")), AddArgs).bSuccess);
+
+			FBlueprintEditorUtils::SetBlueprintOnlyEditableFlag(NodeBP, TEXT("PlainCounter"), false);
+			FKismetEditorUtilities::CompileBlueprint(NodeBP);
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), NodeBP->GetPathName());
+			Args->SetStringField(TEXT("variable_name"), TEXT("PlainCounter"));
+			Args->SetBoolField(TEXT("b_update_direction"), true);
+			Args->SetStringField(TEXT("direction"), TEXT("Input"));
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("ld.configure_node_variable")), Args);
+			TestTrue("Result is success", Result.bSuccess);
+		});
+	});
+
 	Describe("ld.collapse_to_state_machine", [this]()
 	{
 		It("Collapses a set of states into a nested state machine and returns the container", [this]()
