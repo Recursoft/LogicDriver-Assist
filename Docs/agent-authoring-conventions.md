@@ -20,12 +20,22 @@ Logic Driver authoring (via the LogicDriver-Assist ld.* operations):
 - Address assets by the full object path (/Game/.../SM_Foo.SM_Foo) that
   create_blueprint and get_asset return, not the bare package path. Thread the
   returned asset_path forward rather than rebuilding it.
+- Wherever an operation accepts a CLASS token (target_class, cast_class,
+  state_class, transition_class, a variable's object type), pass the full
+  object path form (/Game/.../BP_Foo.BP_Foo_C), never the bare class name.
+  Bare names resolve by global search and can silently bind a same-named class
+  from elsewhere in the project; the failure surfaces later as wrong pin names
+  or "function not found", not at bind time.
 - Author into a clean folder such as /Game/MCP/<Feature>/. Do not mutate the
   user's existing reference assets unless they ask for it.
 - For greenfield graphs, lay out with ld.layout_states apply=true. Hand
   coordinates are for targeted tweaks only: Entry at (0,0), first state near
   (200,0), ~350 units of X between states, positive X, and >=150 units between
-  parallel rows.
+  parallel rows (much more for states displaying property widgets, which are
+  several times taller than plain states). Layout measures real node sizes
+  only once the graph editor has been opened (ld.capture_graph_view opens it);
+  re-run the layout if the first pass overlaps, and read the result back
+  visually with ld.capture_graph_view.
 - Wire every state into the flow, and make exactly one of them the initial
   state, connected from Entry (add_state is_entry=true, or ld.set_initial_state).
   Every conduit, reference, link state, and any state must be wired in the same
@@ -67,13 +77,18 @@ Logic Driver authoring (via the LogicDriver-Assist ld.* operations):
   EvaluateFromManuallyBoundEvent is not reflected in those fields.
 - Node logic lives in two graphs, reached differently. A state's entry/update/end
   logic is a bound graph, authored with the ld.* local-graph ops (ld.get_local_graph
-  on the state node, then wire off the "On State Begin" entry node's then pin; On
-  State Update / On State End are not present until spawned with
-  ld.spawn_local_graph_event_node). The
-  machine's own OnStateMachineStart lives in the blueprint's top-level event graph,
+  on the state node, then wire off the "On State Begin" entry node's then pin). All
+  three entry nodes already exist in every state graph; On State Update and On State
+  End show dimmed until something wires into them, and connecting enables them. Do
+  not spawn those two with ld.spawn_local_graph_event_node, which adds a duplicate.
+  The machine's own OnStateMachineStart lives in the blueprint's top-level event graph,
   reached with generic blueprint tools; it ships already placed (shown disabled), so
   wire off its then pin to activate it. Do NOT add a new override; it already exists
-  and the add fails.
+  and the add fails. The same rule generalizes: new blueprints ship with their
+  common override events pre-placed (BeginPlay and Tick on an actor), so when an
+  add reports "already exists", wire the node id the error names.
+- Compile a blueprint before referencing its newly added functions from another
+  blueprint's graph; the generated class does not carry them until compiled.
 - The state machine graph is authored via ld.*, but the actor blueprint and its
   USMStateMachineComponent are set up on the editor surface (by hand or generic
   engine tools), not via ld.*. ld.configure_sm_component_on_actor then configures
