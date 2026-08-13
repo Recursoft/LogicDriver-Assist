@@ -84,6 +84,34 @@ struct FSMAssistSplitOuterStruct
 	FSMAssistSplitInnerStruct NestedStruct;
 };
 
+// Non-zero class defaults, so a write that reverts lands on a recognizable value rather than on the
+// zero an unwritten field would also hold.
+USTRUCT(BlueprintType)
+struct FSMAssistTunedStruct
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Test)
+	float Close = 3.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Test)
+	float Far = 7.0f;
+};
+
+UCLASS()
+class USMAssistTunedState : public USMStateInstance
+{
+	GENERATED_BODY()
+
+public:
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Test)
+	float ScalarValue = 1.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Test)
+	FSMAssistTunedStruct TunedStruct;
+};
+
 UCLASS()
 class USMAssistSplitTestState : public USMStateInstance
 {
