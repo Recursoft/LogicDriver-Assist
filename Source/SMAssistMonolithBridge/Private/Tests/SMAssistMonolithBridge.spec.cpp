@@ -89,6 +89,26 @@ BEGIN_DEFINE_SPEC(FSMAssistMonolithBridgeSpec, "LogicDriver.Assist.MonolithBridg
 		return nullptr;
 	}
 
+	static bool FindAction(const FString& InNamespace, const FString& InAction, FMonolithActionInfo& OutInfo)
+	{
+		for (const FMonolithActionInfo& Action : FMonolithToolRegistry::Get().GetActions(InNamespace))
+		{
+			if (Action.Action == InAction)
+			{
+				OutInfo = Action;
+				return true;
+			}
+		}
+		return false;
+	}
+
+	static FSMAssistOperationInfo MakeInfoWithImpact(FName InName, ESMAssistOperationImpact InImpact)
+	{
+		FSMAssistOperationInfo Info = MakeInfo(InName);
+		Info.Impact = InImpact;
+		return Info;
+	}
+
 END_DEFINE_SPEC(FSMAssistMonolithBridgeSpec)
 
 void FSMAssistMonolithBridgeSpec::Define()
@@ -117,6 +137,70 @@ void FSMAssistMonolithBridgeSpec::Define()
 			TestTrue(
 				FString::Printf(TEXT("%s.%s present in Monolith"), *Namespace, *Action),
 				Registry.HasAction(Namespace, Action));
+		}
+	});
+
+	It("Forwards each operation's impact onto its Monolith action hints", [this]()
+	{
+		USMAssistSubsystem* Subsystem = GetSubsystem();
+		if (!TestNotNull("Assist subsystem available", Subsystem))
+		{
+			return;
+		}
+
+		for (const FSMAssistOperationInfo& Info : Subsystem->GetAllOperationInfos())
+		{
+			const FString NameStr = Info.Name.ToString();
+			int32 DotIdx = INDEX_NONE;
+			if (!NameStr.FindChar(TEXT('.'), DotIdx))
+			{
+				continue;
+			}
+
+			FMonolithActionInfo Mirrored;
+			if (!FindAction(NameStr.Left(DotIdx), NameStr.Mid(DotIdx + 1), Mirrored))
+			{
+				AddError(FString::Printf(TEXT("'%s' is missing from Monolith's registry."), *NameStr));
+				continue;
+			}
+
+			TestEqual(FString::Printf(TEXT("%s readOnlyHint"), *NameStr),
+				Mirrored.bReadOnlyHint, Info.Impact == ESMAssistOperationImpact::ReadOnly);
+			TestEqual(FString::Printf(TEXT("%s destructiveHint"), *NameStr),
+				Mirrored.bDestructiveHint, Info.Impact == ESMAssistOperationImpact::Destructive);
+		}
+	});
+
+	It("Maps each impact onto the matching pair of Monolith hints", [this]()
+	{
+		USMAssistSubsystem* Subsystem = GetSubsystem();
+		if (!TestNotNull("Assist subsystem available", Subsystem))
+		{
+			return;
+		}
+
+		const TArray<TPair<ESMAssistOperationImpact, FString>> Cases =
+		{
+			{ ESMAssistOperationImpact::ReadOnly, TEXT("peek") },
+			{ ESMAssistOperationImpact::Destructive, TEXT("wipe") }
+		};
+
+		for (const TPair<ESMAssistOperationImpact, FString>& Case : Cases)
+		{
+			const FName OpName(*FString::Printf(TEXT("bridgespecimpact.%s"), *Case.Value));
+			Subsystem->RegisterOperation(MakeInfoWithImpact(OpName, Case.Key));
+
+			FMonolithActionInfo Mirrored;
+			if (TestTrue(FString::Printf(TEXT("%s is registered"), *Case.Value),
+				FindAction(TEXT("bridgespecimpact"), Case.Value, Mirrored)))
+			{
+				TestEqual(FString::Printf(TEXT("%s readOnlyHint"), *Case.Value),
+					Mirrored.bReadOnlyHint, Case.Key == ESMAssistOperationImpact::ReadOnly);
+				TestEqual(FString::Printf(TEXT("%s destructiveHint"), *Case.Value),
+					Mirrored.bDestructiveHint, Case.Key == ESMAssistOperationImpact::Destructive);
+			}
+
+			Subsystem->UnregisterOperation(OpName);
 		}
 	});
 

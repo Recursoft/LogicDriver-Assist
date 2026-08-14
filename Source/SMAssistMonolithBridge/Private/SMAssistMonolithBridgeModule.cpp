@@ -219,8 +219,18 @@ void FSMAssistMonolithBridgeModule::HandleOperationRegistered(const FSMAssistOpe
 			return LD::Assist::MonolithBridge::Private::ExecuteBridgedOperation(OperationName, InParams);
 		});
 
-	FMonolithToolRegistry::Get().RegisterAction(Namespace, Action, InInfo.Description, Handler,
+	FMonolithToolRegistry& Registry = FMonolithToolRegistry::Get();
+	Registry.RegisterAction(Namespace, Action, InInfo.Description, Handler,
 		LD::Assist::MonolithBridge::Private::ConvertSchemaToMonolithFormat(InInfo.InputSchema));
+
+	// Monolith serializes per-action hints only for its own namespace. Bridged namespaces reach clients
+	// as a single `<namespace>_query` dispatcher tool, so these hints serve in-process consumers of the
+	// registry until that transport grows per-action annotations. Idempotency is not tracked, and its
+	// MCP default of false is the safe reading.
+	Registry.SetActionAnnotations(Namespace, Action,
+		InInfo.Impact == ESMAssistOperationImpact::ReadOnly,
+		InInfo.Impact == ESMAssistOperationImpact::Destructive,
+		/*bIdempotent*/ false, /*Title*/ FString());
 	BridgedNamespaces.Add(Namespace);
 }
 

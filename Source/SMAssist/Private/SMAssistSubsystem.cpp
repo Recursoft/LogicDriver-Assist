@@ -155,6 +155,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::CreateBlueprint;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Create a new state machine blueprint asset.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -169,6 +170,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::AddState;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Add a state node to an existing state machine blueprint's root graph. Layout (graphs must look human-authored): Entry sits at (0, 0) and the main flow runs left-to-right. For greenfield graphs prefer omitting positions and calling ld.layout_states with apply=true after the last node is added; it spaces nodes by their actual width and avoids overlaps. If placing manually, note node width scales with the DisplayName (short nodes are ~130-150px at 1:1 zoom, long names much wider), so a fixed small step overlaps: leave a generous gap (at least ~350 X, more for long names) and keep at least 150 units between parallel rows (position_y). Avoid crossing edges: insert a new state along the same row rather than offsetting y. ld.get_asset reports logical position_x/position_y but does NOT detect visual overlap; verify with layout_states or a graph capture.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -187,6 +189,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::AddTransition;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Add a transition edge between two existing states in a state machine blueprint.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -203,6 +206,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::AddTransitionReroute;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Add a transition reroute node. Reroute nodes are cosmetic graph nodes that let a transition curve bend around obstructions (e.g., back-edges in cyclic state machines). They have no runtime effect; the primary transition retains all configuration and the reroute chain compiles to the same runtime transition. Two modes, gated by transition_guid: when supplied, the reroute is spliced into that transition's outgoing pin chain (inline-insert); when omitted, the reroute is created standalone on the graph and the caller connects transitions to/from it later via ld.add_transition (reroute GUIDs are valid from/to endpoints).");
 		Info.InputSchema = MakeSchema(
 			{
@@ -219,6 +223,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::ListAssets;
+		Info.Impact = ESMAssistOperationImpact::ReadOnly;
 		Info.Description = TEXT("List state machine blueprint assets, optionally filtered by content path prefix.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -232,6 +237,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::GetAsset;
+		Info.Impact = ESMAssistOperationImpact::ReadOnly;
 		Info.Description = TEXT("Return the structure of a state machine blueprint. Each state entry reports state_guid, state_name, state_class, position_x, position_y, and is_entry. Each transition entry reports transition_guid, from_state_guid, to_state_guid, and transition_class. The top-level payload also includes entry_state_guids (array; multiple only when parallel entry is enabled).");
 		Info.InputSchema = MakeSchema(
 			{
@@ -245,6 +251,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::RemoveNode;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Remove a state or transition node by GUID, breaking all connected pins.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -259,6 +266,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::SetNodeProperty;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Set a value on a node property or mutate an array property's structure. Resolution order (when stack_index is omitted): graph-node properties first (NodePosX, NodePosY, NodeComment, bCommentBubblePinned, etc.), then the node's primary template (node-class fields). When stack_index is provided, targets the stack template directly. Supports scalar and array properties on templates; graph-node properties only support 'set'. Array actions (template-only): 'set' writes value(s) at array_index (auto-grows); 'add' appends a default element; 'insert' inserts a default at array_index; 'duplicate' clones the element at array_index (preserves pin literals and wired graphs); 'move' reorders array_index to target_index (preserves element guids); 'remove' removes array_index; 'clear' empties the array. Structural actions reject a 'value' payload and surface EditFixedSize / read-only arrays as explicit errors. For deeply-nested writes (sub-property of a split struct, text-graph property leaf, etc.) use 'property_path' to target the leaf directly: the write routes through an IPropertyHandle chain so PostEditChangeProperty fires with the full property chain, cascading through Logic Driver's HandleOnPropertyChangedEvent to refresh child property graphs (text-graph buckets, scalar-array buckets). Without 'property_path' only the top-level UPROPERTY is written and split sub-pin defaults / text-graph child graphs do not update.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -280,6 +288,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::SetNodeClass;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Set (or reset) the node class on an existing state, conduit, transition, or nested state machine node - the headless equivalent of the editor's Details 'Node Class' dropdown. Routes through the node's SetNodeClass, which swaps the node instance template and rebuilds its property graphs, so it is safe to call after creation (unlike set_node_property, which deliberately refuses class/object-reference fields). The class must be a subclass of the node's required base: state -> USMStateInstance, conduit -> USMConduitInstance, transition -> USMTransitionInstance, nested state machine -> USMStateMachineInstance; abstract classes are rejected. Omit node_class (or pass an empty string) to revert the node to its default class. Reference nodes derive their class from the referenced blueprint, so they are not a meaningful target. Returns node_guid and node_class (the applied class path).");
 		Info.InputSchema = MakeSchema(
 			{
@@ -295,6 +304,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::Compile;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Compile a Blueprint and return its compile status. Accepts any UBlueprint subclass: state-machine Blueprints (USMBlueprint), Logic Driver node-class Blueprints (USMNodeBlueprint child of USMStateInstance / USMTransitionInstance / etc.), and regular UBlueprints (actor, widget, component subclasses).");
 		Info.InputSchema = MakeSchema(
 			{
@@ -308,6 +318,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::RenameState;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Rename a state node by GUID. Uses the schema name validator.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -323,6 +334,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::SetInitialState;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Rewire the entry pin of a state machine graph to target the given state.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -337,6 +349,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::AddStateStack;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Append a state stack instance to a state node. Returns the resolved stack index and template GUID. state_class must be a USMStateInstance subclass that differs from the state node's primary template class; passing the same class as the primary (e.g. /Script/SMSystem.SMStateInstance on a default state) is rejected by USMGraphNode_StateNode::AddStackNode's self-class check. Pick a different concrete subclass exposed by the project (e.g. /Script/SMDialogue.SMDialogueNode) or a Blueprint-derived class.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -353,6 +366,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::AddTransitionStack;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Append a transition stack instance to a transition edge. Returns the resolved stack index and template GUID. transition_class must be a USMTransitionInstance subclass that differs from the transition's primary template class; passing the same class as the primary (e.g. /Script/SMSystem.SMTransitionInstance on a default transition) is rejected by USMGraphNode_TransitionEdge::AddStackNode's self-class check. Pick a different concrete subclass (e.g. /Script/SMDialogue.SMDialogueTransition) or a Blueprint-derived class.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -369,6 +383,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::AddConduit;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Add a conduit node to an existing state machine blueprint's root graph. Positioning follows the same row-based convention as states: Entry at (0, 0), positive X, match the Y of the row the conduit sits on, >=150 units between rows. A conduit must be wired into the flow in the same authoring step: once added, create inbound and outbound transitions so the conduit bridges two states or a state and a reference (e.g. replace a direct A->B edge with A->Conduit->B). Orphan conduits (no inbound or no outbound transition) are a layout failure.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -388,6 +403,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::AddReference;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Add a state machine reference node to an existing state machine blueprint's root graph. Positioning follows the same row-based convention as states: Entry at (0, 0), positive X, match the Y of its row. A reference node must be wired into the flow in the same authoring step: add at least one inbound transition (and typically an outbound one) so the reference participates in the main flow. Orphan reference nodes are a layout failure. The referenced SMBlueprint is optional — omit reference_asset_path to create a structural state-machine state with no target yet, then set it later via ld.configure_reference. Pass use_intermediate_graph=true to enable the intermediate K2 graph at creation time so SpawnLocalGraphReadNode kinds (GetStateMachineReference, InEndState) are visible/editable inside the reference state; omit (default false) to keep the reference behaving as a plain sub-state-machine.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -407,6 +423,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::ConfigureReference;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Reconfigure an existing state-machine-reference state after creation. Mirrors the Details panel operations on a USMGraphNode_StateMachineStateNode: swap the referenced SMBlueprint and/or toggle intermediate-graph use. At least one of 'reference_asset_path' or 'use_intermediate_graph' must be supplied; unset fields leave the existing state alone. Use this when the reference target needs to change, or when enabling the intermediate graph so GetStateMachineReference / InEndState reads become visible in the editor.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -423,6 +440,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::AddAnyState;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Add an Any State node to a state machine blueprint's root graph. Any State has no graph of its own; transitions added from it are duplicated onto every other state in the same SM at runtime, so it acts as a shared 'from any state' source. Position it on its own row (e.g. y = -150 above the main flow) so its outbound transitions don't visually cross main-flow nodes. AnyState-specific properties (AnyStateTagQuery to limit affected states, bAllowInitialReentry, color overrides) are reachable through ld.set_node_property after creation. Wire at least one outbound transition in the same authoring step so the Any State actually contributes to flow.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -439,6 +457,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::AddLinkState;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Add a Link State node that forwards inbound transitions to another state in the same SM root graph. Use it to converge multiple flow paths on a single state without drawing crossing transitions back to the original. Link State is intentionally minimal: its only configurable surface is the target state ('link_to_state_name', required) and its graph position. The node name is auto-derived from the target ('Link to <target>'); it has no node class, no behavior graph, no state stack, and no Any State tags. Wire at least one inbound transition in the same authoring step or it contributes nothing. To retarget later, write 'LinkedStateName' via ld.set_node_property; to reposition, write 'NodePosX' / 'NodePosY'.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -455,6 +474,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::GetNodeProperties;
+		Info.Impact = ESMAssistOperationImpact::ReadOnly;
 		Info.Description = TEXT("List the editable properties on a node template. Returns name, type, category, and current value for each. With max_depth > 0, struct properties also return a 'members' array and array properties an 'elements' array, recursing one level per unit of depth. Supports an optional stack_index.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -471,6 +491,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::SetTransitionCondition;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Set the default evaluation result of a transition with no assigned node class to true or false.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -486,6 +507,10 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::GetGraphView;
+		// Auto-opening the editor stamps AssetVersion / PluginVersion and recreates the preview object.
+		// Those are serialized, but they carry no authored content and any normal editor open does the
+		// same, so this stays read-only.
+		Info.Impact = ESMAssistOperationImpact::ReadOnly;
 		Info.Description = TEXT("Read live slate-widget geometry, displayed text, and colors for every node in the asset's root graph editor. Auto-opens the asset's blueprint editor and focuses the root graph if needed. Use this to verify how nodes actually render (real widget bounds, displayed titles, body/title colors) instead of guessing from logical positions. Each node entry returns node_guid, kind, logical_position ([x, y] from UEdGraphNode::NodePosX/Y), widget_position ([x, y] from SGraphNode::GetPosition2f), widget_size ([w, h] from GetDesiredSizeForMarquee2f), title_text, body_color/title_color (linear RGBA arrays; reads zero when the slate color is non-specified), comment (omitted if empty), and is_selected. Transition entries also include from_state_guid and to_state_guid. The top-level payload includes panel_view (zoom, view_offset).");
 		Info.InputSchema = MakeSchema(
 			{
@@ -501,6 +526,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::CaptureGraphView;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Capture the asset's blueprint editor as a PNG written to disk; returns the absolute path so the caller can read the image. Auto-opens the asset's blueprint editor and focuses the root graph if needed. Use this when 'ld.get_graph_view' alone isn't enough and you need to actually see how the graph renders (visual sanity check after layout work, debugging color/title rendering, demonstrating a result). With 'clip_to_panel=true' (default) only the SGraphPanel is captured; with false the entire editor window is captured (includes toolbar and side panels). Pass 'node_guid' to frame a single node (overrides 'fit_to_content'); otherwise 'fit_to_content=true' (default) reframes the panel to show every node before capture. Files are written under <Project>/Saved/Screenshots/<output_subdir>/<prefix>.png.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -519,6 +545,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::CaptureLocalGraph;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Capture a single SM graph node's local (bound) graph as a PNG written to disk; returns the absolute path so the caller can read the image. This is the visual companion to 'ld.get_local_graph': where that op returns the bound-graph logic as data, this renders it. Use it to actually see the K2 logic inside a transition's CanEnterTransition graph, a conduit's graph, or a state's OnStateBegin/Update/End graph (e.g. a 'TimeInState -> Greater -> bCanEnterTransition' gate) -- something 'ld.capture_graph_view' cannot do, because that op always frames the root state machine graph and its 'node_guid' only focuses a node within the root panel. The bound graph is resolved from 'node_guid' exactly like ld.get_local_graph: a state, transition (any reroute segment), conduit, or reroute waypoint is accepted, and reroutes and non-primary rerouted segments normalize to the primary transition that owns the single compiled graph. With 'clip_to_panel=true' (default) only the graph panel is captured; with false the entire editor window is captured. 'fit_to_content=true' (default) reframes the panel to show every node before capture. Files are written under <Project>/Saved/Screenshots/<output_subdir>/<prefix>.png. Requires the editor UI (the capture drives Slate). Returns { asset_path, path, width, height, bytes, mime }.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -537,6 +564,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::ClearScreenshots;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Delete PNG screenshots written by 'ld.capture_graph_view' under <Project>/Saved/Screenshots/<output_subdir>. Useful housekeeping when a session has accumulated many captures and only the latest matter. Only files with the .png extension are affected; non-PNG files in the directory are left alone. Returns the directory inspected, deleted_count, freed_bytes, and the list of paths that were deleted (or would be deleted in dry_run mode).");
 		Info.InputSchema = MakeSchema(
 			{
@@ -552,6 +580,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::LayoutStates;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Auto-arrange the states, conduits, references, link states, and any-state nodes in a state machine asset using a layered (Sugiyama-style) layout. Default is dry-run: returns proposed positions without writing. Set 'apply=true' to commit; the writes are wrapped in a single editor transaction so Ctrl+Z reverts the whole layout. Strategy 'left_to_right' (default) flows positive X with stacking on Y; 'top_to_bottom' flows positive Y with stacking on X. AnyState nodes are placed in a perpendicular side lane (above the main flow for LR, left for TB) so their many runtime fan-out edges don't dominate layering. LinkStates are placed at the far-right (or bottom) end of the main flow. Cycles are handled by reversing back-edges for layering; a warning lists each reversed edge. Use 'pin_node_guids' to keep specific nodes at their authored position; the algorithm flows around them and warns on overlap. Scope 'root' (default) lays out only the root SM graph; 'all' walks every nested sub-state-machine and lays each out independently in the same transaction.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -575,6 +604,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::GetPropertyPins;
+		Info.Impact = ESMAssistOperationImpact::ReadOnly;
 		Info.Description = TEXT("Read the property graph pin tree on a state-like SM node. Returns every property graph K2 result node, its result pin, recursive sub-pins, and per-pin diagnostics: default_value, autogenerated_default_value, matches_autogenerated, linked_to_count, sub_pins_count, depth, is_root_result. Use this to verify property graph pin state without opening the editor.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -590,6 +620,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::GetPropertyGraph;
+		Info.Impact = ESMAssistOperationImpact::ReadOnly;
 		Info.Description = TEXT("Resolve a USMPropertyGraph by node + variable + property_path. Returns enough handles (graph_path, graph_name, graph_guid, result_node_name, result_pin_name, bucket_index, element_type) for downstream MCP servers to wire general K2 logic into it. property_path uses the same syntax as ld.set_node_property: 'MemberA.MemberB[i].MemberC'. Indexed segments descend through nested-array buckets, switching to each bucket's child property graph for subsequent segments. Top-level array variables require a leading bare '[index]' segment. Strict-split contract: every struct parent in the path must be split first (use ld.split_pin). bucket_index is -1 for non-bucket leaves; use it as the bucket-element predicate. For text-graph property graphs, call ld.set_property_graph_edit_mode before wiring; it is idempotent on graphs already in edit mode.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -607,6 +638,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::SetPropertyGraphEditMode;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Toggle graph-edit mode on a property graph. Required before wiring text graphs durably: USMTextPropertyGraph's compile pipeline only honors wired changes when the graph is in edit mode. Resolves the target graph the same way as ld.get_property_graph (node + variable + property_path), then routes through ISMGraphGeneration::SetPropertyGraphEditMode under a scoped transaction so single-step undo reverts the toggle.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -624,6 +656,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::SplitPin;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Split a splittable-struct property pin on a state-like SM node, mirroring the editor's right-click 'Split Struct Pin' on the result pin (no pin_id) or any sub-pin row (pin_id). Targets the property graph identified by variable_name; resolves the result node via Node->GetAllPropertyGraphNodes(). When pin_id is omitted, gated by USMPropertyGraph::CanSplitResultPin (refused for non-struct types, struct types that opt out via CanEverSplit, FText-typed properties, the text-graph property, or properties already split). When pin_id is provided, the sub-pin is located by PinId in the result-pin tree (matching what ld.get_property_pins returns) and gated by USMPropertyGraph::CanSplitSubPin. Operation is transacted. Returns applied=true, is_split_struct (post-op), flag_b_split, and the post-op result_pin tree so callers can verify the split in one round-trip.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -640,6 +673,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::RecombinePin;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Recombine a previously split struct pin on a state-like SM node, mirroring the editor's right-click 'Recombine Struct Pin'. Targets the property graph identified by variable_name; resolves the result node via Node->GetAllPropertyGraphNodes(). When pin_id is omitted, the top-level result pin is recombined (gated by LD::Editor::PropertyUtils::IsSplitStructResultNode; refused when the property is not currently split). When pin_id is provided, the sub-pin is located by PinId and recombined (refused when the sub-pin has no SubPins). Recombining a nested sub-pin flattens deeper splits beneath it (engine RecombinePin is recursive). Per-sub-pin wiring is discarded by the engine; the Logic Driver child-graph buckets that backed those sub-pins are cleaned up by the property graph. Operation is transacted. Returns applied=true, is_split_struct (post-op), flag_b_split, and the post-op result_pin tree.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -656,6 +690,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::ResetNodeProperty;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Reset a node template property to its archetype/CDO default. Mirrors the editor's right-click 'Reset Pin to Default Value' on an exposed graph property: routes through ISMGraphGeneration::ResetNodePropertyValue, which resolves the property graph and resets the graph + template default. Symmetric with ld.set_node_property. Returns node_guid and property_name; array_index and stack_index when provided.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -673,6 +708,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::AddSMVariable;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Add a member variable to a state-machine blueprint (USMBlueprint). Mirrors the editor's My Blueprint -> +Variable flow via FBlueprintEditorUtils::AddMemberVariable. Use this for FSM-blueprint-scoped variables; for node-instance variables on a USMStateInstance / USMConduitInstance / USMTransitionInstance subclass, use ld.add_node_variable instead. NOTE: this op does NOT compile the blueprint. The variable is added to the blueprint's NewVariables list but its FProperty is not materialized on the GeneratedClass until the next ld.compile. Downstream ops that look up the FProperty (notably ld.connect_node_variable_output with to_owning_blueprint_variable) will fail until you compile. Call ld.compile yourself when ready -- batch many adds before compiling for best performance.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -691,6 +727,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::SpawnLocalGraphReadNode;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Spawn a Logic Driver local-graph-read K2 node into a state's local graph (OnStateBegin/Update/End share one bound graph per state) or a transition's CanEnterTransition graph. Compatibility by type: TimeInState / HasStateUpdated / GetNodeInstance work in state graphs and transition graphs; GetStateInformation is state-only; CanEvaluate / CanEvaluateFromEvent / GetTransitionInformation are transition-only; GetStateMachineReference is the intermediate graph of a state-machine-reference state (USMGraphNode_StateMachineStateNode); InEndState is a transition graph whose source state is a state-machine-reference state. The two sub-SM-only kinds reject plain state and transition graphs with 'is not compatible with graph'. Call ld.add_reference first, then pass that state's guid (GetStateMachineReference) or the guid of a transition out of it (InEndState). Engine create_node does not expose these nodes, which is why this op exists. Returns the new node's id, node_guid, and pins (matching ld.add_local_graph_node), so you can wire its output straight into a comparison from ld.add_local_graph_node with ld.connect_local_graph_pins, no intervening ld.get_local_graph needed.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -710,6 +747,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::ConfigureSMComponentOnActor;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Configure the USMStateMachineComponent template on an actor blueprint's SCS. Operates on the BP-class component (not a placed-instance component) so configuration persists into every placed actor. Sets StateMachineClass on the template when state_machine_class is supplied. Boolean fields use true/false; pass only the keys you want to change (others stay at their current template value). Enum fields accept display names: 'Client' | 'Server' | 'ClientAndServer'. The extra_config_json valve takes a JSON object of UPROPERTY name -> value for fields not promoted above; unrecognized keys are returned in 'unknown_keys' rather than failing the op.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -738,6 +776,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::SpawnLocalGraphWriteNode;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Spawn a Logic Driver local-graph-write K2 node into a transition's CanEnterTransition graph or a conduit's bound graph. Compatibility by type: CanEvaluate works in transition and conduit graphs and disables/enables evaluation of the enclosing edge; CanEvaluateFromEvent is transition-only and disables/enables event-driven evaluation specifically. Both expose a single boolean input pin (seedable via 'default_value' or wireable to upstream K2 logic via blueprint connect_pins). TransitionEventReturn is intentionally NOT spawnable here: it is auto-placed as a side effect of binding a transition delegate; use ld.configure_transition_event instead. Engine create_node does not expose these nodes, which is why this op exists. Returns the new node's id, node_guid, and pins (matching ld.add_local_graph_node), so its boolean input pin can be wired with ld.connect_local_graph_pins (or seeded via default_value), no intervening ld.get_local_graph needed.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -756,6 +795,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::SpawnLocalGraphEventNode;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Spawn a Logic Driver lifecycle event-entry K2 node into a state's local graph or a transition's / conduit's bound graph. These are execution entry points that fire at a node lifecycle moment; wire your own K2 logic from the node's output exec pin (via ld.connect_local_graph_pins). Equivalent to the editor's right-click 'Add Event On ...' menu, and to what a node class auto-adds when assigned - on a graph with no node class they are absent until spawned here. Compatibility by type: OnInitialized and OnShutdown work in state, transition, and conduit graphs; OnStateUpdate (exposes a DeltaSeconds output) and OnStateEnd are state-only; OnTransitionEntered is transition+conduit; OnTransitionPreEvaluate and OnTransitionPostEvaluate are transition-only; OnRootStateMachineStart and OnRootStateMachineStop work in state, transition, and conduit graphs. OnTransitionEntered/PreEvaluate/PostEvaluate and OnRootStateMachineStart/Stop are singletons and fail if already present. OnStateBegin is not spawnable: its entry node is the always-present container of every state graph. Engine create_node does not expose these nodes, which is why this op exists. Returns the new node's id, node_guid, and pins (matching ld.add_local_graph_node), so its output exec pin can be wired straight away with no intervening ld.get_local_graph.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -773,6 +813,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::GetLocalGraph;
+		Info.Impact = ESMAssistOperationImpact::ReadOnly;
 		Info.Description = TEXT("Read the local (bound) graph of any Logic Driver SM graph node: a state's OnStateBegin/Update/End graph (a state shares one bound graph across those events), a transition's CanEnterTransition graph, or a conduit's graph. This is the primitive that makes bound-graph K2 authoring reachable: Logic Driver owns the node->bound-graph resolution that generic blueprint tools cannot do, because their graph lookup does not recurse into node-owned bound graphs. Returns the graph's addressable identity (graph_name, graph_path, graph_guid) plus its nodes and pins; each node 'id' is the object name and each pin 'connected_to' entry is 'NodeName.PinName', matching the ids generic connect_pins expects, so an agent can read existing logic back and -- where the transport's graph resolver can reach a bound graph -- author into it with generic create_node/connect_pins. node_guid accepts a state, transition, conduit, or reroute node. Reroute waypoints and non-primary rerouted transition segments are normalized to the primary transition that owns the single compiled graph: 'node_guid' in the response is the resolved node and 'is_rerouted' flags the chain. For transition and conduit graphs the response also pins the wire-INTO anchor: result_node_name + result_pin_id + result_pin_name identify the evaluation pin a boolean condition connects to (the same pin ld.set_transition_condition writes a literal to). State graphs expose their entry points as ordinary nodes in the list (look for the state-entry K2 node classes). Read-only.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -788,6 +829,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::AddLocalGraphNode;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Place any Blueprint K2 node into the bound (local) graph of an SM node (state OnStateBegin/Update/End graph, transition CanEnterTransition graph, or conduit graph). The bound graph is resolved from node_guid exactly like ld.get_local_graph (reroutes normalize to the primary transition), then the node is spawned directly by Logic Driver Assist -- this does NOT depend on the transport's generic graph resolver, so it works even where blueprint tools cannot address a bound graph by name. node_class accepts ANY UK2Node class: a class name (K2Node_IfThenElse, K2Node_MakeArray), a full class path (/Script/BlueprintGraph.K2Node_Knot), or a friendly alias (call_function, branch, get_variable, set_variable, sequence, cast, self). Reference-bearing nodes take their configuration from extra args: call_function needs function_name (+ function_class when not on KismetMathLibrary/KismetSystemLibrary/the FSM class); get_variable/set_variable need variable_name (a member variable on the FSM blueprint -- compile it first if just added); cast requires target_class. Every other node type spawns with its default pins, ready to wire. Returns the new node's id (object name) + node_guid + pins. For Logic Driver's own read/write specials (TimeInState, HasStateUpdated, CanEvaluate, ...) use ld.spawn_local_graph_read_node / ld.spawn_local_graph_write_node instead. Wire with ld.connect_local_graph_pins, seed literals with ld.set_local_graph_pin_default, then ld.compile.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -809,6 +851,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::ConnectLocalGraphPins;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Connect two pins within an SM node's bound (local) graph. The graph is resolved from node_guid exactly like ld.get_local_graph. from_node_id/to_node_id accept the node 'id' (object name) returned by ld.get_local_graph or ld.add_local_graph_node, or a node guid; from_pin/to_pin accept a pin name (e.g. 'bCanEnterTransition', 'ReturnValue', 'A') or a pin id. from_pin resolves against the source node's OUTPUT pins and to_pin against the destination's INPUT pins. Routes through the K2 schema's CanCreateConnection/TryCreateConnection (so type-promotion/conversion nodes are inserted when the schema calls for it); a disallowed connection returns the schema's reason. Marks the blueprint structurally modified; call ld.compile when the graph is complete. Example: wire a spawned comparison's ReturnValue into the transition result node's bCanEnterTransition pin (result_node_name / result_pin_name from ld.get_local_graph).");
 		Info.InputSchema = MakeSchema(
 			{
@@ -827,6 +870,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::SetLocalGraphPinDefault;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Set the literal default value of an input pin inside an SM node's bound (local) graph, mirroring typing a value into an unconnected pin. The graph is resolved from node_guid like ld.get_local_graph; node_id accepts the node 'id' (object name) or a node guid; pin accepts a pin name or pin id and resolves against the node's INPUT pins. value is UE property-text (e.g. '2.5', 'true', an enum name); routes through the schema's TrySetDefaultValue. Ignored by the compiler if the pin is wired. Use it to seed a comparison threshold (e.g. set pin 'B' of a Greater node to '2.5'). Marks the blueprint structurally modified; call ld.compile when done.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -844,6 +888,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::RemoveLocalGraphNode;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Remove a K2 node from an SM node's bound (local) graph. The graph is resolved from node_guid like ld.get_local_graph; node_id accepts the node 'id' (object name) returned by ld.get_local_graph / ld.add_local_graph_node, or a node guid. Structural root nodes (the transition/conduit result node, state entry nodes) cannot be removed -- the op refuses them, matching the editor. Removing a node also breaks its pin links. Marks the blueprint structurally modified; call ld.compile when done. Returns the removed node id and the graph's remaining node_count.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -859,6 +904,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::DisconnectLocalGraphPins;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Break a single connection between two pins in an SM node's bound (local) graph -- the inverse of ld.connect_local_graph_pins, taking the same identifiers. The graph is resolved from node_guid like ld.get_local_graph; node ids accept the get_local_graph 'id' or a node guid; pins accept a name or a pin id. Only the link between the two named pins is broken (other links on those pins are untouched). Note that re-connecting an already-wired input pin auto-breaks the old link, so this op is mainly for detaching a wire without replacing it. Returns disconnected=true when the pins were linked, false when they were not. Marks the blueprint structurally modified.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -877,6 +923,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::SetLocalGraphNode;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Modify an existing K2 node in an SM node's bound (local) graph in place. The graph is resolved from node_guid like ld.get_local_graph; node_id accepts the node 'id' (object name) from ld.get_local_graph / ld.add_local_graph_node, or a node guid. Sets only the fields you supply: position_x / position_y (reposition), comment (node comment; empty string clears it), enabled (false disables the node, true re-enables it). At least one field is required. Position and comment are cosmetic (blueprint marked dirty); enabled feeds compilation (marked structurally modified). Deep reconfiguration such as changing a call node's function is not done here -- remove the node with ld.remove_local_graph_node and add a new one. Returns the node's post-change id, pos, comment, and enabled state.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -896,6 +943,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::ConfigureTransitionEvent;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Bind, rebind, or clear the auto-bound event on a transition edge, and/or update its trigger flags. Mirrors a user edit in the transition's Details panel exactly: applies each set field via PreEditChange/PostEditChangeProperty, so cascading resets (e.g. changing 'delegate_owner_instance' clears 'delegate_property_name' and 'delegate_owner_class' before later writes restore them) match the Details panel and any open panel auto-refreshes. Set 'delegate_property_name' to an empty string to clear the binding: this removes the auto-spawned event entry node from the transition's bound graph but PRESERVES any TransitionEventReturn the user wired downstream logic into (same behavior as a Details panel clear, so unbind/rebind cycles don't lose work). At least one field must be supplied. TransitionEventReturn is auto-placed on first bind. Never call ld.spawn_local_graph_write_node to create it.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -915,6 +963,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::FindNodeTypes;
+		Info.Impact = ESMAssistOperationImpact::ReadOnly;
 		Info.Description = TEXT("Enumerate Logic Driver K2 read/write kinds that are spawnable into a target state/transition/conduit bound graph. The Logic Driver companion to BlueprintTools.find_node_types: the engine action menu does not list LD K2 nodes (they're filtered out and spawned through dedicated ld.spawn_local_graph_*_node ops), so even a fully-fixed upstream find_node_types would never include them. Returns per-kind metadata: which spawn op to call, the spawn_type string to pass. Does NOT enumerate engine K2 nodes. For those, note that UE 5.8's BlueprintTools.find_node_types rejects SM transition/conduit bound graphs with 'Cannot cast type ... to Blueprint'; workaround is to query find_node_types against any non-SM UBlueprint's EventGraph (type_ids are universal across graphs).");
 		Info.InputSchema = MakeSchema(
 			{
@@ -930,6 +979,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::AddNodeVariable;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Add a Blueprint variable to a node-class Blueprint (a USMNodeInstance / USMStateInstance / USMConduitInstance / USMTransitionInstance subclass). Mirrors the editor's My Blueprint -> +Variable flow via FBlueprintEditorUtils::AddMemberVariable, and optionally stamps directional / hidden / read-only flags via the same path used by SMVariableCustomization. Transition-class blueprints accept plain variables but reject 'direction', 'b_hidden', 'b_read_only' (matches the editor's Variable Details panel filter). To author state/transition/conduit subclass variables in one call instead of post-add configure, set the directional flags here. COMPILE BEHAVIOR: when any of 'direction', 'b_hidden', 'b_read_only' is set, the blueprint is compiled in-call so the override can be stamped on the CDO; subsequent ops see the new FProperty immediately. When none of those fields are set (plain variable add), the blueprint is NOT compiled -- batch multiple adds and call ld.compile once at the end for best performance.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -951,6 +1001,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::AddBlueprintVariable;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Add a member variable to ANY blueprint (UBlueprint), including plain Actor / GameMode / GameState / object blueprints. Mirrors the editor's My Blueprint -> +Variable flow via FBlueprintEditorUtils::AddMemberVariable, with full container support (Array / Map / Set). Use this when the engine's BlueprintTools.add_variable falls short -- notably for container-typed variables, which the engine op cannot author. For state-machine blueprints use ld.add_sm_variable; for node-class (USMNodeInstance subclass) blueprints use ld.add_node_variable. NOTE: this op does NOT compile the blueprint. The variable is added to the blueprint's NewVariables list but its FProperty is not materialized on the GeneratedClass until the next compile. Compile yourself when ready -- batch many adds before compiling for best performance.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -969,6 +1020,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::ConfigureNodeVariable;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Reconfigure an existing variable on a node-class blueprint (USMNodeInstance / USMStateInstance / USMConduitInstance subclass). Mirrors the Direction combobox plus Hidden / ReadOnly toggles in SMVariableCustomization. Each field is gated by a paired 'b_update_*' flag so the AI can express 'leave alone' vs 'explicitly set' unambiguously. At least one of b_update_direction, b_update_hidden, b_update_read_only must be true. Transition-class blueprints are not supported (the function only sets directional / hidden / read-only state, which transition-class variables do not have). The variable must already be DISPLAYED ON THE GRAPH NODE, since direction / hidden / read-only are attributes of that display and mean nothing without it. A variable qualifies by being instance editable, or by being a graph-property type such as FSMTextGraphProperty. Variables added through ld.add_node_variable WITH a 'direction' are exposed automatically, so they can be reconfigured here freely; one added without a direction is a plain blueprint variable and is refused, so pass 'direction' at creation or re-add it. The blueprint must also have been compiled since the variable was added, otherwise its FProperty does not exist yet.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -989,6 +1041,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::ConnectNodeVariableOutput;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Wire a node-class output variable to either another node's input variable (within the same FSM) or to a variable on the owning FSM blueprint. Spawns the matching IO reader/writer K2 node inside the relevant property sub-graph and links pins, identical to what a user does by opening the property graph and dragging. Stack-aware: when the source or destination variable lives on a stacked instance, set 'from_stack_index' / 'to_stack_index' (same convention as set_node_property; omit or -1 = primary template). Targets are mutually exclusive: supply EITHER 'to_state_guid' + 'to_variable_name' for node->node wiring, OR 'to_owning_blueprint_variable' for node->owner wiring. Idempotent: if the wire already exists, returns success without spawning duplicate IO nodes. Preconditions: source variable must be Output (or Both); destination variable must be Input (or Both) for node->node; owning-BP variable must exist for node->owner; pin types must be compatible.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -1009,6 +1062,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::DisconnectNodeVariableOutput;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Break a previously-established node-output wire. Argument shape mirrors connect_node_variable_output exactly. Returns 'applied' = true when a matching wire was found and broken; false when no matching wire was present (idempotent).");
 		Info.InputSchema = MakeSchema(
 			{
@@ -1029,6 +1083,10 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::RuntimeGetState;
+		// The active-state accessors run GetOrCreateNodeInstance, so reading allocates a transient node
+		// instance for any default-class state. That costs memory in the running session and destroys
+		// nothing, so this stays read-only.
+		Info.Impact = ESMAssistOperationImpact::ReadOnly;
 		Info.Description = TEXT("Introspect a running state machine during Play-In-Editor. Resolves the actor in the live PIE world, finds its USMStateMachineComponent, and reports the live instance's active state(s), is_active, and is_in_end_state. Use this for runtime validation instead of editor.run_python.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -1046,6 +1104,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::SetConduitCondition;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Set a conduit's default pass condition (its bCanEnterTransition result-pin default), mirroring set_transition_condition. Guidance: a conduit used as an always-true entry gate is better modeled as an empty state (no condition to evaluate, routes purely on transitions); use a conduit for real branch points and leave eval-with-transitions on (configure that via add_conduit or set_node_property).");
 		Info.InputSchema = MakeSchema(
 			{
@@ -1061,6 +1120,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::SpawnActorContextComponent;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Author the LD context-to-component reach chain in one call: GetContext -> Cast To <actor class> -> GetComponentByClass(<component class>), in a node-class graph. The state machine's context is cast to the supplied actor class (the context is not itself a component). All three nodes are pure (no exec pins), so this is a self-contained data cluster: wire the typed component from component_output_pin_id into wherever you need it and the chain evaluates on demand.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -1079,6 +1139,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::CollapseToStateMachine;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Collapse a set of state nodes into a new nested state machine in the same root graph, the headless equivalent of the editor's \"Collapse to State Machine\". Boundary transitions (edges crossing the selection) are rewired onto the new container; fully-interior states and edges move into its bound graph. The set must contain at least one state node and every node must belong to the same state machine graph. Reroute waypoints do not count toward the state-node requirement, and transitions between included states are pulled in automatically even if omitted. Returns state_guid (the new container's guid, kind 'state_machine_state') and state_name.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -1093,6 +1154,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::MergeStates;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Merge source states' node-class templates into a destination state's stack, the headless equivalent of the editor's \"Cut and Merge States\" (b_destroy_states=true) / \"Copy and Merge States\" (b_destroy_states=false). Each source contributes its non-default templates as new stack entries on the destination; a source on the default node class with no stack contributes nothing. The cut variant also destroys each source and rewires its transitions onto the destination. Destination and sources must be plain states (USMGraphNode_StateNode) in the same graph; a source equal to the destination is rejected. Returns destination_state_guid, merged_stack_template_guids (the minted stack-template guids; empty when no source contributed a non-default template), and b_destroy_states (echoes the applied mode).");
 		Info.InputSchema = MakeSchema(
 			{
@@ -1109,6 +1171,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::ReplaceNode;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Replace a node in place with a different kind, the headless equivalent of the editor's \"Replace With ...\" entries. Existing transitions are preserved and the original node is removed; the replacement is a freshly minted node, so the returned node_guid differs from the input. The set of valid target kinds for a given node matches the editor's right-click availability (e.g. a transition cannot be replaced). 'parent' is only valid in a child state machine blueprint whose parent class exposes a state machine to override. Returns node_guid (the replacement node's guid, which differs from the input) and kind (echoes the input).");
 		Info.InputSchema = MakeSchema(
 			{
@@ -1124,6 +1187,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = Ops::ConvertToReference;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("Convert an inline nested state machine node into its own reusable state-machine-reference asset, the headless equivalent of the editor's \"Convert to State Machine Reference\" (no modal dialog). A new SMBlueprint is minted to hold the extracted graph, the node is rebound as a reference to it, and the original inline graph is emptied. The node keeps its guid. The node must be an inline nested state machine (USMGraphNode_StateMachineStateNode that is not already a reference and not a parent node). Returns node_guid (unchanged), reference_asset_path (the minted asset's object path), and name (the minted asset's short name).");
 		Info.InputSchema = MakeSchema(
 			{
@@ -1150,6 +1214,7 @@ void USMAssistSubsystem::RegisterGenericFallbackOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = GOps::ReadProperty;
+		Info.Impact = ESMAssistOperationImpact::ReadOnly;
 		Info.Description = TEXT("FALLBACK ONLY. Alternative to the official engine MCP blueprint.* tools; use only when those cannot express the read (e.g. TMap/TArray element values, or a target object other than self). Reads a property value via reflection from an asset CDO (target=edit) or a live PIE actor (target=runtime).");
 		Info.InputSchema = MakeSchema(
 			{
@@ -1166,6 +1231,7 @@ void USMAssistSubsystem::RegisterGenericFallbackOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = GOps::WriteProperty;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("FALLBACK ONLY. Alternative to the official engine MCP blueprint.* tools; use only when those cannot express the write (e.g. TMap/TArray element values, or a target object other than self). Writes a property value via reflection. 'value' uses UE property-text form (same as ld.set_node_property). Edit-target writes change the CDO/archetype and may need ld.compile to propagate; runtime writes are transient. Arrays are not grown; absent map keys are created.");
 		Info.InputSchema = MakeSchema(
 			{
@@ -1183,6 +1249,7 @@ void USMAssistSubsystem::RegisterGenericFallbackOperations()
 	{
 		FSMAssistOperationInfo Info;
 		Info.Name = GOps::AddDispatcher;
+		Info.Impact = ESMAssistOperationImpact::Destructive;
 		Info.Description = TEXT("FALLBACK ONLY. Alternative to the official engine MCP blueprint.add_event_dispatcher; use only when that fails (its dispatchers do not survive compile). Adds a multicast-delegate event dispatcher that survives compilation, with an optional parameter signature.");
 		Info.InputSchema = MakeSchema(
 			{
