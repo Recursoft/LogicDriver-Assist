@@ -4320,7 +4320,7 @@ void FAssistOperationsSpec::Define()
 
 		It("Rejects a path segment that doesn't exist on the struct", [=, this]()
 		{
-			AddExpectedError(TEXT("has no matching sub-pin"), EAutomationExpectedErrorFlags::Contains, 1);
+			AddExpectedError(TEXT("does not name a member of"), EAutomationExpectedErrorFlags::Contains, 1);
 			const FString AssetPath = CreateTransientBlueprint();
 			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
 			{

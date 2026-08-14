@@ -454,6 +454,72 @@ void FAssistPropertyPersistenceSpec::Define()
 			}
 		});
 	});
+
+	Describe("ld.split_pin on an already-split property", [this]()
+	{
+		// A split reseeds every sub-pin from the class default, so the authored values are what the
+		// refusal has to protect. TestTunedValues covers the template and both sub-pin literals: the
+		// literals are the half a reseed resets, and the split flag survives a reseed either way.
+		It("Refuses the split and leaves the authored values intact", [this]()
+		{
+			const FString AssetPath = CreateBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+			const FString StateGuid = MakeTunedState(AssetPath);
+			if (StateGuid.IsEmpty())
+			{
+				return;
+			}
+
+			const FSMAssistOperationResult SecondSplit = SplitPin(AssetPath, StateGuid, TEXT("TunedStruct"));
+			TestFalse("Second split is refused", SecondSplit.bSuccess);
+			TestTrue("Error names the already-split state",
+				SecondSplit.ErrorMessage.Contains(TEXT("already split")));
+
+			TestTunedValues(AssetPath, StateGuid, TEXT("after the refused re-split"));
+
+			const FSMAssistOperationResult CompileResult = Compile(AssetPath);
+			TestTrue("Compile succeeds", CompileResult.bSuccess);
+			TestTunedValues(AssetPath, StateGuid, TEXT("after a compile following the refused re-split"));
+		});
+	});
+
+	Describe("ld.set_node_property property_path resolution", [this]()
+	{
+		It("Names the unresolved segment instead of blaming split state", [this]()
+		{
+			AddExpectedError(TEXT("does not name a member of"), EAutomationExpectedErrorFlags::Contains, 1);
+			const FString AssetPath = CreateBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+			const FString StateGuid = MakeTunedState(AssetPath);
+			if (StateGuid.IsEmpty())
+			{
+				return;
+			}
+
+			// Positive control: the path is relative to the property, so the bare member resolves.
+			const FSMAssistOperationResult Relative =
+				SetPropertyAtPath(AssetPath, StateGuid, TEXT("TunedStruct"), TEXT("Close"), TEXT("9.0"));
+			TestTrue("Relative path write succeeds", Relative.bSuccess);
+
+			// TunedStruct is split, so a message demanding a split names a cause that does not hold
+			// and points at the one call that would reset the values.
+			const FSMAssistOperationResult Repeated =
+				SetPropertyAtPath(AssetPath, StateGuid, TEXT("TunedStruct"), TEXT("TunedStruct.Close"), TEXT("9.0"));
+			TestFalse("Repeated-property path is rejected", Repeated.bSuccess);
+			TestTrue("Error names the failing segment",
+				Repeated.ErrorMessage.Contains(TEXT("'TunedStruct' does not name a member")));
+			TestTrue("Error lists the valid members",
+				Repeated.ErrorMessage.Contains(TEXT("Close")) && Repeated.ErrorMessage.Contains(TEXT("Far")));
+			TestFalse("Error does not demand splitting an already-split pin",
+				Repeated.ErrorMessage.Contains(TEXT("must be split via SplitPin")));
+		});
+	});
 }
 
 #endif // PLATFORM_DESKTOP

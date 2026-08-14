@@ -1207,14 +1207,20 @@ FSMAssistOperationResult LD::Assist::SetNodeProperty(const TSharedRef<FJsonObjec
 				*PropertyName, *NormalizedAction));
 	};
 
-	// Hint surfaced on PropertyPath-write failures so the MCP caller knows the strict-split
-	// precondition (the log line has the exact unsplit segment, but the JSON error reaches the
-	// agent first and needs to be actionable on its own).
+	// Detail appended to PropertyPath-write failures. The write path reports the actual cause when it
+	// resolved one (unknown member naming the valid alternatives, or a genuinely unsplit parent);
+	// the strict-split precondition is only assumed when it did not, since asserting it on an
+	// unresolved segment sends the caller to re-split a pin that is already split.
+	FString PathError;
 	auto MakeSplitHint = [&]() -> FString
 	{
+		if (!PathError.IsEmpty())
+		{
+			return FString::Printf(TEXT(" %s"), *PathError);
+		}
 		return PropertyPath.IsEmpty()
 			? FString()
-			: TEXT(" When using property_path, every struct parent in the chain must be split via SplitPin first (top-level pin AND every intermediate struct member).");
+			: TEXT(" The log carries the specific cause. One common cause: when using property_path, every struct parent in the chain must be split via SplitPin first (top-level pin AND every intermediate struct member).");
 	};
 
 	if (NormalizedAction == TEXT("clear"))
@@ -1224,7 +1230,7 @@ FSMAssistOperationResult LD::Assist::SetNodeProperty(const TSharedRef<FJsonObjec
 			return MakeReadOnlyError();
 		}
 		PropertyArgs.ArrayChangeType = ISMGraphGeneration::EArrayChangeType::Clear;
-		if (!GraphGen->SetNodePropertyValue(Node, PropertyArgs))
+		if (!GraphGen->SetNodePropertyValue(Node, PropertyArgs, &PathError))
 		{
 			return FSMAssistOperationResult::MakeError(
 				FString::Printf(TEXT("Failed to clear array property '%s' on node.%s"), *PropertyName, *MakeSplitHint()));
@@ -1247,7 +1253,7 @@ FSMAssistOperationResult LD::Assist::SetNodeProperty(const TSharedRef<FJsonObjec
 		}
 		PropertyArgs.ArrayChangeType = ISMGraphGeneration::EArrayChangeType::RemoveElement;
 		PropertyArgs.PropertyIndex = RemoveIndex;
-		if (!GraphGen->SetNodePropertyValue(Node, PropertyArgs))
+		if (!GraphGen->SetNodePropertyValue(Node, PropertyArgs, &PathError))
 		{
 			return FSMAssistOperationResult::MakeError(
 				FString::Printf(TEXT("Failed to remove element %d from array property '%s'.%s"), RemoveIndex, *PropertyName, *MakeSplitHint()));
@@ -1264,7 +1270,7 @@ FSMAssistOperationResult LD::Assist::SetNodeProperty(const TSharedRef<FJsonObjec
 			return MakeReadOnlyError();
 		}
 		PropertyArgs.ArrayChangeType = ISMGraphGeneration::EArrayChangeType::AddElement;
-		if (!GraphGen->SetNodePropertyValue(Node, PropertyArgs))
+		if (!GraphGen->SetNodePropertyValue(Node, PropertyArgs, &PathError))
 		{
 			return FSMAssistOperationResult::MakeError(
 				FString::Printf(TEXT("Failed to add element to array property '%s'.%s"), *PropertyName, *MakeSplitHint()));
@@ -1287,7 +1293,7 @@ FSMAssistOperationResult LD::Assist::SetNodeProperty(const TSharedRef<FJsonObjec
 		}
 		PropertyArgs.ArrayChangeType = ISMGraphGeneration::EArrayChangeType::InsertElement;
 		PropertyArgs.PropertyIndex = InsertIndex;
-		if (!GraphGen->SetNodePropertyValue(Node, PropertyArgs))
+		if (!GraphGen->SetNodePropertyValue(Node, PropertyArgs, &PathError))
 		{
 			return FSMAssistOperationResult::MakeError(
 				FString::Printf(TEXT("Failed to insert element at %d into array property '%s'.%s"), InsertIndex, *PropertyName, *MakeSplitHint()));
@@ -1311,7 +1317,7 @@ FSMAssistOperationResult LD::Assist::SetNodeProperty(const TSharedRef<FJsonObjec
 		}
 		PropertyArgs.ArrayChangeType = ISMGraphGeneration::EArrayChangeType::DuplicateElement;
 		PropertyArgs.PropertyIndex = SourceIndex;
-		if (!GraphGen->SetNodePropertyValue(Node, PropertyArgs))
+		if (!GraphGen->SetNodePropertyValue(Node, PropertyArgs, &PathError))
 		{
 			return FSMAssistOperationResult::MakeError(
 				FString::Printf(TEXT("Failed to duplicate element %d in array property '%s'.%s"), SourceIndex, *PropertyName, *MakeSplitHint()));
@@ -1347,7 +1353,7 @@ FSMAssistOperationResult LD::Assist::SetNodeProperty(const TSharedRef<FJsonObjec
 		PropertyArgs.ArrayChangeType = ISMGraphGeneration::EArrayChangeType::MoveElement;
 		PropertyArgs.PropertyIndex = SourceIndex;
 		PropertyArgs.TargetIndex = DestIndex;
-		if (!GraphGen->SetNodePropertyValue(Node, PropertyArgs))
+		if (!GraphGen->SetNodePropertyValue(Node, PropertyArgs, &PathError))
 		{
 			return FSMAssistOperationResult::MakeError(
 				FString::Printf(TEXT("Failed to move element %d to %d in array property '%s'.%s"), SourceIndex, DestIndex, *PropertyName, *MakeSplitHint()));
@@ -1392,17 +1398,14 @@ FSMAssistOperationResult LD::Assist::SetNodeProperty(const TSharedRef<FJsonObjec
 	{
 		PropertyArgs.PropertyIndex = bValueIsArray ? Idx : StartIndex;
 		PropertyArgs.PropertyDefaultValue = ValueStrings[Idx];
-		if (!GraphGen->SetNodePropertyValue(Node, PropertyArgs))
+		if (!GraphGen->SetNodePropertyValue(Node, PropertyArgs, &PathError))
 		{
 			const FString PathSuffix = PropertyPath.IsEmpty()
 				? FString()
 				: FString::Printf(TEXT(" path '%s'"), *PropertyPath);
-			const FString SplitHint = PropertyPath.IsEmpty()
-				? FString()
-				: TEXT(" When using property_path, every struct parent in the chain must be split via SplitPin first (top-level pin AND every intermediate struct member).");
 			return FSMAssistOperationResult::MakeError(
 				FString::Printf(TEXT("Failed to set property '%s'%s at index %d on node.%s"),
-					*PropertyName, *PathSuffix, PropertyArgs.PropertyIndex, *SplitHint));
+					*PropertyName, *PathSuffix, PropertyArgs.PropertyIndex, *MakeSplitHint()));
 		}
 	}
 
@@ -4500,8 +4503,18 @@ FSMAssistOperationResult LD::Assist::SplitPin(const TSharedRef<FJsonObject>& InA
 	{
 		if (!Target.PropertyGraph->CanSplitResultPin())
 		{
+			// Already-split gets its own wording: it is the one refusal the caller can act on. Mirrors
+			// the SubPins-only condition in CanSplitResultPin so the two cannot disagree.
+			const FSMGraphProperty_Base* Prop = Target.ResultNode ? Target.ResultNode->GetPropertyNodeConst() : nullptr;
+			const UEdGraphPin* RootPin = Target.ResultNode ? Target.ResultNode->GetResultPin(EGPD_Input) : nullptr;
+			if (Prop && RootPin && RootPin->SubPins.Num() > 0)
+			{
+				return FSMAssistOperationResult::MakeError(
+					FString::Printf(TEXT("Property '%s' is already split; splitting again would reset it and every sub-pin to the class default. Write sub-pin values with property_path instead. RecombinePin collapses a split pin, but a property inlined by ShowOnlyInnerProperties is permanently split and re-splits on the next reconstruction."),
+						*Prop->VariableName.ToString()));
+			}
 			return FSMAssistOperationResult::MakeError(
-				TEXT("Property is not splittable (CanSplitResultPin=false). Type may not be a splittable struct, the property may opt out via CanEverSplit, or it may already be split."));
+				TEXT("Property is not splittable (CanSplitResultPin=false). Type may not be a splittable struct, or the property may opt out via CanEverSplit."));
 		}
 		Target.PropertyGraph->SplitResultPin();
 	}
@@ -4509,6 +4522,12 @@ FSMAssistOperationResult LD::Assist::SplitPin(const TSharedRef<FJsonObject>& InA
 	{
 		if (!Target.PropertyGraph->CanSplitSubPin(Target.TargetSubPin))
 		{
+			if (Target.TargetSubPin->SubPins.Num() > 0)
+			{
+				return FSMAssistOperationResult::MakeError(
+					FString::Printf(TEXT("Sub-pin '%s' is already split. Write its members with property_path, or RecombinePin first to collapse it."),
+						*Target.TargetSubPin->PinName.ToString()));
+			}
 			return FSMAssistOperationResult::MakeError(
 				FString::Printf(TEXT("Sub-pin '%s' is not splittable (CanSplitSubPin=false). Type may not be a splittable struct, or the owning graph property opts out."),
 					*Target.TargetSubPin->PinName.ToString()));

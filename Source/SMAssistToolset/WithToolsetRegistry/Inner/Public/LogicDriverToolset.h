@@ -443,6 +443,9 @@ public:
 	 * Sets a property on a state/transition node. Multiplexes set / add / insert / duplicate /
 	 * move / remove / clear based on ArrayAction.
 	 *
+	 * PropertyPath is relative to PropertyName and must NOT repeat it: to reach member `Close` of
+	 * property `Tuning`, pass PropertyName="Tuning" and PropertyPath="Close", never "Tuning.Close".
+	 *
 	 * Split-pin precondition for PropertyPath: when PropertyPath is non-empty, every struct
 	 * parent in the chain (the top-level pin named by PropertyName AND every intermediate struct
 	 * member) must be split first via SplitPin. Calls against any unsplit struct parent are
@@ -460,6 +463,7 @@ public:
 	 * @param StackIndex Which stacked instance to target (for stacked nodes). -1 = base.
 	 * @param PropertyPath Optional dot-separated sub-path under PropertyName, with optional bracket
 	 *        indices for array elements (e.g. `"InnerStruct.TextMember"` or `"InnerArray[2].Field"`).
+	 *        Relative to PropertyName; do not repeat the property name as the first segment.
 	 *        Requires every struct parent in the chain to be split via SplitPin first - the
 	 *        top-level pin AND every intermediate struct member. Calls against any unsplit struct
 	 *        parent are rejected; the error message identifies which segment is unsplit. Arrays
