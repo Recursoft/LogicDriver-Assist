@@ -189,8 +189,10 @@ void FSMFindNodeTypesSpec::Define()
 
 		TestEqual(TEXT("no write kinds in state graph"), PayloadKindCount(Result.Payload, TEXT("write_kinds")), 0);
 
-		TestTrue(TEXT("OnStateUpdate event present"), PayloadContainsKind(Result.Payload, TEXT("event_kinds"), TEXT("OnStateUpdate")));
-		TestTrue(TEXT("OnStateEnd event present"), PayloadContainsKind(Result.Payload, TEXT("event_kinds"), TEXT("OnStateEnd")));
+		// Every state graph is created with these two already placed and they cannot be deleted, so
+		// discovery must not offer them as spawnable.
+		TestFalse(TEXT("OnStateUpdate event absent in state graph"), PayloadContainsKind(Result.Payload, TEXT("event_kinds"), TEXT("OnStateUpdate")));
+		TestFalse(TEXT("OnStateEnd event absent in state graph"), PayloadContainsKind(Result.Payload, TEXT("event_kinds"), TEXT("OnStateEnd")));
 		TestTrue(TEXT("OnInitialized event present in state graph"), PayloadContainsKind(Result.Payload, TEXT("event_kinds"), TEXT("OnInitialized")));
 		TestTrue(TEXT("OnRootStateMachineStart event present in state graph"), PayloadContainsKind(Result.Payload, TEXT("event_kinds"), TEXT("OnRootStateMachineStart")));
 		TestFalse(TEXT("OnTransitionPreEvaluate event absent in state graph"), PayloadContainsKind(Result.Payload, TEXT("event_kinds"), TEXT("OnTransitionPreEvaluate")));

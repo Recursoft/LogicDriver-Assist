@@ -1703,6 +1703,78 @@ void FAssistOperationsSpec::Define()
 			TestTrue("Error names the property", Result.ErrorMessage.Contains(TEXT("DefinitelyNotAProperty")));
 		});
 
+		It("Refuses a deprecated property that reflection resolves without its suffix", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString StateGuid = AddStateToBlueprint(AssetPath, TEXT("Solo"));
+			if (!TestFalse("State guid populated", StateGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			// The C++ member is bEvalGraphsOnStart_DEPRECATED, but UHT registers it under the stripped
+			// name, so FindPropertyByName resolves a write target that nothing reads back.
+			const TSharedRef<FJsonObject> SetArgs = MakeShared<FJsonObject>();
+			SetArgs->SetStringField(TEXT("asset_path"), AssetPath);
+			SetArgs->SetStringField(TEXT("node_guid"), StateGuid);
+			SetArgs->SetStringField(TEXT("property_name"), TEXT("bEvalGraphsOnStart"));
+			SetArgs->SetStringField(TEXT("value"), TEXT("true"));
+
+			const FSMAssistOperationResult SetResult = Subsystem->ExecuteOperation(
+				FName(TEXT("ld.set_node_property")), SetArgs);
+			TestFalse("Set is refused", SetResult.bSuccess);
+			TestTrue("Set error says deprecated", SetResult.ErrorMessage.Contains(TEXT("deprecated")));
+
+			const TSharedRef<FJsonObject> ResetArgs = MakeShared<FJsonObject>();
+			ResetArgs->SetStringField(TEXT("asset_path"), AssetPath);
+			ResetArgs->SetStringField(TEXT("node_guid"), StateGuid);
+			ResetArgs->SetStringField(TEXT("property_name"), TEXT("bEvalGraphsOnStart"));
+
+			const FSMAssistOperationResult ResetResult = Subsystem->ExecuteOperation(
+				FName(TEXT("ld.reset_node_property")), ResetArgs);
+			TestFalse("Reset is refused", ResetResult.bSuccess);
+			TestTrue("Reset error says deprecated", ResetResult.ErrorMessage.Contains(TEXT("deprecated")));
+
+			// Asserting an empty exported value would also pass if get_node_properties failed outright,
+			// so check the property is absent from a listing that succeeded.
+			const TSharedRef<FJsonObject> ListArgs = MakeShared<FJsonObject>();
+			ListArgs->SetStringField(TEXT("asset_path"), AssetPath);
+			ListArgs->SetStringField(TEXT("node_guid"), StateGuid);
+
+			const FSMAssistOperationResult ListResult = Subsystem->ExecuteOperation(
+				FName(TEXT("ld.get_node_properties")), ListArgs);
+			if (!TestTrue("Listing succeeded", ListResult.bSuccess && ListResult.Payload.IsValid()))
+			{
+				return;
+			}
+
+			const TArray<TSharedPtr<FJsonValue>>* Properties = nullptr;
+			if (!TestTrue("Listing has properties", ListResult.Payload->TryGetArrayField(TEXT("properties"), Properties) && Properties->Num() > 0))
+			{
+				return;
+			}
+
+			bool bListed = false;
+			for (const TSharedPtr<FJsonValue>& Value : *Properties)
+			{
+				const TSharedPtr<FJsonObject>* Entry = nullptr;
+				FString Name;
+				if (Value->TryGetObject(Entry) && (*Entry)->TryGetStringField(TEXT("name"), Name) && Name == TEXT("bEvalGraphsOnStart"))
+				{
+					bListed = true;
+					break;
+				}
+			}
+			TestFalse("Enumeration never listed the deprecated property", bListed);
+		});
+
 		It("Rejects object values with a clear error", [this]()
 		{
 			const FString AssetPath = CreateTransientBlueprint();

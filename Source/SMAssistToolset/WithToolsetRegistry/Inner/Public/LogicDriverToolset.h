@@ -1093,20 +1093,21 @@ public:
 	 *
 	 * Compatibility, by kind:
 	 *  - OnInitialized, OnShutdown: state, transition, and conduit graphs.
-	 *  - OnStateUpdate (exposes a DeltaSeconds output pin), OnStateEnd: state graphs only.
 	 *  - OnTransitionEntered: transition and conduit graphs. Singleton (fails if already present).
 	 *  - OnTransitionPreEvaluate, OnTransitionPostEvaluate: transition graphs only. Singleton.
 	 *  - OnRootStateMachineStart, OnRootStateMachineStop: state, transition, and conduit graphs. Singleton.
 	 *
-	 * OnStateBegin is not spawnable: its entry node is the always-present container of every state graph.
+	 * OnStateBegin, OnStateUpdate, and OnStateEnd are not spawnable: every state graph is created with all
+	 * three entry nodes in it and they cannot be deleted. Read them back with GetLocalGraph and wire from
+	 * the existing node.
 	 *
 	 * @param Blueprint The state-machine blueprint. Required.
 	 * @param NodeGuid Guid of the state, transition, or conduit whose bound graph receives the node.
 	 *        Required.
 	 * @param NodeType Event-entry type. Accepts PascalCase ("OnInitialized") or snake_case
-	 *        ("on_initialized"). Full list: OnInitialized, OnShutdown, OnStateUpdate, OnStateEnd,
-	 *        OnTransitionEntered, OnTransitionPreEvaluate, OnTransitionPostEvaluate,
-	 *        OnRootStateMachineStart, OnRootStateMachineStop. Required.
+	 *        ("on_initialized"). Full list: OnInitialized, OnShutdown, OnTransitionEntered,
+	 *        OnTransitionPreEvaluate, OnTransitionPostEvaluate, OnRootStateMachineStart,
+	 *        OnRootStateMachineStop. Required.
 	 * @param PositionX Local-graph X. Defaults to 0.
 	 * @param PositionY Local-graph Y. Defaults to 0.
 	 * @return JSON: { node_guid, type, target_graph_path }

@@ -31,6 +31,7 @@
 #include "Graph/SMConduitGraph.h"
 #include "Graph/SMGraph.h"
 #include "Graph/SMPropertyGraph.h"
+#include "Graph/SMStateGraph.h"
 #include "Graph/SMTransitionGraph.h"
 #include "NodeStack/NodeStackContainer.h"
 #include "Properties/SMEditorPropertyUtils.h"
@@ -870,6 +871,16 @@ namespace LD::Assist::Private
 		return false;
 	}
 
+	// Reflection drops the _DEPRECATED suffix, so a lookup by wire name resolves properties that
+	// get_node_properties never reports. Their only remaining reader is the load-time migration that
+	// folds them into their replacements, which has already run by the time a caller can write one.
+	static FSMAssistOperationResult MakeDeprecatedPropertyError(const FString& InPropertyName)
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(
+			TEXT("Property '%s' is deprecated and writing it changes nothing. Call ld.get_node_properties to list the properties this node supports."),
+			*InPropertyName));
+	}
+
 	static bool JsonScalarToDefaultString(const TSharedPtr<FJsonValue>& InValue, FString& OutString, FString& OutError)
 	{
 		if (!InValue.IsValid())
@@ -1136,6 +1147,11 @@ FSMAssistOperationResult LD::Assist::SetNodeProperty(const TSharedRef<FJsonObjec
 	{
 		if (const FProperty* TemplateProperty = ResolvedTemplate->GetClass()->FindPropertyByName(*PropertyName))
 		{
+			if (TemplateProperty->HasAnyPropertyFlags(CPF_Deprecated))
+			{
+				return LD::Assist::Private::MakeDeprecatedPropertyError(PropertyName);
+			}
+
 			if (LD::Assist::Private::IsPropertyHiddenOnInstanceTemplate(TemplateProperty, ResolvedTemplate))
 			{
 				return FSMAssistOperationResult::MakeError(
@@ -4633,6 +4649,17 @@ FSMAssistOperationResult LD::Assist::ResetNodeProperty(const TSharedRef<FJsonObj
 	int32 ArrayIndex = 0;
 	InArgs->TryGetNumberField(Args::ArrayIndex, ArrayIndex);
 
+	// Without this the reset below fails with the graph-property message, which misdiagnoses a
+	// deprecated name as an exposure problem. set_node_property refuses the same names.
+	if (const USMNodeInstance* ResolvedTemplate = TargetTemplate ? TargetTemplate : Node->GetNodeTemplate())
+	{
+		const FProperty* TemplateProperty = ResolvedTemplate->GetClass()->FindPropertyByName(*PropertyName);
+		if (TemplateProperty && TemplateProperty->HasAnyPropertyFlags(CPF_Deprecated))
+		{
+			return LD::Assist::Private::MakeDeprecatedPropertyError(PropertyName);
+		}
+	}
+
 	FString GraphGenError;
 	ISMGraphGeneration* GraphGen = LD::Assist::Private::GetGraphGeneration(GraphGenError);
 	if (!GraphGen)
@@ -5336,9 +5363,16 @@ FSMAssistOperationResult LD::Assist::SpawnLocalGraphWriteNode(const TSharedRef<F
 
 namespace LD::Assist::Private
 {
+	// Shared so the OnStateBegin guard in SpawnLocalGraphEventNode keys off the same normalization the
+	// resolver does. Widening one without the other turns that guard's advice back into a typo error.
+	static FString NormalizeEventTypeKey(const FString& InValue)
+	{
+		return InValue.ToLower().Replace(TEXT("_"), TEXT(""));
+	}
+
 	static bool ResolveLocalGraphEventType(const FString& InValue, ISMGraphGeneration::ELocalGraphEventNodeType& OutType)
 	{
-		const FString Key = InValue.ToLower().Replace(TEXT("_"), TEXT(""));
+		const FString Key = NormalizeEventTypeKey(InValue);
 		if (Key == TEXT("oninitialized") || Key == TEXT("initialized"))
 		{
 			OutType = ISMGraphGeneration::ELocalGraphEventNodeType::OnInitialized;
@@ -5396,15 +5430,8 @@ FSMAssistOperationResult LD::Assist::SpawnLocalGraphEventNode(const TSharedRef<F
 		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'type'."));
 	}
 
-	ISMGraphGeneration::ELocalGraphEventNodeType NodeType;
-	if (!LD::Assist::Private::ResolveLocalGraphEventType(NodeTypeStr, NodeType))
-	{
-		return FSMAssistOperationResult::MakeError(FString::Printf(
-			TEXT("Unrecognized 'type' '%s'. Accepted: OnInitialized, OnShutdown, OnStateUpdate, OnStateEnd, OnTransitionEntered, OnTransitionPreEvaluate, OnTransitionPostEvaluate, OnRootStateMachineStart, OnRootStateMachineStop. Snake_case variants accepted too."),
-			*NodeTypeStr));
-	}
-
 	// Shared resolver so a reroute-waypoint guid normalizes to the primary transition, matching get_local_graph/add/connect.
+	// Resolved before the type is, because the three state lifecycle names below are only refused on a state graph.
 	FString Error;
 	LD::Assist::Private::FResolvedLocalGraph Resolved;
 	if (!LD::Assist::Private::ResolveLocalGraph(InArgs, Resolved, Error))
@@ -5413,6 +5440,38 @@ FSMAssistOperationResult LD::Assist::SpawnLocalGraphEventNode(const TSharedRef<F
 	}
 	USMBlueprint* Blueprint = Resolved.Blueprint;
 	UEdGraph* TargetGraph = Resolved.Graph;
+
+	const FString NormalizedType = LD::Assist::Private::NormalizeEventTypeKey(NodeTypeStr);
+	const bool bIsStateGraph = TargetGraph->IsA<USMStateGraph>();
+
+	// Named as non-spawnable by the op description and by the two state-graph kinds below, so recognize
+	// it rather than calling it a typo. It has no ELocalGraphEventNodeType, so it cannot go with them.
+	if (bIsStateGraph && (NormalizedType == TEXT("onstatebegin") || NormalizedType == TEXT("statebegin")))
+	{
+		return FSMAssistOperationResult::MakeError(
+			TEXT("'OnStateBegin' cannot be spawned: it is the graph's entry node, present from the moment the state is created and impossible to delete. Call ld.get_local_graph on this node, find the node titled 'On State Begin', and wire from its exec pin."));
+	}
+
+	ISMGraphGeneration::ELocalGraphEventNodeType NodeType;
+	if (!LD::Assist::Private::ResolveLocalGraphEventType(NodeTypeStr, NodeType))
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(
+			TEXT("Unrecognized 'type' '%s'. Accepted: OnInitialized, OnShutdown, OnTransitionEntered, OnTransitionPreEvaluate, OnTransitionPostEvaluate, OnRootStateMachineStart, OnRootStateMachineStop. Snake_case variants accepted too."),
+			*NodeTypeStr));
+	}
+
+	// Resolved rather than rejected as unrecognized so the caller learns the node exists instead of
+	// hunting for a spelling error. On any other graph these are simply incompatible, which the
+	// spawn failure below reports.
+	if (bIsStateGraph
+		&& (NodeType == ISMGraphGeneration::ELocalGraphEventNodeType::OnStateUpdate
+			|| NodeType == ISMGraphGeneration::ELocalGraphEventNodeType::OnStateEnd))
+	{
+		return FSMAssistOperationResult::MakeError(FString::Printf(
+			TEXT("'%s' cannot be spawned: every state graph is created with On State Begin, On State Update, and On State End already in it, and they cannot be deleted. Call ld.get_local_graph on this node, find the node titled '%s', and wire from its exec pin."),
+			*NodeTypeStr,
+			NodeType == ISMGraphGeneration::ELocalGraphEventNodeType::OnStateUpdate ? TEXT("On State Update") : TEXT("On State End")));
+	}
 
 	FString GraphGenError;
 	ISMGraphGeneration* GraphGen = LD::Assist::Private::GetGraphGeneration(GraphGenError);

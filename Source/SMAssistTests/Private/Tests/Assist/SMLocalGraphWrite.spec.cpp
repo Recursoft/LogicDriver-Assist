@@ -724,7 +724,7 @@ void FSMLocalGraphWriteSpec::Define()
 		TestFalse(TEXT("event node compiles with no errors"), bHasErrors);
 	});
 
-	It("spawns an OnStateUpdate event node into a state graph via snake_case", [this]()
+	It("refuses the state lifecycle events a state graph already owns and stays compilable", [this]()
 	{
 		const FString Asset = CreateBlueprint();
 		const FString State = AddState(Asset, TEXT("Solo"));
@@ -733,10 +733,78 @@ void FSMLocalGraphWriteSpec::Define()
 			return;
 		}
 
-		const FSMAssistOperationResult Ev = Run(TEXT("ld.spawn_local_graph_event_node"),
-			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), State }, { TEXT("type"), TEXT("on_state_update") } }));
-		TestTrue(TEXT("OnStateUpdate spawned in state graph"), Ev.bSuccess);
-		TestFalse(TEXT("event node returns id"), Str(Ev, TEXT("id")).IsEmpty());
+		// All three are named as non-spawnable in the op's own schema, so none may come back as a typo.
+		for (const TCHAR* Type : { TEXT("OnStateBegin"), TEXT("on_state_update"), TEXT("OnStateEnd") })
+		{
+			const FSMAssistOperationResult Ev = Run(TEXT("ld.spawn_local_graph_event_node"),
+				Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), State }, { TEXT("type"), Type } }));
+			TestFalse(FString::Printf(TEXT("%s refused"), Type), Ev.bSuccess);
+			TestFalse(FString::Printf(TEXT("%s is not treated as a typo"), Type),
+				Ev.ErrorMessage.Contains(TEXT("Unrecognized 'type'")));
+			TestTrue(FString::Printf(TEXT("%s error names the existing node"), Type),
+				Ev.ErrorMessage.Contains(TEXT("ld.get_local_graph")));
+		}
+
+		// A refused op must not have half-authored anything, so prove the asset still compiles.
+		const FSMAssistOperationResult Compile = Run(TEXT("ld.compile"), Obj({ { TEXT("asset_path"), Asset } }));
+		if (!TestTrue(TEXT("compile success"), Compile.bSuccess))
+		{
+			return;
+		}
+		bool bHasErrors = true;
+		Compile.Payload->TryGetBoolField(TEXT("has_errors"), bHasErrors);
+		TestFalse(TEXT("state graph compiles with no errors"), bHasErrors);
+	});
+
+	It("wires update logic off the On State Update node a fresh state already owns", [this]()
+	{
+		const FString Asset = CreateBlueprint();
+		const FString State = AddState(Asset, TEXT("Solo"));
+		if (!TestTrue(TEXT("state created"), !State.IsEmpty()))
+		{
+			return;
+		}
+
+		const FSMAssistOperationResult Graph = Run(TEXT("ld.get_local_graph"),
+			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), State } }));
+		FString UpdateId;
+		FString UpdateExecPin;
+		if (!TestTrue(TEXT("On State Update listed on a fresh state"),
+			FindNodeByClass(Graph.Payload, TEXT("StateUpdate"), UpdateId, UpdateExecPin)))
+		{
+			return;
+		}
+		FString EndId;
+		FString EndExecPin;
+		TestTrue(TEXT("On State End listed on a fresh state"),
+			FindNodeByClass(Graph.Payload, TEXT("StateEnd"), EndId, EndExecPin));
+
+		const FSMAssistOperationResult Add = Run(TEXT("ld.add_local_graph_node"),
+			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), State }, { TEXT("node_class"), TEXT("K2Node_ExecutionSequence") } }));
+		const FString SequenceId = Str(Add, TEXT("id"));
+		if (!TestTrue(TEXT("sequence added"), !SequenceId.IsEmpty()))
+		{
+			return;
+		}
+
+		// Those entry nodes ship as ghosts, and the link is what promotes them to real nodes.
+		const FSMAssistOperationResult Connect = Run(TEXT("ld.connect_local_graph_pins"),
+			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), State },
+				  { TEXT("from_node_id"), UpdateId }, { TEXT("from_pin"), UpdateExecPin },
+				  { TEXT("to_node_id"), SequenceId }, { TEXT("to_pin"), TEXT("execute") } }));
+		if (!TestTrue(TEXT("update exec wired into the sequence"), Connect.bSuccess))
+		{
+			return;
+		}
+
+		const FSMAssistOperationResult Compile = Run(TEXT("ld.compile"), Obj({ { TEXT("asset_path"), Asset } }));
+		if (!TestTrue(TEXT("compile success"), Compile.bSuccess))
+		{
+			return;
+		}
+		bool bHasErrors = true;
+		Compile.Payload->TryGetBoolField(TEXT("has_errors"), bHasErrors);
+		TestFalse(TEXT("wired update logic compiles with no errors"), bHasErrors);
 	});
 
 	It("spawns an OnRootStateMachineStart event node into a state graph via snake_case", [this]()
@@ -764,6 +832,29 @@ void FSMLocalGraphWriteSpec::Define()
 		const FSMAssistOperationResult Ev = Run(TEXT("ld.spawn_local_graph_event_node"),
 			Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans }, { TEXT("type"), TEXT("NotARealEvent") } }));
 		TestFalse(TEXT("unknown event type fails"), Ev.bSuccess);
+	});
+
+	It("does not answer a transition target with state-graph advice", [this]()
+	{
+		const FString Asset = CreateBlueprint();
+		const FString From = AddState(Asset, TEXT("From"));
+		const FString To = AddState(Asset, TEXT("To"));
+		const FString Trans = AddTransition(Asset, From, To);
+		if (!TestTrue(TEXT("transition created"), !Trans.IsEmpty()))
+		{
+			return;
+		}
+
+		// A transition graph has no On State Begin/Update/End, so telling the caller to go find one
+		// would send it hunting for a node that cannot exist there.
+		for (const TCHAR* Type : { TEXT("OnStateBegin"), TEXT("OnStateUpdate"), TEXT("OnStateEnd") })
+		{
+			const FSMAssistOperationResult Ev = Run(TEXT("ld.spawn_local_graph_event_node"),
+				Obj({ { TEXT("asset_path"), Asset }, { TEXT("node_guid"), Trans }, { TEXT("type"), Type } }));
+			TestFalse(FString::Printf(TEXT("%s refused on a transition"), Type), Ev.bSuccess);
+			TestFalse(FString::Printf(TEXT("%s error does not cite the state graph"), Type),
+				Ev.ErrorMessage.Contains(TEXT("find the node titled")));
+		}
 	});
 }
 
