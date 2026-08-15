@@ -46,7 +46,7 @@ A single editor subsystem, `USMAssistSubsystem`, owns a registry of `FSMAssistOp
 
 | Module | Type | Loading phase | Purpose |
 |---|---|---|---|
-| `SMAssist` | Editor | Default | Core subsystem, operation registry, all `ld.*` and `ld_ue.*` handlers. Also registers the `LDAssist.Exec` / `LDAssist.List` console commands. |
+| `SMAssist` | Editor | Default | Core subsystem, operation registry, all `ld.*` and `ld_ue.*` handlers. Also registers the `LDAssist.Exec` / `LDAssist.List` / `LDAssist.Describe` console commands. |
 | `SMAssistMonolithBridge` | Editor (Optional) | PostEngineInit | Mirrors every registered operation into the [Monolith](https://github.com/Recursoft/monolith) MCP tool registry, keyed by `namespace.action`. No-op stub when Monolith is absent. |
 | `SMAssistToolset` | Editor (Optional) | PostEngineInit | Exposes operations as `UToolsetDefinition` `AICallable` UFUNCTIONs through the engine-bundled experimental `ToolsetRegistry` (UE 5.8+). No-op shell when ToolsetRegistry is absent. |
 | `SMAssistTests` | UncookedOnly | Default | Automation specs covering the operation handlers and an end-to-end authoring scenario. Enabled locally only (see [Tests](#tests)). |
@@ -84,10 +84,11 @@ This plugin is a private editor plugin, not a Marketplace install. It is dropped
 
 ### Console (always available)
 
-Two console commands are registered by `SMAssist`:
+Three console commands are registered by `SMAssist`:
 
 ```
 LDAssist.List
+LDAssist.Describe [operation]
 LDAssist.Exec <operation> [json_args]
 ```
 
@@ -100,6 +101,14 @@ LDAssist.Exec ld.get_asset {"asset_path":"/Game/StateMachines/SM_Door.SM_Door"}
 ```
 
 Success prints `[op] ok: <json payload>`. Failure prints `[op] error: <message>`.
+
+`LDAssist.List` prints one `name  description` line per operation. `LDAssist.Describe` prints one condensed JSON object per line carrying `name`, `description`, `impact` (`read_only` or `destructive`, the same classification the other bridges map onto their permission hints), and `input_schema`, so a client driving Assist over the console gets the full typed surface without linking `SMAssist`:
+
+```
+> LDAssist.Describe ld.create_blueprint
+Operations (1):
+  {"name":"ld.create_blueprint","description":"Create a new state machine blueprint asset.","impact":"destructive","input_schema":{"type":"object","properties":{...},"required":["name"]}}
+```
 
 ### Monolith MCP bridge
 

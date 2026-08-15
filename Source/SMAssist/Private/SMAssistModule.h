@@ -17,8 +17,10 @@ public:
 private:
 	void HandleExecCommand(const TArray<FString>& InArgs, FOutputDevice& InAr);
 	void HandleListCommand(const TArray<FString>& InArgs, FOutputDevice& InAr);
+	void HandleDescribeCommand(const TArray<FString>& InArgs, FOutputDevice& InAr);
 
 private:
 	TUniquePtr<FAutoConsoleCommandWithArgsAndOutputDevice> ExecCommand;
 	TUniquePtr<FAutoConsoleCommandWithArgsAndOutputDevice> ListCommand;
+	TUniquePtr<FAutoConsoleCommandWithArgsAndOutputDevice> DescribeCommand;
 };

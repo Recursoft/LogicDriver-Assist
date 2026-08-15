@@ -11,9 +11,11 @@
 #include "Editor.h"
 #include "HAL/IConsoleManager.h"
 #include "Modules/ModuleManager.h"
+#include "Policies/CondensedJsonPrintPolicy.h"
 #include "Serialization/JsonReader.h"
 #include "UObject/NameTypes.h"
 #include "Serialization/JsonSerializer.h"
+#include "Serialization/JsonWriter.h"
 
 #define LOCTEXT_NAMESPACE "SMAssistModule"
 
@@ -30,12 +32,18 @@ void FSMAssistModule::StartupModule()
 		TEXT("LDAssist.List"),
 		TEXT("List all registered SMAssist operations."),
 		FConsoleCommandWithArgsAndOutputDeviceDelegate::CreateRaw(this, &FSMAssistModule::HandleListCommand));
+
+	DescribeCommand = MakeUnique<FAutoConsoleCommandWithArgsAndOutputDevice>(
+		TEXT("LDAssist.Describe"),
+		TEXT("Print the impact classification and JSON input schema of an SMAssist operation, or of every operation when called with no argument. Usage: LDAssist.Describe [operation]"),
+		FConsoleCommandWithArgsAndOutputDeviceDelegate::CreateRaw(this, &FSMAssistModule::HandleDescribeCommand));
 }
 
 void FSMAssistModule::ShutdownModule()
 {
 	ExecCommand.Reset();
 	ListCommand.Reset();
+	DescribeCommand.Reset();
 }
 
 void FSMAssistModule::HandleExecCommand(const TArray<FString>& InArgs, FOutputDevice& InAr)
@@ -136,6 +144,63 @@ void FSMAssistModule::HandleListCommand(const TArray<FString>& InArgs, FOutputDe
 		{
 			InAr.Logf(TEXT("  %s  %s"), *Info.Name.ToString(), *Info.Description);
 		}
+	}
+}
+
+void FSMAssistModule::HandleDescribeCommand(const TArray<FString>& InArgs, FOutputDevice& InAr)
+{
+	if (!GEditor)
+	{
+		InAr.Log(TEXT("GEditor is not available."));
+		return;
+	}
+
+	USMAssistSubsystem* Subsystem = GEditor->GetEditorSubsystem<USMAssistSubsystem>();
+	if (!Subsystem)
+	{
+		InAr.Log(TEXT("SMAssist subsystem is not available."));
+		return;
+	}
+
+	// Matched as a string rather than an FName so an unregistered console token neither interns a new
+	// name nor collapses to NAME_None, which would read as "no filter" and dump every operation.
+	const FString Filter = InArgs.Num() > 0 ? InArgs[0] : FString();
+
+	const TArray<FSMAssistOperationInfo> Infos = Subsystem->GetAllOperationInfos();
+	TArray<const FSMAssistOperationInfo*> Selected;
+	for (const FSMAssistOperationInfo& Info : Infos)
+	{
+		if (Filter.IsEmpty() || Info.Name.ToString().Equals(Filter, ESearchCase::IgnoreCase))
+		{
+			Selected.Add(&Info);
+		}
+	}
+
+	if (!Filter.IsEmpty() && Selected.Num() == 0)
+	{
+		InAr.Logf(TEXT("Unknown operation '%s'."), *Filter);
+		return;
+	}
+
+	// One condensed JSON object per line, so a caller reading the output device line by line parses
+	// each entry whole instead of reassembling JSON that was wrapped across lines.
+	InAr.Logf(TEXT("Operations (%d):"), Selected.Num());
+	for (const FSMAssistOperationInfo* Info : Selected)
+	{
+		const TSharedRef<FJsonObject> Entry = MakeShared<FJsonObject>();
+		Entry->SetStringField(TEXT("name"), Info->Name.ToString());
+		Entry->SetStringField(TEXT("description"), Info->Description);
+		Entry->SetStringField(TEXT("impact"),
+			Info->Impact == ESMAssistOperationImpact::ReadOnly ? TEXT("read_only") : TEXT("destructive"));
+		Entry->SetObjectField(TEXT("input_schema"),
+			Info->InputSchema.IsValid() ? Info->InputSchema : MakeShared<FJsonObject>());
+
+		FString EntryText;
+		const TSharedRef<TJsonWriter<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>> Writer =
+			TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(&EntryText);
+		FJsonSerializer::Serialize(Entry, Writer);
+
+		InAr.Logf(TEXT("  %s"), *EntryText);
 	}
 }
 
