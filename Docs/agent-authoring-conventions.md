@@ -28,14 +28,31 @@ Logic Driver authoring (via the LogicDriver-Assist ld.* operations):
   or "function not found", not at bind time.
 - Author into a clean folder such as /Game/MCP/<Feature>/. Do not mutate the
   user's existing reference assets unless they ask for it.
-- For greenfield graphs, lay out with ld.layout_states apply=true. Hand
+- For greenfield graphs, lay out with ld.layout_states apply=true. It measures
+  each node as rendered and spaces by that, so one pass is normally enough.
+  Check the top-level 'measurement_warnings' for anything it could not measure,
+  and each graphs[].warnings for what it had to flow around. Hand
   coordinates are for targeted tweaks only: Entry at (0,0), first state near
-  (200,0), ~350 units of X between states, positive X, and >=150 units between
-  parallel rows (much more for states displaying property widgets, which are
-  several times taller than plain states). Layout measures real node sizes
-  only once the graph editor has been opened (ld.capture_graph_view opens it);
-  re-run the layout if the first pass overlaps, and read the result back
-  visually with ld.capture_graph_view.
+  (200,0), ~400 units of X between states, positive X, and >=150 units between
+  parallel rows. Budget much more for a state that displays property widgets or
+  dialogue text: a node's size grows with its DisplayName and with everything
+  its body draws, so a state showing a few properties runs 300-380 wide and
+  100-280 tall against roughly 70-160 x 44 for a bare one, where a bare state's
+  width is almost entirely its name: a two-character name measures 69 wide and a
+  thirty-six-character one measures 417.
+- Find collisions with ld.get_graph_view rather than a screenshot. Its
+  'overlaps' array lists every intersecting pair among the nodes a layout can
+  move (states, conduits, references, link states, any states); its
+  'transition_overlaps' array lists transition markers and reroutes stacked on
+  each other, which spacing does not fix and a reroute does; and its widget_size
+  is measured at 1:1 zoom whatever the panel is showing. Read
+  'measurement_warnings' first: the arrays mean nothing while it is non-empty,
+  because the unmeasured part of the graph contributes no overlaps to either.
+- Judge readability with a ld.capture_graph_view, which is a different question
+  from collisions and the one the arrays cannot answer: a transition line routed
+  across intervening states shows up in neither. Empty arrays mean nothing
+  collides, not that the graph reads well. Capture to look at colors or titles,
+  to judge a finished layout, or to show a result; not to find collisions.
 - Wire every state into the flow, and make exactly one of them the initial
   state, connected from Entry (add_state is_entry=true, or ld.set_initial_state).
   Every conduit, reference, link state, and any state must be wired in the same

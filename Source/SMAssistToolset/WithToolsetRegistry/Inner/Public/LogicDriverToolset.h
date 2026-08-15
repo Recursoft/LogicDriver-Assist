@@ -106,11 +106,13 @@ struct FSMComponentConfig
  * result.
  *
  * Authoring guidance for AI clients: prefer LayoutStates(apply=true) over manual position_x/y
- * for greenfield graphs. State nodes are roughly 130 to 150 px wide at 1:1 zoom and the editor
+ * for greenfield graphs. A bare state node is roughly 70 to 160 px wide at 1:1 zoom, almost all of
+ * it the display name, and grows well past that for a state whose body draws properties; the editor
  * renders an Entry-pointer marker about 200 px to the left of the entry state, so entry states
  * placed near X=0 are visually eclipsed by the marker even though GetAsset reports them present.
- * GetAsset returns logical coordinates only; for visual verification use CaptureGraphView (see
- * its docstring for cost guidance on when to call).
+ * GetAsset returns logical coordinates only. To verify a layout use GetGraphView, which measures
+ * the rendered widgets and reports intersecting node boxes in 'overlaps'; reach for CaptureGraphView
+ * only when you need to look at the graph rather than measure it (see its docstring for cost).
  *
  * K2 self-binding depends on which kind of graph you author in, and the two cases are opposite:
  *   - Local (inline) graphs authored directly on a state or transition node inside an FSM
@@ -653,10 +655,23 @@ public:
 
 	/**
 	 * Returns the on-canvas view of a state machine graph: node positions, sizes, colors, optional pins.
+	 * Sizes are measured from the rendered widgets at 1:1 zoom whatever the panel is showing, so this is
+	 * how to verify a layout without spending a screenshot.
 	 * @param Blueprint The blueprint to inspect. Required.
 	 * @param bIncludeTransitions Include transition entries in the output. Default true.
 	 * @param bIncludePins Include per-node pin metadata. Default false.
-	 * @return JSON: { asset_path, panel_view, nodes:[...], transitions?:[...] }
+	 * @return JSON: { asset_path, panel_view, overlaps:[...], transition_overlaps:[...],
+	 *         measurement_warnings:[...], nodes:[...], transitions?:[...] }
+	 *         'overlaps' pairs every two state boxes that intersect, as first_node_guid /
+	 *         first_title_text, second_node_guid / second_title_text, overlap_extent ([w, h]). Transitions,
+	 *         reroutes, comments and the entry node are excluded, being the ones LayoutStates never moves.
+	 *         'transition_overlaps' is the same shape and reports transition markers and reroutes stacked on
+	 *         each other, which hides a transition and which state spacing does not fix; add a reroute to
+	 *         separate them, and re-read the array afterwards since reroutes are scanned too.
+	 *         Read 'measurement_warnings' first: when it is non-empty, part of the graph could not be
+	 *         measured and empty overlap arrays then mean unmeasured rather than clean. Empty arrays mean
+	 *         nothing collides, not that the graph reads well: a transition line routed across an
+	 *         intervening state is invisible to both, so capture the graph to judge readability.
 	 */
 	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
 	static FString GetGraphView(
@@ -745,7 +760,12 @@ public:
 	 * @param PinNodeGuidsJson JSON-encoded array of state GUID strings that should remain pinned at their existing positions. Empty = no pins.
 	 * @param bRespectExistingOrder Whether to preserve existing graph-order hints. Default true.
 	 * @param bSnapToGrid Snap final positions to the editor grid. Default true.
-	 * @return JSON: { asset_path, strategy, scope, applied, graphs:[...] }
+	 * @return JSON: { asset_path, strategy, scope, applied, measurement_warnings:[...], graphs:[...] }
+	 *         Root-graph spacing comes from measured widget sizes; a non-empty 'measurement_warnings'
+	 *         names a part of the root graph that could not be measured, whose states were spaced against
+	 *         sizes that read too small. Nested graphs under scope='all' are spaced from per-kind default
+	 *         sizes instead, which no warning covers. Both are separate from graphs[].warnings, which are
+	 *         layout notes such as reversed back-edges and pinned-node overlaps.
 	 */
 	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
 	static FString LayoutStates(

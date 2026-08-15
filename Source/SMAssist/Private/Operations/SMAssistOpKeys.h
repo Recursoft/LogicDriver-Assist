@@ -142,6 +142,14 @@ namespace LD::Assist::Args
 	inline constexpr const TCHAR* TitleColor = TEXT("title_color");
 	inline constexpr const TCHAR* Comment = TEXT("comment");
 	inline constexpr const TCHAR* IsSelected = TEXT("is_selected");
+	inline constexpr const TCHAR* Overlaps = TEXT("overlaps");
+	inline constexpr const TCHAR* TransitionOverlaps = TEXT("transition_overlaps");
+	inline constexpr const TCHAR* MeasurementWarnings = TEXT("measurement_warnings");
+	inline constexpr const TCHAR* FirstNodeGuid = TEXT("first_node_guid");
+	inline constexpr const TCHAR* FirstTitleText = TEXT("first_title_text");
+	inline constexpr const TCHAR* SecondNodeGuid = TEXT("second_node_guid");
+	inline constexpr const TCHAR* SecondTitleText = TEXT("second_title_text");
+	inline constexpr const TCHAR* OverlapExtent = TEXT("overlap_extent");
 	inline constexpr const TCHAR* Pins = TEXT("pins");
 	inline constexpr const TCHAR* PinId = TEXT("pin_id");
 	inline constexpr const TCHAR* PinName = TEXT("pin_name");

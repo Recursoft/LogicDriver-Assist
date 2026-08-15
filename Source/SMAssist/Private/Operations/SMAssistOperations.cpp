@@ -2,6 +2,7 @@
 
 #include "Operations/SMAssistOperations.h"
 
+#include "Operations/SMAssistGraphView.h"
 #include "Operations/SMAssistLocalGraphNodeDiscovery.h"
 #include "Operations/SMAssistOpKeys.h"
 #include "Layout/SMAssistLayout.h"
@@ -47,7 +48,6 @@
 #include "Algo/Reverse.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
-#include "BlueprintEditor.h"
 #include "K2Node.h"
 #include "K2Node_CallFunction.h"
 #include "K2Node_DynamicCast.h"
@@ -68,12 +68,10 @@
 #include "GameFramework/Actor.h"
 #include "Engine/SimpleConstructionScript.h"
 #include "ScopedTransaction.h"
-#include "Framework/Application/SlateApplication.h"
 #include "GraphEditor.h"
-#include "ImageUtils.h"
+#include "HAL/FileManager.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
-#include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Modules/ModuleManager.h"
 #include "Serialization/JsonReader.h"
@@ -81,9 +79,7 @@
 #include "SGraphNode.h"
 #include "SGraphPanel.h"
 #include "SNodePanel.h"
-#include "Subsystems/AssetEditorSubsystem.h"
 #include "UObject/UnrealType.h"
-#include "Widgets/SWindow.h"
 
 namespace LD::Assist::Private
 {
@@ -2945,326 +2941,6 @@ FSMAssistOperationResult LD::Assist::SpawnActorContextComponent(const TSharedRef
 	return FSMAssistOperationResult::MakeSuccess(Payload);
 }
 
-namespace LD::Assist::Private
-{
-	static FBlueprintEditor* FindOrOpenBlueprintEditor(USMBlueprint* InBlueprint, FString& OutError)
-	{
-		if (!GEditor)
-		{
-			OutError = TEXT("GEditor unavailable; this op requires the editor to be running.");
-			return nullptr;
-		}
-
-		UAssetEditorSubsystem* AssetSubsystem = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>();
-		if (!AssetSubsystem)
-		{
-			OutError = TEXT("AssetEditorSubsystem unavailable.");
-			return nullptr;
-		}
-
-		if (!AssetSubsystem->OpenEditorForAsset(InBlueprint))
-		{
-			OutError = FString::Printf(TEXT("Failed to open asset editor for '%s'."), *InBlueprint->GetPathName());
-			return nullptr;
-		}
-
-		IAssetEditorInstance* EditorInstance = AssetSubsystem->FindEditorForAsset(InBlueprint, /*bFocusIfOpen=*/false);
-		if (!EditorInstance)
-		{
-			OutError = FString::Printf(TEXT("Asset editor instance not found for '%s' after open."), *InBlueprint->GetPathName());
-			return nullptr;
-		}
-
-		// LD's SM blueprint editor is FSMStateMachineBlueprintEditor : ISMStateMachineBlueprintEditor : FBlueprintEditor.
-		// FBlueprintEditor : FAssetEditorToolkit : IAssetEditorInstance, so the static_cast back to FBlueprintEditor is
-		// safe whenever the asset is a USMBlueprint (the only path this helper services).
-		return static_cast<FBlueprintEditor*>(EditorInstance);
-	}
-
-	// OpenGraphAndBringToFront accepts a bound local graph exactly as double-clicking a transition does, so
-	// opening one instead of the root graph is the only difference between the two capture callers.
-	static TSharedPtr<SGraphEditor> OpenAndFocusGraph(FBlueprintEditor* InEditor, UEdGraph* InGraph, FString& OutError)
-	{
-		if (!InGraph)
-		{
-			OutError = TEXT("No graph to open.");
-			return nullptr;
-		}
-
-		TSharedPtr<SGraphEditor> GraphEditor = InEditor->OpenGraphAndBringToFront(InGraph, /*bSetFocus=*/true);
-		if (!GraphEditor.IsValid())
-		{
-			OutError = FString::Printf(TEXT("Failed to focus graph '%s' in the blueprint editor."), *InGraph->GetName());
-			return nullptr;
-		}
-		return GraphEditor;
-	}
-
-	static TSharedPtr<SGraphEditor> OpenAndFocusRootGraph(FBlueprintEditor* InEditor, USMBlueprint* InBlueprint, FString& OutError)
-	{
-		USMGraph* RootGraph = LD::Assist::Utils::GetRootStateMachineGraph(InBlueprint);
-		if (!RootGraph)
-		{
-			OutError = TEXT("Blueprint has no root state machine graph.");
-			return nullptr;
-		}
-		return OpenAndFocusGraph(InEditor, RootGraph, OutError);
-	}
-
-	// Force a Slate tick so newly-opened panels compute their desired sizes before we read geometry.
-	static void EnsureSlateLayoutReady()
-	{
-		if (FSlateApplication::IsInitialized())
-		{
-			FSlateApplication::Get().Tick(ESlateTickType::All);
-		}
-	}
-
-	// True while any of the panel's deferred view changes are still pending: a queued movement-to-target,
-	// a queued zoom-to-extents, or an in-flight scroll/zoom interpolation driven by the active timer.
-	// HasDeferredObjectFocus and HasDeferredZoomDestination both clear after the first tick that consumes
-	// the deferred request, but the actual scrolling and zooming runs on an active timer that interpolates
-	// over many frames; ZoomTargetTopLeft/BottomRight are zeroed only when that timer reports it is done.
-	// All three checks together are needed to know the view has truly settled before screenshotting.
-	static bool IsGraphPanelViewSettled(const SGraphPanel* InPanel)
-	{
-		if (!InPanel)
-		{
-			return true;
-		}
-		FVector2f ZoomTopLeft = FVector2f::ZeroVector;
-		FVector2f ZoomBottomRight = FVector2f::ZeroVector;
-		const bool bHasZoomTarget = InPanel->GetZoomTargetRect(ZoomTopLeft, ZoomBottomRight);
-		return !InPanel->HasDeferredObjectFocus()
-			&& !InPanel->HasDeferredZoomDestination()
-			&& !bHasZoomTarget;
-	}
-
-	static void PumpSlateUntilGraphPanelSettles(SGraphPanel* InPanel, int32 InMaxTicks)
-	{
-		if (!FSlateApplication::IsInitialized())
-		{
-			return;
-		}
-		FSlateApplication& App = FSlateApplication::Get();
-		for (int32 TickIdx = 0; TickIdx < InMaxTicks && !IsGraphPanelViewSettled(InPanel); ++TickIdx)
-		{
-			App.Tick(ESlateTickType::All);
-		}
-	}
-
-	// SGraphEditor::ZoomToFit defers the zoom to the next paint cycle and animates over multiple frames.
-	// Pump Slate until the panel's deferred state and the active-timer interpolation have both resolved
-	// so the screenshot reflects the final framed view, not an in-flight scroll or zoom.
-	static void FitGraphPanelToContent(const TSharedRef<SGraphEditor>& InGraphEditor, SGraphPanel* InPanel)
-	{
-		if (!InPanel)
-		{
-			return;
-		}
-		InGraphEditor->ZoomToFit(/*bOnlySelection=*/false);
-		PumpSlateUntilGraphPanelSettles(InPanel, /*MaxTicks=*/64);
-	}
-
-	// SGraphEditor::JumpToNode is more deferred than ZoomToFit: the first tick consumes the selection
-	// and movement-target state and schedules a scroll-and-zoom active timer; subsequent ticks
-	// interpolate the view toward the node. The settle check waits for the interpolation to finish.
-	static void FocusGraphPanelOnNode(const TSharedRef<SGraphEditor>& InGraphEditor, SGraphPanel* InPanel, const UEdGraphNode* InNode)
-	{
-		if (!InPanel || !InNode)
-		{
-			return;
-		}
-		InGraphEditor->JumpToNode(InNode, /*bRequestRename=*/false, /*bSelectNode=*/true);
-		PumpSlateUntilGraphPanelSettles(InPanel, /*MaxTicks=*/64);
-	}
-
-	// Shared body of the capture ops: the only thing capture_graph_view and capture_local_graph differ on
-	// is which graph they pass in. Returns the {asset_path, path, width, height, bytes, mime} payload.
-	static FSMAssistOperationResult CaptureGraphToPng(
-		FBlueprintEditor* InEditor,
-		UEdGraph* InGraph,
-		USMBlueprint* InBlueprint,
-		const UEdGraphNode* InFocusNode,
-		bool bClipToPanel,
-		bool bFitToContent,
-		const FString& InOutputSubdir,
-		FString InPrefix,
-		const FString& InDefaultPrefixBase)
-	{
-		FString GraphError;
-		TSharedPtr<SGraphEditor> GraphEditor = OpenAndFocusGraph(InEditor, InGraph, GraphError);
-		if (!GraphEditor.IsValid())
-		{
-			return FSMAssistOperationResult::MakeError(GraphError);
-		}
-
-		EnsureSlateLayoutReady();
-
-		SGraphPanel* Panel = GraphEditor->GetGraphPanel();
-		if (!Panel)
-		{
-			return FSMAssistOperationResult::MakeError(TEXT("Graph editor has no panel."));
-		}
-
-		// Focusing a single node and fitting to all content are mutually exclusive framing intents; a
-		// requested focus node wins. Both paths leave the panel settled on the final view before capture.
-		if (InFocusNode)
-		{
-			FocusGraphPanelOnNode(GraphEditor.ToSharedRef(), Panel, InFocusNode);
-		}
-		else if (bFitToContent)
-		{
-			FitGraphPanelToContent(GraphEditor.ToSharedRef(), Panel);
-		}
-
-		TSharedPtr<SWidget> TargetWidget;
-		if (bClipToPanel)
-		{
-			TargetWidget = Panel->AsShared();
-		}
-		else
-		{
-			// Capture the entire blueprint editor window the panel is parented in.
-			TSharedPtr<SWindow> Window = FSlateApplication::Get().FindWidgetWindow(Panel->AsShared());
-			if (!Window.IsValid())
-			{
-				return FSMAssistOperationResult::MakeError(TEXT("Could not locate the editor window for capture."));
-			}
-			TargetWidget = Window;
-		}
-
-		TArray<FColor> ColorData;
-		FIntVector OutSize(0, 0, 0);
-		if (!FSlateApplication::Get().TakeScreenshot(TargetWidget.ToSharedRef(), ColorData, OutSize))
-		{
-			return FSMAssistOperationResult::MakeError(TEXT("Slate screenshot capture failed."));
-		}
-		if (OutSize.X <= 0 || OutSize.Y <= 0 || ColorData.Num() == 0)
-		{
-			return FSMAssistOperationResult::MakeError(TEXT("Screenshot returned an empty image."));
-		}
-
-		TArray64<uint8> PngBytes;
-		FImageUtils::PNGCompressImageArray(
-			OutSize.X, OutSize.Y,
-			TArrayView64<const FColor>(ColorData.GetData(), ColorData.Num()),
-			PngBytes);
-
-		if (PngBytes.Num() == 0)
-		{
-			return FSMAssistOperationResult::MakeError(TEXT("PNG encoding produced zero bytes."));
-		}
-
-		if (!InPrefix.IsEmpty() && !LD::Assist::Utils::IsSafeFileStem(InPrefix))
-		{
-			return FSMAssistOperationResult::MakeError(
-				TEXT("'prefix' must be a bare filename with no path separators or '..'."));
-		}
-
-		if (InPrefix.IsEmpty())
-		{
-			InPrefix = FString::Printf(TEXT("%s_%s"), *InDefaultPrefixBase, *FDateTime::Now().ToString(TEXT("%Y-%m-%d_%H-%M-%S")));
-		}
-
-		const FString FileName = InPrefix + TEXT(".png");
-		FString TargetDir;
-		FString PathError;
-		if (!LD::Assist::Utils::ResolveContainedScreenshotsDir(InOutputSubdir, TargetDir, PathError))
-		{
-			return FSMAssistOperationResult::MakeError(PathError);
-		}
-		IFileManager::Get().MakeDirectory(*TargetDir, /*Tree=*/true);
-		const FString TargetPath = FPaths::Combine(TargetDir, FileName);
-
-		if (!FFileHelper::SaveArrayToFile(PngBytes, *TargetPath))
-		{
-			return FSMAssistOperationResult::MakeError(
-				FString::Printf(TEXT("Failed to write PNG to '%s'."), *TargetPath));
-		}
-
-		const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
-		Payload->SetStringField(Args::AssetPath, InBlueprint->GetPathName());
-		Payload->SetStringField(Args::Path, TargetPath);
-		Payload->SetNumberField(Args::Width, OutSize.X);
-		Payload->SetNumberField(Args::Height, OutSize.Y);
-		Payload->SetNumberField(Args::Bytes, PngBytes.Num());
-		Payload->SetStringField(Args::Mime, TEXT("image/png"));
-		return FSMAssistOperationResult::MakeSuccess(Payload);
-	}
-
-	static TArray<TSharedPtr<FJsonValue>> Vec2fToJsonArray(const FVector2f& InVec)
-	{
-		TArray<TSharedPtr<FJsonValue>> Array;
-		Array.Add(MakeShared<FJsonValueNumber>(InVec.X));
-		Array.Add(MakeShared<FJsonValueNumber>(InVec.Y));
-		return Array;
-	}
-
-	static TArray<TSharedPtr<FJsonValue>> ColorToJsonArray(const FLinearColor& InColor)
-	{
-		TArray<TSharedPtr<FJsonValue>> Array;
-		Array.Add(MakeShared<FJsonValueNumber>(InColor.R));
-		Array.Add(MakeShared<FJsonValueNumber>(InColor.G));
-		Array.Add(MakeShared<FJsonValueNumber>(InColor.B));
-		Array.Add(MakeShared<FJsonValueNumber>(InColor.A));
-		return Array;
-	}
-
-	static const TCHAR* ResolveNodeKind(const UEdGraphNode* InNode)
-	{
-		if (InNode->IsA<USMGraphNode_StateMachineEntryNode>())
-		{
-			return TEXT("entry");
-		}
-		if (InNode->IsA<USMGraphNode_TransitionEdge>())
-		{
-			return TEXT("transition");
-		}
-		if (InNode->IsA<USMGraphNode_AnyStateNode>())
-		{
-			return TEXT("any_state");
-		}
-		if (InNode->IsA<USMGraphNode_LinkStateNode>())
-		{
-			return TEXT("link_state");
-		}
-		if (InNode->IsA<USMGraphNode_RerouteNode>())
-		{
-			return TEXT("reroute");
-		}
-		if (InNode->IsA<USMGraphNode_StateMachineStateNode>())
-		{
-			return TEXT("state_machine_state");
-		}
-		if (InNode->IsA<USMGraphNode_ConduitNode>())
-		{
-			return TEXT("conduit");
-		}
-		if (InNode->IsA<USMGraphNode_StateNodeBase>())
-		{
-			return TEXT("state");
-		}
-		return TEXT("unknown");
-	}
-
-	static void BuildPinJson(const UEdGraphNode* InNode, TArray<TSharedPtr<FJsonValue>>& OutPins)
-	{
-		for (const UEdGraphPin* Pin : InNode->Pins)
-		{
-			if (!Pin)
-			{
-				continue;
-			}
-			const TSharedRef<FJsonObject> Entry = MakeShared<FJsonObject>();
-			Entry->SetStringField(Args::PinId, Pin->PinId.ToString());
-			Entry->SetStringField(Args::PinName, Pin->PinName.ToString());
-			Entry->SetStringField(Args::PinDirection, Pin->Direction == EGPD_Input ? TEXT("input") : TEXT("output"));
-			OutPins.Add(MakeShared<FJsonValueObject>(Entry));
-		}
-	}
-}
-
 FSMAssistOperationResult LD::Assist::GetGraphView(const TSharedRef<FJsonObject>& InArgs)
 {
 	check(IsInGameThread());
@@ -3289,20 +2965,18 @@ FSMAssistOperationResult LD::Assist::GetGraphView(const TSharedRef<FJsonObject>&
 	}
 
 	FString EditorError;
-	FBlueprintEditor* BlueprintEditor = LD::Assist::Private::FindOrOpenBlueprintEditor(Blueprint, EditorError);
+	FBlueprintEditor* BlueprintEditor = LD::Assist::GraphView::FindOrOpenBlueprintEditor(Blueprint, EditorError);
 	if (!BlueprintEditor)
 	{
 		return FSMAssistOperationResult::MakeError(EditorError);
 	}
 
 	FString GraphError;
-	TSharedPtr<SGraphEditor> GraphEditor = LD::Assist::Private::OpenAndFocusRootGraph(BlueprintEditor, Blueprint, GraphError);
+	TSharedPtr<SGraphEditor> GraphEditor = LD::Assist::GraphView::OpenAndFocusRootGraph(BlueprintEditor, Blueprint, GraphError);
 	if (!GraphEditor.IsValid())
 	{
 		return FSMAssistOperationResult::MakeError(GraphError);
 	}
-
-	LD::Assist::Private::EnsureSlateLayoutReady();
 
 	SGraphPanel* Panel = GraphEditor->GetGraphPanel();
 	if (!Panel)
@@ -3312,6 +2986,10 @@ FSMAssistOperationResult LD::Assist::GetGraphView(const TSharedRef<FJsonObject>&
 
 	USMGraph* RootGraph = LD::Assist::Utils::GetRootStateMachineGraph(Blueprint);
 	check(RootGraph);
+
+	// Every widget_size and overlap below is read straight off the node widgets.
+	TArray<FString> MeasureWarnings;
+	LD::Assist::GraphView::MeasureGraphNodeWidgets(GraphEditor.ToSharedRef(), Panel, RootGraph, MeasureWarnings);
 
 	// Map data nodes to their slate widgets so we can co-iterate. GetAllChildren includes off-viewport nodes,
 	// which is what we want; GetChildren would only report the currently-visible ones.
@@ -3348,7 +3026,7 @@ FSMAssistOperationResult LD::Assist::GetGraphView(const TSharedRef<FJsonObject>&
 
 		const TSharedRef<FJsonObject> Entry = MakeShared<FJsonObject>();
 		Entry->SetStringField(Args::NodeGuid, Node->NodeGuid.ToString());
-		Entry->SetStringField(Args::Kind, LD::Assist::Private::ResolveNodeKind(Node));
+		Entry->SetStringField(Args::Kind, LD::Assist::GraphView::ResolveNodeKind(Node));
 
 		TArray<TSharedPtr<FJsonValue>> LogicalPosition;
 		LogicalPosition.Add(MakeShared<FJsonValueNumber>(Node->NodePosX));
@@ -3358,11 +3036,11 @@ FSMAssistOperationResult LD::Assist::GetGraphView(const TSharedRef<FJsonObject>&
 		if (const TSharedRef<SGraphNode>* WidgetPtr = NodeToWidget.Find(Node))
 		{
 			const TSharedRef<SGraphNode>& NodeWidget = *WidgetPtr;
-			Entry->SetArrayField(Args::WidgetPosition, LD::Assist::Private::Vec2fToJsonArray(NodeWidget->GetPosition2f()));
-			Entry->SetArrayField(Args::WidgetSize, LD::Assist::Private::Vec2fToJsonArray(NodeWidget->GetDesiredSizeForMarquee2f()));
+			Entry->SetArrayField(Args::WidgetPosition, LD::Assist::GraphView::Vec2fToJsonArray(NodeWidget->GetPosition2f()));
+			Entry->SetArrayField(Args::WidgetSize, LD::Assist::GraphView::Vec2fToJsonArray(NodeWidget->GetDesiredSizeForMarquee2f()));
 			Entry->SetStringField(Args::TitleText, NodeWidget->GetEditableNodeTitleAsText().ToString());
-			Entry->SetArrayField(Args::BodyColor, LD::Assist::Private::ColorToJsonArray(NodeWidget->GetNodeBodyColor().GetSpecifiedColor()));
-			Entry->SetArrayField(Args::TitleColor, LD::Assist::Private::ColorToJsonArray(NodeWidget->GetNodeTitleColor().GetSpecifiedColor()));
+			Entry->SetArrayField(Args::BodyColor, LD::Assist::GraphView::ColorToJsonArray(NodeWidget->GetNodeBodyColor().GetSpecifiedColor()));
+			Entry->SetArrayField(Args::TitleColor, LD::Assist::GraphView::ColorToJsonArray(NodeWidget->GetNodeTitleColor().GetSpecifiedColor()));
 		}
 
 		const FString NodeComment = Node->NodeComment;
@@ -3391,7 +3069,7 @@ FSMAssistOperationResult LD::Assist::GetGraphView(const TSharedRef<FJsonObject>&
 		if (bIncludePins)
 		{
 			TArray<TSharedPtr<FJsonValue>> Pins;
-			LD::Assist::Private::BuildPinJson(Node, Pins);
+			LD::Assist::GraphView::BuildPinJson(Node, Pins);
 			Entry->SetArrayField(Args::Pins, Pins);
 		}
 
@@ -3405,18 +3083,32 @@ FSMAssistOperationResult LD::Assist::GetGraphView(const TSharedRef<FJsonObject>&
 		}
 	}
 
+	// Reported so a caller can confirm a layout reads cleanly without capturing and looking at a PNG.
+	TArray<TSharedPtr<FJsonValue>> OverlapsArray;
+	TArray<TSharedPtr<FJsonValue>> TransitionOverlapsArray;
+	LD::Assist::GraphView::BuildOverlapJson(RootGraph, NodeToWidget, OverlapsArray, TransitionOverlapsArray);
+
+	TArray<TSharedPtr<FJsonValue>> WarningsArray;
+	for (const FString& Warning : MeasureWarnings)
+	{
+		WarningsArray.Add(MakeShared<FJsonValueString>(Warning));
+	}
+
 	const TSharedRef<FJsonObject> PanelView = MakeShared<FJsonObject>();
 	{
 		FVector2f ViewLocation = FVector2f::ZeroVector;
 		float ZoomAmount = 1.0f;
 		GraphEditor->GetViewLocation(ViewLocation, ZoomAmount);
 		PanelView->SetNumberField(Args::Zoom, ZoomAmount);
-		PanelView->SetArrayField(Args::ViewOffset, LD::Assist::Private::Vec2fToJsonArray(ViewLocation));
+		PanelView->SetArrayField(Args::ViewOffset, LD::Assist::GraphView::Vec2fToJsonArray(ViewLocation));
 	}
 
 	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
 	Payload->SetStringField(Args::AssetPath, Blueprint->GetPathName());
 	Payload->SetObjectField(Args::PanelView, PanelView);
+	Payload->SetArrayField(Args::Overlaps, OverlapsArray);
+	Payload->SetArrayField(Args::TransitionOverlaps, TransitionOverlapsArray);
+	Payload->SetArrayField(Args::MeasurementWarnings, WarningsArray);
 	Payload->SetArrayField(Args::Nodes, NodesArray);
 	if (bIncludeTransitions)
 	{
@@ -3475,7 +3167,7 @@ FSMAssistOperationResult LD::Assist::CaptureGraphView(const TSharedRef<FJsonObje
 	}
 
 	FString EditorError;
-	FBlueprintEditor* BlueprintEditor = LD::Assist::Private::FindOrOpenBlueprintEditor(Blueprint, EditorError);
+	FBlueprintEditor* BlueprintEditor = LD::Assist::GraphView::FindOrOpenBlueprintEditor(Blueprint, EditorError);
 	if (!BlueprintEditor)
 	{
 		return FSMAssistOperationResult::MakeError(EditorError);
@@ -3487,7 +3179,7 @@ FSMAssistOperationResult LD::Assist::CaptureGraphView(const TSharedRef<FJsonObje
 		return FSMAssistOperationResult::MakeError(TEXT("Blueprint has no root state machine graph."));
 	}
 
-	return LD::Assist::Private::CaptureGraphToPng(
+	return LD::Assist::GraphView::CaptureGraphToPng(
 		BlueprintEditor, RootGraph, Blueprint, FocusNode,
 		bClipToPanel, bFitToContent, OutputSubdir, Prefix, Blueprint->GetName());
 }
@@ -3726,7 +3418,7 @@ namespace LD::Assist::Private
 			LayoutNode.Node = Node;
 			LayoutNode.NodeGuid = Node->NodeGuid;
 			LayoutNode.Name = Node->GetNodeTitle(ENodeTitleType::EditableTitle).ToString();
-			LayoutNode.Kind = ResolveNodeKind(Node);
+			LayoutNode.Kind = LD::Assist::GraphView::ResolveNodeKind(Node);
 			LayoutNode.OldPosition = FVector2f(static_cast<float>(Node->NodePosX), static_cast<float>(Node->NodePosY));
 			if (InNodeToWidget)
 			{
@@ -3873,26 +3565,30 @@ FSMAssistOperationResult LD::Assist::LayoutStates(const TSharedRef<FJsonObject>&
 	}
 
 	FString EditorError;
-	FBlueprintEditor* BlueprintEditor = LD::Assist::Private::FindOrOpenBlueprintEditor(Blueprint, EditorError);
+	FBlueprintEditor* BlueprintEditor = LD::Assist::GraphView::FindOrOpenBlueprintEditor(Blueprint, EditorError);
 	if (!BlueprintEditor)
 	{
 		return FSMAssistOperationResult::MakeError(EditorError);
 	}
 
 	FString GraphError;
-	TSharedPtr<SGraphEditor> GraphEditor = LD::Assist::Private::OpenAndFocusRootGraph(BlueprintEditor, Blueprint, GraphError);
+	TSharedPtr<SGraphEditor> GraphEditor = LD::Assist::GraphView::OpenAndFocusRootGraph(BlueprintEditor, Blueprint, GraphError);
 	if (!GraphEditor.IsValid())
 	{
 		return FSMAssistOperationResult::MakeError(GraphError);
 	}
-	LD::Assist::Private::EnsureSlateLayoutReady();
 
 	// NodeToWidget map only covers the focused (root) panel. Nested graphs in scope=all rely on
 	// the per-kind default size table inside the layout module, which keeps the op cheap and avoids
 	// disruptively opening every nested graph in the user's editor.
+	TArray<FString> MeasureWarnings;
 	TMap<const UEdGraphNode*, TSharedRef<SGraphNode>> NodeToWidget;
 	if (SGraphPanel* Panel = GraphEditor->GetGraphPanel())
 	{
+		// The layout spaces columns by these widget sizes, so measuring before the panel has painted
+		// packs the graph to a fraction of its rendered width and overlaps every node that draws a body.
+		LD::Assist::GraphView::MeasureGraphNodeWidgets(GraphEditor.ToSharedRef(), Panel, RootGraph, MeasureWarnings);
+
 		if (FChildren* AllChildren = Panel->GetAllChildren())
 		{
 			const int32 NumChildren = AllChildren->Num();
@@ -3981,7 +3677,7 @@ FSMAssistOperationResult LD::Assist::LayoutStates(const TSharedRef<FJsonObject>&
 		if (DirtyGraphs.Num() > 0)
 		{
 			Blueprint->GetPackage()->MarkPackageDirty();
-			LD::Assist::Private::EnsureSlateLayoutReady();
+			LD::Assist::GraphView::EnsureSlateLayoutReady();
 		}
 	}
 
@@ -4034,6 +3730,17 @@ FSMAssistOperationResult LD::Assist::LayoutStates(const TSharedRef<FJsonObject>&
 		GraphsArray.Add(MakeShared<FJsonValueObject>(GraphEntry));
 	}
 	Payload->SetArrayField(Args::Graphs, GraphsArray);
+
+	// Op-level rather than per-graph: only the root graph is measured, so these describe the root layout.
+	// Nested graphs under scope=all are spaced from the layout module's per-kind default sizes instead,
+	// which no warning here covers. A layout computed from partial measurements can still overlap.
+	TArray<TSharedPtr<FJsonValue>> MeasureWarningsArray;
+	MeasureWarningsArray.Reserve(MeasureWarnings.Num());
+	for (const FString& Warning : MeasureWarnings)
+	{
+		MeasureWarningsArray.Add(MakeShared<FJsonValueString>(Warning));
+	}
+	Payload->SetArrayField(Args::MeasurementWarnings, MeasureWarningsArray);
 
 	return FSMAssistOperationResult::MakeSuccess(Payload);
 }
@@ -5990,14 +5697,14 @@ FSMAssistOperationResult LD::Assist::CaptureLocalGraph(const TSharedRef<FJsonObj
 	}
 
 	FString EditorError;
-	FBlueprintEditor* BlueprintEditor = LD::Assist::Private::FindOrOpenBlueprintEditor(Resolved.Blueprint, EditorError);
+	FBlueprintEditor* BlueprintEditor = LD::Assist::GraphView::FindOrOpenBlueprintEditor(Resolved.Blueprint, EditorError);
 	if (!BlueprintEditor)
 	{
 		return FSMAssistOperationResult::MakeError(EditorError);
 	}
 
 	const FString DefaultPrefixBase = FString::Printf(TEXT("%s_%s"), *Resolved.Blueprint->GetName(), *Resolved.Graph->GetName());
-	return LD::Assist::Private::CaptureGraphToPng(
+	return LD::Assist::GraphView::CaptureGraphToPng(
 		BlueprintEditor, Resolved.Graph, Resolved.Blueprint, /*InFocusNode=*/nullptr,
 		bClipToPanel, bFitToContent, OutputSubdir, Prefix, DefaultPrefixBase);
 }

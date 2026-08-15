@@ -26,6 +26,7 @@ public class SMAssistTests : ModuleRules
 				"Engine",
 				"UnrealEd",
 				"BlueprintGraph",
+				"GraphEditor",
 				"Kismet",
 				"KismetCompiler",
 				"SlateCore",
