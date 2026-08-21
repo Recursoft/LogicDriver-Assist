@@ -75,9 +75,7 @@ namespace LD::Assist::GraphView
 		return static_cast<FBlueprintEditor*>(EditorInstance);
 	}
 
-	// OpenGraphAndBringToFront accepts a bound local graph exactly as double-clicking a transition does, so
-	// opening one instead of the root graph is the only difference between the two capture callers.
-	static TSharedPtr<SGraphEditor> OpenAndFocusGraph(FBlueprintEditor* InEditor, UEdGraph* InGraph, FString& OutError)
+	TSharedPtr<SGraphEditor> OpenAndFocusGraph(FBlueprintEditor* InEditor, UEdGraph* InGraph, FString& OutError)
 	{
 		if (!InGraph)
 		{

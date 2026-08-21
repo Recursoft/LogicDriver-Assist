@@ -25,10 +25,11 @@ FString ULogicDriverToolset::ListAssets(const FString& PathPrefix)
 	return LDA::Execute(TEXT("ld.list_assets"), Args);
 }
 
-FString ULogicDriverToolset::GetAsset(USMBlueprint* Blueprint)
+FString ULogicDriverToolset::GetAsset(USMBlueprint* Blueprint, const FString& Scope)
 {
 	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
 	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
+	LDA::AddIfNonEmpty(*Args, TEXT("scope"), Scope);
 	return LDA::Execute(TEXT("ld.get_asset"), Args);
 }
 
@@ -46,7 +47,8 @@ FString ULogicDriverToolset::AddState(
 	bool bAutoPosition,
 	double PositionX,
 	double PositionY,
-	const FString& StateClass)
+	const FString& StateClass,
+	const FString& ParentStateGuid)
 {
 	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
 	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
@@ -54,6 +56,7 @@ FString ULogicDriverToolset::AddState(
 	LDA::AddBool(*Args, TEXT("is_entry"), bIsEntry);
 	LDA::AddPosition(*Args, bAutoPosition, TEXT("position_x"), TEXT("position_y"), PositionX, PositionY);
 	LDA::AddIfNonEmpty(*Args, TEXT("state_class"), StateClass);
+	LDA::AddIfNonEmpty(*Args, TEXT("parent_state_guid"), ParentStateGuid);
 	return LDA::Execute(TEXT("ld.add_state"), Args);
 }
 
@@ -65,7 +68,8 @@ FString ULogicDriverToolset::AddConduit(
 	double PositionX,
 	double PositionY,
 	const FString& StateClass,
-	bool bEvalWithTransitions)
+	bool bEvalWithTransitions,
+	const FString& ParentStateGuid)
 {
 	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
 	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
@@ -74,6 +78,7 @@ FString ULogicDriverToolset::AddConduit(
 	LDA::AddPosition(*Args, bAutoPosition, TEXT("position_x"), TEXT("position_y"), PositionX, PositionY);
 	LDA::AddIfNonEmpty(*Args, TEXT("state_class"), StateClass);
 	LDA::AddBool(*Args, TEXT("eval_with_transitions"), bEvalWithTransitions);
+	LDA::AddIfNonEmpty(*Args, TEXT("parent_state_guid"), ParentStateGuid);
 	return LDA::Execute(TEXT("ld.add_conduit"), Args);
 }
 
@@ -82,12 +87,14 @@ FString ULogicDriverToolset::AddAnyState(
 	const FString& StateName,
 	bool bAutoPosition,
 	double PositionX,
-	double PositionY)
+	double PositionY,
+	const FString& ParentStateGuid)
 {
 	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
 	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
 	LDA::AddIfNonEmpty(*Args, TEXT("state_name"), StateName);
 	LDA::AddPosition(*Args, bAutoPosition, TEXT("position_x"), TEXT("position_y"), PositionX, PositionY);
+	LDA::AddIfNonEmpty(*Args, TEXT("parent_state_guid"), ParentStateGuid);
 	return LDA::Execute(TEXT("ld.add_any_state"), Args);
 }
 
@@ -96,12 +103,14 @@ FString ULogicDriverToolset::AddLinkState(
 	const FString& LinkToStateName,
 	bool bAutoPosition,
 	double PositionX,
-	double PositionY)
+	double PositionY,
+	const FString& ParentStateGuid)
 {
 	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
 	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
 	Args->SetStringField(TEXT("link_to_state_name"), LinkToStateName);
 	LDA::AddPosition(*Args, bAutoPosition, TEXT("position_x"), TEXT("position_y"), PositionX, PositionY);
+	LDA::AddIfNonEmpty(*Args, TEXT("parent_state_guid"), ParentStateGuid);
 	return LDA::Execute(TEXT("ld.add_link_state"), Args);
 }
 
@@ -113,7 +122,8 @@ FString ULogicDriverToolset::AddReference(
 	bool bAutoPosition,
 	double PositionX,
 	double PositionY,
-	bool bUseIntermediateGraph)
+	bool bUseIntermediateGraph,
+	const FString& ParentStateGuid)
 {
 	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
 	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
@@ -125,6 +135,7 @@ FString ULogicDriverToolset::AddReference(
 	LDA::AddBool(*Args, TEXT("is_entry"), bIsEntry);
 	LDA::AddPosition(*Args, bAutoPosition, TEXT("position_x"), TEXT("position_y"), PositionX, PositionY);
 	LDA::AddBool(*Args, TEXT("use_intermediate_graph"), bUseIntermediateGraph);
+	LDA::AddIfNonEmpty(*Args, TEXT("parent_state_guid"), ParentStateGuid);
 	return LDA::Execute(TEXT("ld.add_reference"), Args);
 }
 
@@ -167,13 +178,15 @@ FString ULogicDriverToolset::AddTransitionReroute(
 	USMBlueprint* Blueprint,
 	const FString& TransitionGuid,
 	double PositionX,
-	double PositionY)
+	double PositionY,
+	const FString& ParentStateGuid)
 {
 	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
 	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
 	LDA::AddIfNonEmpty(*Args, TEXT("transition_guid"), TransitionGuid);
 	Args->SetNumberField(TEXT("position_x"), PositionX);
 	Args->SetNumberField(TEXT("position_y"), PositionY);
+	LDA::AddIfNonEmpty(*Args, TEXT("parent_state_guid"), ParentStateGuid);
 	return LDA::Execute(TEXT("ld.add_transition_reroute"), Args);
 }
 
@@ -386,12 +399,14 @@ FString ULogicDriverToolset::RecombinePin(
 FString ULogicDriverToolset::GetGraphView(
 	USMBlueprint* Blueprint,
 	bool bIncludeTransitions,
-	bool bIncludePins)
+	bool bIncludePins,
+	const FString& ParentStateGuid)
 {
 	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
 	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
 	LDA::AddBool(*Args, TEXT("include_transitions"), bIncludeTransitions);
 	LDA::AddBool(*Args, TEXT("include_pins"), bIncludePins);
+	LDA::AddIfNonEmpty(*Args, TEXT("parent_state_guid"), ParentStateGuid);
 	return LDA::Execute(TEXT("ld.get_graph_view"), Args);
 }
 

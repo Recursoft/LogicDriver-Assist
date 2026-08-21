@@ -131,6 +131,16 @@ Operation names, arguments, and payload shapes are still evolving (the plugin is
 
 Address assets by the full object path that `ld.create_blueprint` and `ld.get_asset` return (`/Game/.../SM_Foo.SM_Foo`), not the bare package path. Thread the returned `asset_path` forward instead of rebuilding it; the ToolsetRegistry transport rejects a bare path during argument conversion, before the operation runs.
 
+### Nested state machines
+
+A nested state machine is one asset, not many. `ld.get_asset` reports the root graph by default and shows a container as a single `state_machine_state` entry; pass `scope="all"` to walk every nesting level, where each state and transition also carries `graph_path` and `parent_state_guid` so levels can be told apart. `is_entry` is always relative to a node's own graph, while the top-level `entry_state_guids` stays the root graph's.
+
+To author inside a container, pass its guid as `parent_state_guid` to `ld.add_state`, `ld.add_conduit`, `ld.add_any_state`, `ld.add_link_state`, `ld.add_reference`, or `ld.add_transition_reroute`; omitting it targets the root graph. Everything else already resolves a guid at any depth, so `ld.add_transition`, `ld.set_initial_state`, `ld.set_node_property`, `ld.rename_state`, and `ld.collapse_to_state_machine` need no extra argument. Transitions must stay within one graph, and a state machine REFERENCE delegates its states to another asset, so target that asset directly rather than the reference node.
+
+For a visual check, `ld.get_graph_view` takes the same `parent_state_guid` to measure a nested graph, and `ld.capture_local_graph` screenshots it. `ld.layout_states` with `scope="all"` lays out every level in one transaction, though only the root graph is spaced from measured widget sizes.
+
+Collapsing is not destructive to identity: `ld.collapse_to_state_machine` moves the same nodes rather than cloning them, so guids recorded beforehand stay valid. Its `node_guids` response lists what the container now holds, which is not the set you passed: boundary transitions stay in the parent graph. Pass every interior transition too, because one whose endpoints both moved is deleted rather than carried in. There is no un-collapse operation.
+
 ### Clean-room authoring
 
 Author new work into a dedicated folder such as `/Game/MCP/<Feature>/`. Treat the user's existing assets as a behavior reference, not something to edit in place, unless they explicitly ask you to modify them. This keeps a build reproducible and easy to discard, and it proves the machine can be built from a prompt rather than cloned.

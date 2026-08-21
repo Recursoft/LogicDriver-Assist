@@ -19,6 +19,8 @@
 #include "SMTransitionInstance.h"
 
 #include "Dom/JsonObject.h"
+#include "Framework/Application/SlateApplication.h"
+#include "Misc/App.h"
 #include "Dom/JsonValue.h"
 #include "EdGraphSchema_K2.h"
 #include "Editor.h"
@@ -46,6 +48,19 @@ BEGIN_DEFINE_SPEC(FAssistOperationsSpec, "LogicDriver.Assist",
 	USMAssistSubsystem* GetSubsystem() const
 	{
 		return GEditor ? GEditor->GetEditorSubsystem<USMAssistSubsystem>() : nullptr;
+	}
+
+	// Opening an asset editor headless fatals in FGenericWindow::GetRestoredDimensions via the deferred
+	// RequestSavePersistentLayout ticker, so ops that open one are gated the same way
+	// SMGraphMeasure.spec.cpp gates its measurement half.
+	bool CanOpenAssetEditor()
+	{
+		if (FApp::CanEverRender() && FSlateApplication::IsInitialized())
+		{
+			return true;
+		}
+		AddInfo(TEXT("Rendering disabled (-NullRHI); skipping the checks that open an asset editor. They are exercised over MCP against a live editor."));
+		return false;
 	}
 
 	static FSMAssistOperationResult MakePingResult(const TSharedRef<FJsonObject>& InArgs)
@@ -6573,6 +6588,891 @@ void FAssistOperationsSpec::Define()
 				FName(TEXT("ld.rename_state")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error reports the length bound", Result.ErrorMessage.Contains(TEXT("characters")));
+		});
+	});
+
+	Describe("nested state machine graphs", [this]()
+	{
+		// Builds A -> B -> C in the root graph, then collapses B and C into a container. Returns the
+		// container guid; OutCollapsedGuids receives the guids that moved inside.
+		auto MakeCollapsedFixture = [this](FString& OutAssetPath, TArray<FString>& OutCollapsedGuids) -> FString
+		{
+			OutAssetPath = CreateTransientBlueprint();
+			if (OutAssetPath.IsEmpty())
+			{
+				return FString();
+			}
+
+			const FString AGuid = AddStateToBlueprint(OutAssetPath, TEXT("A"), nullptr, /*bIsEntry*/true);
+			const FString BGuid = AddStateToBlueprint(OutAssetPath, TEXT("B"));
+			const FString CGuid = AddStateToBlueprint(OutAssetPath, TEXT("C"));
+			if (AGuid.IsEmpty() || BGuid.IsEmpty() || CGuid.IsEmpty())
+			{
+				return FString();
+			}
+			AddTransitionBetween(OutAssetPath, AGuid, BGuid);
+			AddTransitionBetween(OutAssetPath, BGuid, CGuid);
+
+			TArray<TSharedPtr<FJsonValue>> NodeGuids;
+			NodeGuids.Add(MakeShared<FJsonValueString>(BGuid));
+			NodeGuids.Add(MakeShared<FJsonValueString>(CGuid));
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), OutAssetPath);
+			Args->SetArrayField(TEXT("node_guids"), NodeGuids);
+
+			const FSMAssistOperationResult Result = GetSubsystem()->ExecuteOperation(
+				FName(TEXT("ld.collapse_to_state_machine")), Args);
+			if (!Result.bSuccess || !Result.Payload.IsValid())
+			{
+				return FString();
+			}
+
+			OutCollapsedGuids = { BGuid, CGuid };
+
+			FString ContainerGuid;
+			Result.Payload->TryGetStringField(TEXT("state_guid"), ContainerGuid);
+			return ContainerGuid;
+		};
+
+		auto GetAssetWithScope = [this](const FString& InAssetPath, const FString& InScope)
+		{
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), InAssetPath);
+			if (!InScope.IsEmpty())
+			{
+				Args->SetStringField(TEXT("scope"), InScope);
+			}
+			return GetSubsystem()->ExecuteOperation(FName(TEXT("ld.get_asset")), Args);
+		};
+
+		// Index every state entry by guid so a test can assert on the fields scope='all' adds without
+		// depending on enumeration order.
+		auto CollectStates = [](const FSMAssistOperationResult& InResult)
+		{
+			TMap<FString, TSharedPtr<FJsonObject>> ByGuid;
+			const TArray<TSharedPtr<FJsonValue>>* States = nullptr;
+			if (InResult.Payload.IsValid() && InResult.Payload->TryGetArrayField(TEXT("states"), States) && States)
+			{
+				for (const TSharedPtr<FJsonValue>& Value : *States)
+				{
+					const TSharedPtr<FJsonObject>* Entry = nullptr;
+					FString Guid;
+					if (Value->TryGetObject(Entry) && Entry->IsValid()
+						&& (*Entry)->TryGetStringField(TEXT("state_guid"), Guid))
+					{
+						ByGuid.Add(Guid, *Entry);
+					}
+				}
+			}
+			return ByGuid;
+		};
+
+		It("ld.get_asset defaults to the root graph and omits collapsed states", [this, MakeCollapsedFixture, GetAssetWithScope, CollectStates]()
+		{
+			FString AssetPath;
+			TArray<FString> CollapsedGuids;
+			const FString ContainerGuid = MakeCollapsedFixture(AssetPath, CollapsedGuids);
+			if (!TestFalse("Fixture collapsed", ContainerGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			const FSMAssistOperationResult Result = GetAssetWithScope(AssetPath, FString());
+			if (!TestTrue("Result is success", Result.bSuccess))
+			{
+				return;
+			}
+
+			FString Scope;
+			TestTrue("Payload reports scope", Result.Payload->TryGetStringField(TEXT("scope"), Scope));
+			TestEqual("Scope defaults to root", Scope, FString(TEXT("root")));
+
+			const TMap<FString, TSharedPtr<FJsonObject>> States = CollectStates(Result);
+			if (!TestTrue("Container is reported", States.Contains(ContainerGuid)))
+			{
+				return;
+			}
+			for (const FString& CollapsedGuid : CollapsedGuids)
+			{
+				TestFalse("Collapsed state is not in the root scope", States.Contains(CollapsedGuid));
+			}
+			TestFalse("Root scope adds no graph_path", States[ContainerGuid]->HasField(TEXT("graph_path")));
+		});
+
+		It("ld.get_asset scope=all reports collapsed states with their graph location", [this, MakeCollapsedFixture, GetAssetWithScope, CollectStates]()
+		{
+			FString AssetPath;
+			TArray<FString> CollapsedGuids;
+			const FString ContainerGuid = MakeCollapsedFixture(AssetPath, CollapsedGuids);
+			if (!TestFalse("Fixture collapsed", ContainerGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			const FSMAssistOperationResult Result = GetAssetWithScope(AssetPath, TEXT("all"));
+			if (!TestTrue("Result is success", Result.bSuccess))
+			{
+				return;
+			}
+
+			FString Scope;
+			Result.Payload->TryGetStringField(TEXT("scope"), Scope);
+			TestEqual("Scope echoes all", Scope, FString(TEXT("all")));
+
+			const TMap<FString, TSharedPtr<FJsonObject>> States = CollectStates(Result);
+			for (const FString& CollapsedGuid : CollapsedGuids)
+			{
+				if (!TestTrue("Collapsed state is reported", States.Contains(CollapsedGuid)))
+				{
+					continue;
+				}
+				const TSharedPtr<FJsonObject>& Entry = States[CollapsedGuid];
+
+				FString ParentGuid;
+				TestTrue("Nested state reports parent_state_guid",
+					Entry->TryGetStringField(TEXT("parent_state_guid"), ParentGuid));
+				TestEqual("Parent is the container", ParentGuid, ContainerGuid);
+
+				FString GraphPath;
+				TestTrue("Nested state reports graph_path",
+					Entry->TryGetStringField(TEXT("graph_path"), GraphPath));
+				TestTrue("Nested graph_path is below the root", GraphPath.Contains(TEXT("/")));
+			}
+
+			if (TestTrue("Container is still reported", States.Contains(ContainerGuid)))
+			{
+				TestFalse("Root-graph node has no parent_state_guid",
+					States[ContainerGuid]->HasField(TEXT("parent_state_guid")));
+			}
+		});
+
+		It("ld.get_asset rejects an unknown scope", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("scope"), TEXT("everything"));
+
+			const FSMAssistOperationResult Result = GetSubsystem()->ExecuteOperation(
+				FName(TEXT("ld.get_asset")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+			TestTrue("Error names the accepted values", Result.ErrorMessage.Contains(TEXT("'root' or 'all'")));
+		});
+
+		It("ld.collapse_to_state_machine echoes the guids that moved inside", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString AGuid = AddStateToBlueprint(AssetPath, TEXT("A"), nullptr, /*bIsEntry*/true);
+			const FString BGuid = AddStateToBlueprint(AssetPath, TEXT("B"));
+			const FString CGuid = AddStateToBlueprint(AssetPath, TEXT("C"));
+			AddTransitionBetween(AssetPath, AGuid, BGuid);
+			AddTransitionBetween(AssetPath, BGuid, CGuid);
+
+			TArray<TSharedPtr<FJsonValue>> NodeGuids;
+			NodeGuids.Add(MakeShared<FJsonValueString>(BGuid));
+			NodeGuids.Add(MakeShared<FJsonValueString>(CGuid));
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetArrayField(TEXT("node_guids"), NodeGuids);
+
+			const FSMAssistOperationResult Result = GetSubsystem()->ExecuteOperation(
+				FName(TEXT("ld.collapse_to_state_machine")), Args);
+			if (!TestTrue("Result is success", Result.bSuccess))
+			{
+				return;
+			}
+
+			const TArray<TSharedPtr<FJsonValue>>* Echoed = nullptr;
+			if (!TestTrue("Payload has 'node_guids'", Result.Payload->TryGetArrayField(TEXT("node_guids"), Echoed)))
+			{
+				return;
+			}
+
+			TArray<FString> EchoedGuids;
+			for (const TSharedPtr<FJsonValue>& Value : *Echoed)
+			{
+				EchoedGuids.Add(Value->AsString());
+			}
+			TestTrue("Echoes the first collapsed guid", EchoedGuids.Contains(BGuid));
+			TestTrue("Echoes the second collapsed guid", EchoedGuids.Contains(CGuid));
+
+			FString GraphPath;
+			TestTrue("Payload has 'graph_path'", Result.Payload->TryGetStringField(TEXT("graph_path"), GraphPath));
+			TestFalse("Container graph path non-empty", GraphPath.IsEmpty());
+		});
+
+		It("ld.add_state places the new state inside the nested graph", [this, MakeCollapsedFixture, GetAssetWithScope, CollectStates]()
+		{
+			FString AssetPath;
+			TArray<FString> CollapsedGuids;
+			const FString ContainerGuid = MakeCollapsedFixture(AssetPath, CollapsedGuids);
+			if (!TestFalse("Fixture collapsed", ContainerGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("state_name"), TEXT("Inner"));
+			Args->SetStringField(TEXT("parent_state_guid"), ContainerGuid);
+
+			const FSMAssistOperationResult Result = GetSubsystem()->ExecuteOperation(
+				FName(TEXT("ld.add_state")), Args);
+			if (!TestTrue("Result is success", Result.bSuccess))
+			{
+				return;
+			}
+
+			FString NewGuid;
+			Result.Payload->TryGetStringField(TEXT("state_guid"), NewGuid);
+			TestFalse("New state guid populated", NewGuid.IsEmpty());
+			TestFalse("New state is not in the root graph", GetRootStateGuids(AssetPath).Contains(NewGuid));
+
+			const TMap<FString, TSharedPtr<FJsonObject>> States = CollectStates(GetAssetWithScope(AssetPath, TEXT("all")));
+			if (!TestTrue("New state is reported under scope=all", States.Contains(NewGuid)))
+			{
+				return;
+			}
+
+			FString ParentGuid;
+			States[NewGuid]->TryGetStringField(TEXT("parent_state_guid"), ParentGuid);
+			TestEqual("New state's parent is the container", ParentGuid, ContainerGuid);
+		});
+
+		It("ld.add_state wires the entry of the nested graph, not the root's", [this, MakeCollapsedFixture, GetAssetWithScope, CollectStates]()
+		{
+			FString AssetPath;
+			TArray<FString> CollapsedGuids;
+			const FString ContainerGuid = MakeCollapsedFixture(AssetPath, CollapsedGuids);
+			if (!TestFalse("Fixture collapsed", ContainerGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("state_name"), TEXT("InnerEntry"));
+			Args->SetStringField(TEXT("parent_state_guid"), ContainerGuid);
+			Args->SetBoolField(TEXT("is_entry"), true);
+
+			const FSMAssistOperationResult Result = GetSubsystem()->ExecuteOperation(
+				FName(TEXT("ld.add_state")), Args);
+			if (!TestTrue("Result is success", Result.bSuccess))
+			{
+				return;
+			}
+
+			FString NewGuid;
+			Result.Payload->TryGetStringField(TEXT("state_guid"), NewGuid);
+
+			const FSMAssistOperationResult AllResult = GetAssetWithScope(AssetPath, TEXT("all"));
+			const TMap<FString, TSharedPtr<FJsonObject>> States = CollectStates(AllResult);
+			if (!TestTrue("New state is reported", States.Contains(NewGuid)))
+			{
+				return;
+			}
+
+			bool bIsEntry = false;
+			States[NewGuid]->TryGetBoolField(TEXT("is_entry"), bIsEntry);
+			TestTrue("New state is its own graph's entry", bIsEntry);
+
+			// entry_state_guids is the ROOT graph's, so a nested entry must not appear there.
+			const TArray<TSharedPtr<FJsonValue>>* RootEntries = nullptr;
+			if (TestTrue("Payload has 'entry_state_guids'",
+				AllResult.Payload->TryGetArrayField(TEXT("entry_state_guids"), RootEntries)))
+			{
+				for (const TSharedPtr<FJsonValue>& Value : *RootEntries)
+				{
+					TestNotEqual("Nested entry is not a root entry", Value->AsString(), NewGuid);
+				}
+			}
+		});
+
+		It("ld.add_conduit honors parent_state_guid", [this, MakeCollapsedFixture, GetAssetWithScope, CollectStates]()
+		{
+			FString AssetPath;
+			TArray<FString> CollapsedGuids;
+			const FString ContainerGuid = MakeCollapsedFixture(AssetPath, CollapsedGuids);
+			if (!TestFalse("Fixture collapsed", ContainerGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("state_name"), TEXT("InnerConduit"));
+			Args->SetStringField(TEXT("parent_state_guid"), ContainerGuid);
+
+			const FSMAssistOperationResult Result = GetSubsystem()->ExecuteOperation(
+				FName(TEXT("ld.add_conduit")), Args);
+			if (!TestTrue("Result is success", Result.bSuccess))
+			{
+				return;
+			}
+
+			FString NewGuid;
+			Result.Payload->TryGetStringField(TEXT("state_guid"), NewGuid);
+			TestFalse("Conduit is not in the root graph", GetRootStateGuids(AssetPath).Contains(NewGuid));
+
+			const TMap<FString, TSharedPtr<FJsonObject>> States = CollectStates(GetAssetWithScope(AssetPath, TEXT("all")));
+			TestTrue("Conduit is reported under scope=all", States.Contains(NewGuid));
+		});
+
+		It("ld.add_transition connects two states inside the same nested graph", [this, MakeCollapsedFixture]()
+		{
+			FString AssetPath;
+			TArray<FString> CollapsedGuids;
+			const FString ContainerGuid = MakeCollapsedFixture(AssetPath, CollapsedGuids);
+			if (!TestFalse("Fixture collapsed", ContainerGuid.IsEmpty())
+				|| !TestEqual("Two states collapsed", CollapsedGuids.Num(), 2))
+			{
+				return;
+			}
+
+			const TSharedRef<FJsonObject> AddArgs = MakeShared<FJsonObject>();
+			AddArgs->SetStringField(TEXT("asset_path"), AssetPath);
+			AddArgs->SetStringField(TEXT("state_name"), TEXT("InnerTarget"));
+			AddArgs->SetStringField(TEXT("parent_state_guid"), ContainerGuid);
+
+			const FSMAssistOperationResult AddResult = GetSubsystem()->ExecuteOperation(
+				FName(TEXT("ld.add_state")), AddArgs);
+			if (!TestTrue("Inner state added", AddResult.bSuccess))
+			{
+				return;
+			}
+
+			FString InnerGuid;
+			AddResult.Payload->TryGetStringField(TEXT("state_guid"), InnerGuid);
+
+			TestFalse("Transition inside the nested graph succeeds",
+				AddTransitionBetween(AssetPath, CollapsedGuids[1], InnerGuid).IsEmpty());
+		});
+
+		It("ld.add_transition still refuses endpoints in different graphs", [this, MakeCollapsedFixture]()
+		{
+			FString AssetPath;
+			TArray<FString> CollapsedGuids;
+			const FString ContainerGuid = MakeCollapsedFixture(AssetPath, CollapsedGuids);
+			if (!TestFalse("Fixture collapsed", ContainerGuid.IsEmpty())
+				|| !TestEqual("Two states collapsed", CollapsedGuids.Num(), 2))
+			{
+				return;
+			}
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("from_state_guid"), ContainerGuid);
+			Args->SetStringField(TEXT("to_state_guid"), CollapsedGuids[0]);
+
+			const FSMAssistOperationResult Result = GetSubsystem()->ExecuteOperation(
+				FName(TEXT("ld.add_transition")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+			TestTrue("Error names the graph mismatch", Result.ErrorMessage.Contains(TEXT("different graphs")));
+		});
+
+		It("parent_state_guid rejects a node that is not a nested state machine", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+			const FString StateGuid = AddStateToBlueprint(AssetPath, TEXT("Plain"));
+			if (!TestFalse("State created", StateGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("state_name"), TEXT("Nope"));
+			Args->SetStringField(TEXT("parent_state_guid"), StateGuid);
+
+			const FSMAssistOperationResult Result = GetSubsystem()->ExecuteOperation(
+				FName(TEXT("ld.add_state")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+			TestTrue("Error names the required node kind",
+				Result.ErrorMessage.Contains(TEXT("state_machine_state")));
+		});
+
+		It("parent_state_guid rejects an unknown guid", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("parent_state_guid"), FGuid::NewGuid().ToString());
+
+			const FSMAssistOperationResult Result = GetSubsystem()->ExecuteOperation(
+				FName(TEXT("ld.add_state")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+			TestTrue("Error names the missing node", Result.ErrorMessage.Contains(TEXT("Could not find node")));
+		});
+
+		It("ld.get_local_graph on a container enumerates the nested states with their guids", [this, MakeCollapsedFixture]()
+		{
+			FString AssetPath;
+			TArray<FString> CollapsedGuids;
+			const FString ContainerGuid = MakeCollapsedFixture(AssetPath, CollapsedGuids);
+			if (!TestFalse("Fixture collapsed", ContainerGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("node_guid"), ContainerGuid);
+			Args->SetBoolField(TEXT("include_pins"), false);
+
+			const FSMAssistOperationResult Result = GetSubsystem()->ExecuteOperation(
+				FName(TEXT("ld.get_local_graph")), Args);
+			if (!TestTrue("Result is success", Result.bSuccess))
+			{
+				return;
+			}
+
+			const TArray<TSharedPtr<FJsonValue>>* Nodes = nullptr;
+			if (!TestTrue("Payload has 'nodes'", Result.Payload->TryGetArrayField(TEXT("nodes"), Nodes)))
+			{
+				return;
+			}
+
+			TArray<FString> ReportedGuids;
+			for (const TSharedPtr<FJsonValue>& Value : *Nodes)
+			{
+				const TSharedPtr<FJsonObject>* Entry = nullptr;
+				FString Guid;
+				if (Value->TryGetObject(Entry) && Entry->IsValid()
+					&& (*Entry)->TryGetStringField(TEXT("node_guid"), Guid))
+				{
+					ReportedGuids.Add(Guid);
+				}
+			}
+			for (const FString& CollapsedGuid : CollapsedGuids)
+			{
+				TestTrue("Collapsed state guid is enumerated", ReportedGuids.Contains(CollapsedGuid));
+			}
+		});
+
+		It("guid-addressed ops keep working on a collapsed state", [this, MakeCollapsedFixture]()
+		{
+			FString AssetPath;
+			TArray<FString> CollapsedGuids;
+			const FString ContainerGuid = MakeCollapsedFixture(AssetPath, CollapsedGuids);
+			if (!TestFalse("Fixture collapsed", ContainerGuid.IsEmpty())
+				|| !TestTrue("Collapsed guids captured", CollapsedGuids.Num() > 0))
+			{
+				return;
+			}
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("state_guid"), CollapsedGuids[0]);
+			Args->SetStringField(TEXT("new_name"), TEXT("RenamedInside"));
+
+			const FSMAssistOperationResult Result = GetSubsystem()->ExecuteOperation(
+				FName(TEXT("ld.rename_state")), Args);
+			TestTrue("Rename succeeds on a node inside a nested graph", Result.bSuccess);
+		});
+
+		It("ld.layout_states scope=all reports every nested graph", [this, MakeCollapsedFixture]()
+		{
+			if (!CanOpenAssetEditor())
+			{
+				return;
+			}
+
+			FString AssetPath;
+			TArray<FString> CollapsedGuids;
+			const FString ContainerGuid = MakeCollapsedFixture(AssetPath, CollapsedGuids);
+			if (!TestFalse("Fixture collapsed", ContainerGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("scope"), TEXT("all"));
+
+			const FSMAssistOperationResult Result = GetSubsystem()->ExecuteOperation(
+				FName(TEXT("ld.layout_states")), Args);
+			if (!TestTrue("Result is success", Result.bSuccess))
+			{
+				return;
+			}
+
+			const TArray<TSharedPtr<FJsonValue>>* Graphs = nullptr;
+			if (!TestTrue("Payload has 'graphs'", Result.Payload->TryGetArrayField(TEXT("graphs"), Graphs)))
+			{
+				return;
+			}
+			TestEqual("Root plus the one nested graph are reported", Graphs->Num(), 2);
+
+			// The root entry carries no parent; the nested one names its container and nests its path
+			// under the root's. Both are what ld.get_asset scope=all reports for the same graphs.
+			bool bFoundRoot = false;
+			bool bFoundNested = false;
+			for (const TSharedPtr<FJsonValue>& Value : *Graphs)
+			{
+				const TSharedPtr<FJsonObject>* Entry = nullptr;
+				if (!Value->TryGetObject(Entry) || !Entry->IsValid())
+				{
+					continue;
+				}
+				FString GraphPath;
+				(*Entry)->TryGetStringField(TEXT("graph_path"), GraphPath);
+
+				FString ParentGuid;
+				if ((*Entry)->TryGetStringField(TEXT("parent_state_guid"), ParentGuid))
+				{
+					bFoundNested = true;
+					TestEqual("Nested graph names its container", ParentGuid, ContainerGuid);
+					TestTrue("Nested graph_path is below the root", GraphPath.Contains(TEXT("/")));
+				}
+				else
+				{
+					bFoundRoot = true;
+					TestFalse("Root graph_path has no separator", GraphPath.Contains(TEXT("/")));
+				}
+			}
+			TestTrue("Root graph reported", bFoundRoot);
+			TestTrue("Nested graph reported", bFoundNested);
+		});
+
+		It("ld.layout_states scope=root reports only the root graph", [this, MakeCollapsedFixture]()
+		{
+			if (!CanOpenAssetEditor())
+			{
+				return;
+			}
+
+			FString AssetPath;
+			TArray<FString> CollapsedGuids;
+			const FString ContainerGuid = MakeCollapsedFixture(AssetPath, CollapsedGuids);
+			if (!TestFalse("Fixture collapsed", ContainerGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("scope"), TEXT("root"));
+
+			const FSMAssistOperationResult Result = GetSubsystem()->ExecuteOperation(
+				FName(TEXT("ld.layout_states")), Args);
+			if (!TestTrue("Result is success", Result.bSuccess))
+			{
+				return;
+			}
+
+			const TArray<TSharedPtr<FJsonValue>>* Graphs = nullptr;
+			if (!TestTrue("Payload has 'graphs'", Result.Payload->TryGetArrayField(TEXT("graphs"), Graphs)))
+			{
+				return;
+			}
+			TestEqual("Only the root graph is reported", Graphs->Num(), 1);
+		});
+
+		It("ld.collapse_to_state_machine reports the container's contents, not the requested set", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString AGuid = AddStateToBlueprint(AssetPath, TEXT("A"), nullptr, /*bIsEntry*/true);
+			const FString BGuid = AddStateToBlueprint(AssetPath, TEXT("B"));
+			const FString CGuid = AddStateToBlueprint(AssetPath, TEXT("C"));
+
+			// A->B crosses the collapse boundary; B->C is interior and is never passed in.
+			const FString BoundaryTransitionGuid = AddTransitionBetween(AssetPath, AGuid, BGuid);
+			const FString InteriorTransitionGuid = AddTransitionBetween(AssetPath, BGuid, CGuid);
+			if (!TestFalse("Boundary transition added", BoundaryTransitionGuid.IsEmpty())
+				|| !TestFalse("Interior transition added", InteriorTransitionGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			TArray<TSharedPtr<FJsonValue>> NodeGuids;
+			NodeGuids.Add(MakeShared<FJsonValueString>(BGuid));
+			NodeGuids.Add(MakeShared<FJsonValueString>(CGuid));
+			NodeGuids.Add(MakeShared<FJsonValueString>(BoundaryTransitionGuid));
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetArrayField(TEXT("node_guids"), NodeGuids);
+
+			const FSMAssistOperationResult Result = GetSubsystem()->ExecuteOperation(
+				FName(TEXT("ld.collapse_to_state_machine")), Args);
+			if (!TestTrue("Result is success", Result.bSuccess))
+			{
+				return;
+			}
+
+			const TArray<TSharedPtr<FJsonValue>>* Echoed = nullptr;
+			if (!TestTrue("Payload has 'node_guids'", Result.Payload->TryGetArrayField(TEXT("node_guids"), Echoed)))
+			{
+				return;
+			}
+
+			TArray<FString> Reported;
+			for (const TSharedPtr<FJsonValue>& Value : *Echoed)
+			{
+				Reported.Add(Value->AsString());
+			}
+
+			TestTrue("Interior state B is inside", Reported.Contains(BGuid));
+			TestTrue("Interior state C is inside", Reported.Contains(CGuid));
+			TestFalse("Boundary transition stayed in the parent graph despite being requested",
+				Reported.Contains(BoundaryTransitionGuid));
+
+			// An interior transition left out of node_guids is not carried in: both its endpoints moved, so
+			// CleanUpIsolatedTransitions deletes it from the parent graph. It survives nowhere.
+			TestFalse("Omitted interior transition is not in the container",
+				Reported.Contains(InteriorTransitionGuid));
+
+			const TSharedRef<FJsonObject> AllArgs = MakeShared<FJsonObject>();
+			AllArgs->SetStringField(TEXT("asset_path"), AssetPath);
+			AllArgs->SetStringField(TEXT("scope"), TEXT("all"));
+			const FSMAssistOperationResult AllResult = GetSubsystem()->ExecuteOperation(
+				FName(TEXT("ld.get_asset")), AllArgs);
+
+			bool bInteriorSurvives = false;
+			const TArray<TSharedPtr<FJsonValue>>* Transitions = nullptr;
+			if (AllResult.bSuccess && AllResult.Payload->TryGetArrayField(TEXT("transitions"), Transitions))
+			{
+				for (const TSharedPtr<FJsonValue>& Value : *Transitions)
+				{
+					const TSharedPtr<FJsonObject>* Entry = nullptr;
+					FString Guid;
+					if (Value->TryGetObject(Entry) && Entry->IsValid()
+						&& (*Entry)->TryGetStringField(TEXT("transition_guid"), Guid)
+						&& Guid == InteriorTransitionGuid)
+					{
+						bInteriorSurvives = true;
+					}
+				}
+			}
+			TestFalse("Omitted interior transition is deleted, not relocated", bInteriorSurvives);
+		});
+
+		It("ld.add_any_state honors parent_state_guid", [this, MakeCollapsedFixture, GetAssetWithScope, CollectStates]()
+		{
+			FString AssetPath;
+			TArray<FString> CollapsedGuids;
+			const FString ContainerGuid = MakeCollapsedFixture(AssetPath, CollapsedGuids);
+			if (!TestFalse("Fixture collapsed", ContainerGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("state_name"), TEXT("InnerAny"));
+			Args->SetStringField(TEXT("parent_state_guid"), ContainerGuid);
+
+			const FSMAssistOperationResult Result = GetSubsystem()->ExecuteOperation(
+				FName(TEXT("ld.add_any_state")), Args);
+			if (!TestTrue("Result is success", Result.bSuccess))
+			{
+				return;
+			}
+
+			FString NewGuid;
+			Result.Payload->TryGetStringField(TEXT("state_guid"), NewGuid);
+			TestFalse("Any State is not in the root graph", GetRootStateGuids(AssetPath).Contains(NewGuid));
+
+			const TMap<FString, TSharedPtr<FJsonObject>> States = CollectStates(GetAssetWithScope(AssetPath, TEXT("all")));
+			TestTrue("Any State is reported under scope=all", States.Contains(NewGuid));
+		});
+
+		It("ld.add_link_state resolves its target within the nested graph", [this, MakeCollapsedFixture, GetAssetWithScope, CollectStates]()
+		{
+			FString AssetPath;
+			TArray<FString> CollapsedGuids;
+			const FString ContainerGuid = MakeCollapsedFixture(AssetPath, CollapsedGuids);
+			if (!TestFalse("Fixture collapsed", ContainerGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			// 'B' lives inside the container; 'A' stayed in the root graph.
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("link_to_state_name"), TEXT("B"));
+			Args->SetStringField(TEXT("parent_state_guid"), ContainerGuid);
+
+			const FSMAssistOperationResult Result = GetSubsystem()->ExecuteOperation(
+				FName(TEXT("ld.add_link_state")), Args);
+			if (!TestTrue("Links to a state in the same nested graph", Result.bSuccess))
+			{
+				return;
+			}
+
+			FString NewGuid;
+			Result.Payload->TryGetStringField(TEXT("state_guid"), NewGuid);
+			const TMap<FString, TSharedPtr<FJsonObject>> States = CollectStates(GetAssetWithScope(AssetPath, TEXT("all")));
+			TestTrue("Link State is reported under scope=all", States.Contains(NewGuid));
+		});
+
+		It("ld.add_link_state refuses a target outside the nested graph", [this, MakeCollapsedFixture]()
+		{
+			FString AssetPath;
+			TArray<FString> CollapsedGuids;
+			const FString ContainerGuid = MakeCollapsedFixture(AssetPath, CollapsedGuids);
+			if (!TestFalse("Fixture collapsed", ContainerGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			// 'A' stayed in the root graph, so it is not linkable from inside the container.
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("link_to_state_name"), TEXT("A"));
+			Args->SetStringField(TEXT("parent_state_guid"), ContainerGuid);
+
+			const FSMAssistOperationResult Result = GetSubsystem()->ExecuteOperation(
+				FName(TEXT("ld.add_link_state")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+			TestTrue("Error names the graph scope", Result.ErrorMessage.Contains(TEXT("available to link")));
+		});
+
+		It("ld.add_transition_reroute places a standalone reroute in the nested graph", [this, MakeCollapsedFixture]()
+		{
+			FString AssetPath;
+			TArray<FString> CollapsedGuids;
+			const FString ContainerGuid = MakeCollapsedFixture(AssetPath, CollapsedGuids);
+			if (!TestFalse("Fixture collapsed", ContainerGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("parent_state_guid"), ContainerGuid);
+
+			const FSMAssistOperationResult Result = GetSubsystem()->ExecuteOperation(
+				FName(TEXT("ld.add_transition_reroute")), Args);
+			if (!TestTrue("Result is success", Result.bSuccess))
+			{
+				return;
+			}
+
+			FString RerouteGuid;
+			Result.Payload->TryGetStringField(TEXT("reroute_guid"), RerouteGuid);
+			TestFalse("Reroute guid populated", RerouteGuid.IsEmpty());
+			TestFalse("Reroute is not in the root graph", GetRootStateGuids(AssetPath).Contains(RerouteGuid));
+		});
+
+		It("ld.get_graph_view measures the nested graph named by parent_state_guid", [this, MakeCollapsedFixture]()
+		{
+			if (!CanOpenAssetEditor())
+			{
+				return;
+			}
+
+			FString AssetPath;
+			TArray<FString> CollapsedGuids;
+			const FString ContainerGuid = MakeCollapsedFixture(AssetPath, CollapsedGuids);
+			if (!TestFalse("Fixture collapsed", ContainerGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("parent_state_guid"), ContainerGuid);
+
+			const FSMAssistOperationResult Result = GetSubsystem()->ExecuteOperation(
+				FName(TEXT("ld.get_graph_view")), Args);
+			if (!TestTrue("Result is success", Result.bSuccess))
+			{
+				return;
+			}
+
+			FString GraphPath;
+			TestTrue("Payload reports the measured graph",
+				Result.Payload->TryGetStringField(TEXT("graph_path"), GraphPath));
+			TestTrue("Measured graph is the nested one", GraphPath.Contains(TEXT("/")));
+
+			// The collapsed states are the ones inside, so they are what got measured.
+			const TArray<TSharedPtr<FJsonValue>>* Nodes = nullptr;
+			if (!TestTrue("Payload has 'nodes'", Result.Payload->TryGetArrayField(TEXT("nodes"), Nodes)))
+			{
+				return;
+			}
+			TArray<FString> Reported;
+			for (const TSharedPtr<FJsonValue>& Value : *Nodes)
+			{
+				const TSharedPtr<FJsonObject>* Entry = nullptr;
+				FString Guid;
+				if (Value->TryGetObject(Entry) && Entry->IsValid()
+					&& (*Entry)->TryGetStringField(TEXT("node_guid"), Guid))
+				{
+					Reported.Add(Guid);
+				}
+			}
+			for (const FString& CollapsedGuid : CollapsedGuids)
+			{
+				TestTrue("Nested state was measured", Reported.Contains(CollapsedGuid));
+			}
+		});
+
+		It("graph_path joins across ld.get_asset, ld.layout_states, and ld.collapse_to_state_machine", [this, MakeCollapsedFixture, GetAssetWithScope, CollectStates]()
+		{
+			if (!CanOpenAssetEditor())
+			{
+				return;
+			}
+
+			FString AssetPath;
+			TArray<FString> CollapsedGuids;
+			const FString ContainerGuid = MakeCollapsedFixture(AssetPath, CollapsedGuids);
+			if (!TestFalse("Fixture collapsed", ContainerGuid.IsEmpty())
+				|| !TestTrue("Collapsed guids captured", CollapsedGuids.Num() > 0))
+			{
+				return;
+			}
+
+			const TMap<FString, TSharedPtr<FJsonObject>> States = CollectStates(GetAssetWithScope(AssetPath, TEXT("all")));
+			if (!TestTrue("Nested state reported", States.Contains(CollapsedGuids[0])))
+			{
+				return;
+			}
+			FString FromGetAsset;
+			States[CollapsedGuids[0]]->TryGetStringField(TEXT("graph_path"), FromGetAsset);
+
+			const TSharedRef<FJsonObject> ViewArgs = MakeShared<FJsonObject>();
+			ViewArgs->SetStringField(TEXT("asset_path"), AssetPath);
+			ViewArgs->SetStringField(TEXT("parent_state_guid"), ContainerGuid);
+			const FSMAssistOperationResult ViewResult = GetSubsystem()->ExecuteOperation(
+				FName(TEXT("ld.get_graph_view")), ViewArgs);
+			if (!TestTrue("Graph view succeeded", ViewResult.bSuccess))
+			{
+				return;
+			}
+			FString FromGraphView;
+			ViewResult.Payload->TryGetStringField(TEXT("graph_path"), FromGraphView);
+
+			TestEqual("get_graph_view graph_path matches get_asset's", FromGraphView, FromGetAsset);
+			TestFalse("graph_path is populated", FromGetAsset.IsEmpty());
 		});
 	});
 }

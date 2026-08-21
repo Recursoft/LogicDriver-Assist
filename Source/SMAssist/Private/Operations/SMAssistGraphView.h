@@ -33,6 +33,9 @@ namespace LD::Assist::GraphView
 	/** Focuses InBlueprint's root state machine graph. Null with OutError set on failure. */
 	TSharedPtr<SGraphEditor> OpenAndFocusRootGraph(FBlueprintEditor* InEditor, USMBlueprint* InBlueprint, FString& OutError);
 
+	/** Focuses an arbitrary graph on the open editor, as double-clicking it would. Null with OutError set on failure. */
+	TSharedPtr<SGraphEditor> OpenAndFocusGraph(FBlueprintEditor* InEditor, UEdGraph* InGraph, FString& OutError);
+
 	/**
 	 * Sizes every node widget in InGraph, then restores the view. Anything that could not be measured
 	 * lands in OutWarnings, because a caller reading sizes or overlaps has no other way to tell an

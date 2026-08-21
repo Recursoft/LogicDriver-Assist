@@ -76,6 +76,7 @@ namespace LD::Assist::Args
 
 	inline constexpr const TCHAR* StateName = TEXT("state_name");
 	inline constexpr const TCHAR* StateGuid = TEXT("state_guid");
+	inline constexpr const TCHAR* ParentStateGuid = TEXT("parent_state_guid");
 	inline constexpr const TCHAR* StateClass = TEXT("state_class");
 	inline constexpr const TCHAR* IsEntry = TEXT("is_entry");
 	inline constexpr const TCHAR* PositionX = TEXT("position_x");

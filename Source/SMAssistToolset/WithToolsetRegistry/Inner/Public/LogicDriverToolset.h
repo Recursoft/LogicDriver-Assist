@@ -164,10 +164,11 @@ public:
 	/**
 	 * Returns the full graph structure of a state-machine blueprint: states, transitions, entry points.
 	 * @param Blueprint The state-machine blueprint to inspect. Required.
-	 * @return JSON: { asset_path, name, parent_class?, entry_state_guids:[...], states:[...], transitions:[...] }
+	 * @param Scope Empty or "root" (default) reports the root state machine graph only. "all" also walks every nested state machine at any depth, adding graph_path and parent_state_guid to each state and transition so nesting levels can be told apart. is_entry is always relative to a node's own graph; entry_state_guids stays the root graph's.
+	 * @return JSON: { asset_path, name, parent_class?, scope, entry_state_guids:[...], states:[...], transitions:[...] }
 	 */
 	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
-	static FString GetAsset(USMBlueprint* Blueprint);
+	static FString GetAsset(USMBlueprint* Blueprint, const FString& Scope = TEXT(""));
 
 	/**
 	 * Compiles a Blueprint and reports the result. Accepts any UBlueprint subclass: state-machine
@@ -182,7 +183,7 @@ public:
 	static FString Compile(UBlueprint* Blueprint);
 
 	/**
-	 * Adds a regular state node to a blueprint's root state machine graph.
+	 * Adds a regular state node to a blueprint's root state machine graph, or to a nested one when ParentStateGuid is supplied.
 	 * @param Blueprint The blueprint to modify. Required.
 	 * @param StateName Display name for the new state; keep it short and human-readable (e.g. "Idle", "ChasePlayer") unless the user asks for a longer name. Empty = SMAssist auto-names ("State", "State_1", ...).
 	 * @param bIsEntry Whether this state becomes the graph's entry. Default false.
@@ -190,6 +191,7 @@ public:
 	 * @param PositionX Canvas X coordinate; used only when bAutoPosition is false. Negative values are valid (the default state row sits near y=-43).
 	 * @param PositionY Canvas Y coordinate; used only when bAutoPosition is false.
 	 * @param StateClass Full path of a USMStateInstance_Base subclass. Empty = base USMStateInstance (no per-node instance is created at runtime). OMIT for any behavior-less state (end states especially); an empty custom class is wasted overhead. Only set this when the state has logic or exposed properties.
+	 * @param ParentStateGuid Guid of a nested state machine node (kind 'state_machine_state', from GetAsset) to place the new node inside that container's graph. Empty = the blueprint's root state machine graph. Works at any nesting depth; a node with a reference already assigned is rejected, since its states live in the referenced blueprint.
 	 * @return JSON: { state_guid, state_name }
 	 */
 	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
@@ -200,10 +202,11 @@ public:
 		bool bAutoPosition = true,
 		double PositionX = 0.0,
 		double PositionY = 0.0,
-		const FString& StateClass = TEXT(""));
+		const FString& StateClass = TEXT(""),
+		const FString& ParentStateGuid = TEXT(""));
 
 	/**
-	 * Adds a conduit node to a blueprint's root state machine graph.
+	 * Adds a conduit node to a blueprint's root state machine graph, or to a nested one when ParentStateGuid is supplied.
 	 * @param Blueprint The blueprint to modify. Required.
 	 * @param StateName Display name for the new conduit; keep it short and human-readable unless the user asks for a longer name. Empty = auto-name.
 	 * @param bIsEntry Whether this conduit becomes the graph's entry. Default false.
@@ -212,6 +215,7 @@ public:
 	 * @param PositionY Canvas Y coordinate; used only when bAutoPosition is false.
 	 * @param StateClass Full path of a USMConduitInstance subclass. Empty = base conduit.
 	 * @param bEvalWithTransitions Whether the conduit evaluates inline with outgoing transitions. Default true (matches the editor's default configuration for newly placed conduits).
+	 * @param ParentStateGuid Guid of a nested state machine node (kind 'state_machine_state', from GetAsset) to place the new node inside that container's graph. Empty = the blueprint's root state machine graph. Works at any nesting depth; a node with a reference already assigned is rejected, since its states live in the referenced blueprint.
 	 * @return JSON: { state_guid, state_name, state_class? }
 	 */
 	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
@@ -223,15 +227,17 @@ public:
 		double PositionX = 0.0,
 		double PositionY = 0.0,
 		const FString& StateClass = TEXT(""),
-		bool bEvalWithTransitions = true);
+		bool bEvalWithTransitions = true,
+		const FString& ParentStateGuid = TEXT(""));
 
 	/**
-	 * Adds an AnyState node to a blueprint's root state machine graph.
+	 * Adds an AnyState node to a blueprint's root state machine graph, or to a nested one when ParentStateGuid is supplied.
 	 * @param Blueprint The blueprint to modify. Required.
 	 * @param StateName Display name for the AnyState; keep it short and human-readable unless the user asks for a longer name. Empty = auto-name.
 	 * @param bAutoPosition True (default) = auto-position; PositionX/PositionY are ignored. Set false to place at PositionX/PositionY. Prefer auto or a LayoutStates pass over manual placement; coordinates near (0, 0) collide with the editor's Entry-pointer marker and produce a visually broken graph for entry states.
 	 * @param PositionX Canvas X coordinate; used only when bAutoPosition is false. Negative values are valid.
 	 * @param PositionY Canvas Y coordinate; used only when bAutoPosition is false.
+	 * @param ParentStateGuid Guid of a nested state machine node (kind 'state_machine_state', from GetAsset) to place the new node inside that container's graph. Empty = the blueprint's root state machine graph. Works at any nesting depth; a node with a reference already assigned is rejected, since its states live in the referenced blueprint.
 	 * @return JSON: { state_guid, state_name }
 	 */
 	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
@@ -240,15 +246,17 @@ public:
 		const FString& StateName = TEXT(""),
 		bool bAutoPosition = true,
 		double PositionX = 0.0,
-		double PositionY = 0.0);
+		double PositionY = 0.0,
+		const FString& ParentStateGuid = TEXT(""));
 
 	/**
 	 * Adds a LinkState node pointing at an existing state by name.
 	 * @param Blueprint The blueprint to modify. Required.
-	 * @param LinkToStateName Display name of the target state to link to. Required.
+	 * @param LinkToStateName Display name of the target state to link to; it must live in the same graph as the new node, which is the nested graph when ParentStateGuid is set. Required.
 	 * @param bAutoPosition True (default) = auto-position; PositionX/PositionY are ignored. Set false to place at PositionX/PositionY. Prefer auto or a LayoutStates pass over manual placement; coordinates near (0, 0) collide with the editor's Entry-pointer marker and produce a visually broken graph for entry states.
 	 * @param PositionX Canvas X coordinate; used only when bAutoPosition is false. Negative values are valid.
 	 * @param PositionY Canvas Y coordinate; used only when bAutoPosition is false.
+	 * @param ParentStateGuid Guid of a nested state machine node (kind 'state_machine_state', from GetAsset) to place the new node inside that container's graph. Empty = the blueprint's root state machine graph. Works at any nesting depth; a node with a reference already assigned is rejected, since its states live in the referenced blueprint.
 	 * @return JSON: { state_guid, state_name, linked_state_guid?, link_to_state_name? }
 	 */
 	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
@@ -257,7 +265,8 @@ public:
 		const FString& LinkToStateName,
 		bool bAutoPosition = true,
 		double PositionX = 0.0,
-		double PositionY = 0.0);
+		double PositionY = 0.0,
+		const FString& ParentStateGuid = TEXT(""));
 
 	/**
 	 * Adds a reference node that embeds another state-machine blueprint into this graph.
@@ -269,6 +278,7 @@ public:
 	 * @param PositionX Canvas X coordinate; used only when bAutoPosition is false. Negative values are valid.
 	 * @param PositionY Canvas Y coordinate; used only when bAutoPosition is false.
 	 * @param bUseIntermediateGraph Enable the intermediate K2 graph on the new reference state. Default false (matches the LD runtime default). Required true so SpawnLocalGraphReadNode kinds (GetStateMachineReference, InEndState) are visible/editable inside the reference state; without it, double-clicking the reference state enters the sub-SM directly. Toggle after creation via ConfigureReference.
+	 * @param ParentStateGuid Guid of a nested state machine node (kind 'state_machine_state', from GetAsset) to place the new node inside that container's graph. Empty = the blueprint's root state machine graph. Works at any nesting depth; a node with a reference already assigned is rejected, since its states live in the referenced blueprint.
 	 * @return JSON: { state_guid, state_name, reference_asset_path, use_intermediate_graph? }
 	 */
 	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
@@ -280,7 +290,8 @@ public:
 		bool bAutoPosition = true,
 		double PositionX = 0.0,
 		double PositionY = 0.0,
-		bool bUseIntermediateGraph = false);
+		bool bUseIntermediateGraph = false,
+		const FString& ParentStateGuid = TEXT(""));
 
 	/**
 	 * Reconfigures an existing state-machine-reference state after creation. Mirrors Details-panel
@@ -331,13 +342,15 @@ public:
 	 *    outgoing pin chain. Useful for V-shaping a long back-edge in a cyclic FSM so its curve
 	 *    bows around the state row.
 	 *  - Standalone: leave TransitionGuid empty. The reroute is placed on the root state machine
-	 *    graph at PositionX/PositionY. Connect transitions to/from it later via AddTransition
+	 *    target graph (ParentStateGuid, else root) at PositionX/PositionY. Connect transitions to/from
+	 *    it later via AddTransition
 	 *    (reroute GUIDs are valid from/to endpoints).
 	 *
 	 * @param Blueprint The blueprint to modify. Required.
-	 * @param TransitionGuid Optional. Empty = standalone reroute.
+	 * @param TransitionGuid Optional. Empty = standalone reroute. When set, ParentStateGuid is ignored: the reroute follows the transition's own graph.
 	 * @param PositionX Graph X coordinate for the reroute. Defaults to 0.
 	 * @param PositionY Graph Y coordinate for the reroute. Defaults to 0. To V-shape a back-edge below a row of states, set positive Y (state row sits around y=-43).
+	 * @param ParentStateGuid Guid of a nested state machine node (kind 'state_machine_state', from GetAsset) to place the new node inside that container's graph. Empty = the blueprint's root state machine graph. Works at any nesting depth; a node with a reference already assigned is rejected, since its states live in the referenced blueprint.
 	 * @return JSON: { reroute_guid, transition_guid? }
 	 */
 	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
@@ -345,7 +358,8 @@ public:
 		USMBlueprint* Blueprint,
 		const FString& TransitionGuid = TEXT(""),
 		double PositionX = 0.0,
-		double PositionY = 0.0);
+		double PositionY = 0.0,
+		const FString& ParentStateGuid = TEXT(""));
 
 	/**
 	 * Stacks an additional state-instance class onto an existing state node.
@@ -660,7 +674,8 @@ public:
 	 * @param Blueprint The blueprint to inspect. Required.
 	 * @param bIncludeTransitions Include transition entries in the output. Default true.
 	 * @param bIncludePins Include per-node pin metadata. Default false.
-	 * @return JSON: { asset_path, panel_view, overlaps:[...], transition_overlaps:[...],
+	 * @param ParentStateGuid Guid of a nested state machine node (kind 'state_machine_state') whose graph to measure instead of the root graph. Sizes and overlaps are read off the focused panel, so this opens that graph's tab in the editor. Empty = the root state machine graph. The measured graph comes back as 'graph_path'.
+	 * @return JSON: { asset_path, graph_path, panel_view, overlaps:[...], transition_overlaps:[...],
 	 *         measurement_warnings:[...], nodes:[...], transitions?:[...] }
 	 *         'overlaps' pairs every two state boxes that intersect, as first_node_guid /
 	 *         first_title_text, second_node_guid / second_title_text, overlap_extent ([w, h]). Transitions,
@@ -677,7 +692,8 @@ public:
 	static FString GetGraphView(
 		USMBlueprint* Blueprint,
 		bool bIncludeTransitions = true,
-		bool bIncludePins = false);
+		bool bIncludePins = false,
+		const FString& ParentStateGuid = TEXT(""));
 
 	/**
 	 * Captures a screenshot of a state machine graph (whole graph or a single node), saved as PNG
@@ -1163,14 +1179,18 @@ public:
 	 * nodes in the list. Read-only.
 	 *
 	 * @param Blueprint The state-machine blueprint. Required.
-	 * @param NodeGuid Guid of the state, transition (any reroute segment), conduit, or reroute waypoint
-	 *        whose local graph to read. Reroutes resolve to the primary transition. Required.
+	 * @param NodeGuid Guid of the state, transition (any reroute segment), conduit, reroute waypoint, or
+	 *        nested state machine whose local graph to read, at any nesting depth. Passing a nested state
+	 *        machine's guid enumerates the states and transitions inside it. Reroutes resolve to the
+	 *        primary transition. Required.
 	 * @param bIncludePins Include each node's pin array. Defaults to true; pass false for a lighter
 	 *        node-only listing.
 	 * @return JSON: { asset_path, requested_node_guid, node_guid, node_class, node_kind, is_rerouted,
 	 *                 graph_name, graph_path, graph_guid, [result_node_name, result_pin_id,
-	 *                 result_pin_name], node_count, nodes:[ { id, class, title, pos, [comment], [function],
-	 *                 [is_result], [pins] } ] }
+	 *                 result_pin_name], node_count, nodes:[ { id, node_guid, class, title, pos, [comment],
+	 *                 [function], [is_result], [pins] } ] }
+	 *         Each node reports both 'id' (the object name, which the local-graph write ops accept) and
+	 *         'node_guid' (which every guid-addressed op takes).
 	 */
 	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
 	static FString GetLocalGraph(
@@ -1465,10 +1485,15 @@ public:
 	/**
 	 * Collapses a set of existing nodes into a nested state-machine container node, mirroring the
 	 * editor's "Collapse to State Machine". Edges crossing the selection boundary are rewired onto
-	 * the new container; fully-interior nodes and edges move inside it.
+	 * the new container; fully-interior nodes and edges move inside it. The nodes may already live
+	 * inside a nested state machine, so this works at any depth.
 	 * @param Blueprint The blueprint to modify. Required.
-	 * @param NodeGuidsJson JSON-encoded non-empty array of node GUID strings to collapse. Required.
-	 * @return JSON: { state_guid, state_name }
+	 * @param NodeGuidsJson JSON-encoded non-empty array of node GUID strings to collapse. Required. Every node must belong to the same graph.
+	 * @return JSON: { state_guid, state_name, graph_path, node_guids:[...] }
+	 *         'node_guids' lists what the container now holds, which is NOT the set you passed: boundary
+	 *         transitions stay in the parent graph. Include every interior transition in NodeGuidsJson,
+	 *         because one whose endpoints both moved is deleted rather than carried in. Collapse relocates
+	 *         the same nodes rather than cloning them, so guids recorded beforehand stay valid afterwards.
 	 */
 	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
 	static FString CollapseToStateMachine(

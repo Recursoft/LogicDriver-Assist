@@ -97,6 +97,173 @@ namespace LD::Assist::Private
 		return GraphGen.Get();
 	}
 
+	// One state machine graph within an asset, paired with the container state node that owns it. The
+	// root graph has no container, so its ParentStateGuid is invalid and its GraphPath is its own graph
+	// name; nested entries append each graph name below it, reading "RootGraph/NestedGraph".
+	struct FStateMachineGraphEntry
+	{
+		USMGraph* Graph = nullptr;
+		FGuid ParentStateGuid;
+		FString GraphPath;
+	};
+
+	// Gather every USMGraph reachable through nested state machine state nodes, root first and nested
+	// graphs in encounter order. LD graph nodes do not override UEdGraphNode::GetSubGraphs(), so a
+	// container exposes its nested graph only through GetBoundGraph(); the same-package check keeps the
+	// walk inside this asset so a state machine reference is never followed into another blueprint.
+	// Mirrors the descent in Utils::FindNodeByGuid so enumeration and guid addressing agree on scope.
+	static void CollectStateMachineGraphs(USMGraph* InRoot, TArray<FStateMachineGraphEntry>& OutGraphs)
+	{
+		if (!InRoot)
+		{
+			return;
+		}
+
+		const UPackage* OwningPackage = InRoot->GetOutermost();
+
+		TSet<const USMGraph*> Visited;
+		Visited.Add(InRoot);
+
+		FStateMachineGraphEntry RootEntry;
+		RootEntry.Graph = InRoot;
+		RootEntry.GraphPath = InRoot->GetName();
+		OutGraphs.Add(MoveTemp(RootEntry));
+
+		// Index-based walk over OutGraphs: appending while iterating yields breadth-first order without
+		// a second worklist, and every appended entry already carries the path its children extend.
+		for (int32 EntryIdx = 0; EntryIdx < OutGraphs.Num(); ++EntryIdx)
+		{
+			USMGraph* Graph = OutGraphs[EntryIdx].Graph;
+			const FString ParentPath = OutGraphs[EntryIdx].GraphPath;
+			for (UEdGraphNode* Node : Graph->Nodes)
+			{
+				USMGraphNode_StateMachineStateNode* ContainerNode = Cast<USMGraphNode_StateMachineStateNode>(Node);
+				if (!ContainerNode)
+				{
+					continue;
+				}
+				USMGraph* NestedGraph = Cast<USMGraph>(ContainerNode->GetBoundGraph());
+				if (!NestedGraph
+					|| NestedGraph->GetOutermost() != OwningPackage
+					|| Visited.Contains(NestedGraph))
+				{
+					continue;
+				}
+				Visited.Add(NestedGraph);
+
+				FStateMachineGraphEntry Entry;
+				Entry.Graph = NestedGraph;
+				Entry.ParentStateGuid = ContainerNode->NodeGuid;
+				Entry.GraphPath = FString::Printf(TEXT("%s/%s"), *ParentPath, *NestedGraph->GetName());
+				OutGraphs.Add(MoveTemp(Entry));
+			}
+		}
+	}
+
+	// Path label for one graph within its asset, in the same form ld.layout_states reports, so a caller
+	// can join graph_path across ops. Empty when the graph is not reachable from the root.
+	static FString FindGraphPathLabel(USMGraph* InRoot, const USMGraph* InTarget)
+	{
+		if (!InRoot || !InTarget)
+		{
+			return FString();
+		}
+		TArray<FStateMachineGraphEntry> Graphs;
+		CollectStateMachineGraphs(InRoot, Graphs);
+		for (const FStateMachineGraphEntry& Entry : Graphs)
+		{
+			if (Entry.Graph == InTarget)
+			{
+				return Entry.GraphPath;
+			}
+		}
+		return FString();
+	}
+
+	// Parse the shared 'scope' arg used by the ops that can walk nested state machines. Absent or
+	// 'root' keeps the op on the root graph; 'all' recurses.
+	static bool TryParseGraphScope(const TSharedRef<FJsonObject>& InArgs, bool& bOutScopeAll, FString& OutError)
+	{
+		bOutScopeAll = false;
+
+		FString ScopeStr;
+		if (!InArgs->TryGetStringField(Args::Scope, ScopeStr) || ScopeStr.IsEmpty())
+		{
+			return true;
+		}
+		if (ScopeStr.Equals(TEXT("all"), ESearchCase::IgnoreCase))
+		{
+			bOutScopeAll = true;
+			return true;
+		}
+		if (ScopeStr.Equals(TEXT("root"), ESearchCase::IgnoreCase))
+		{
+			return true;
+		}
+
+		OutError = FString::Printf(TEXT("Unknown scope '%s'. Use 'root' or 'all'."), *ScopeStr);
+		return false;
+	}
+
+	// Resolve the optional 'parent_state_guid' arg to the nested state machine graph an op should act
+	// on. An absent guid leaves OutGraph null, which every caller treats as the blueprint root graph.
+	static bool ResolveTargetStateMachineGraph(const TSharedRef<FJsonObject>& InArgs, USMBlueprint* InBlueprint,
+		USMGraph*& OutGraph, FString& OutError)
+	{
+		OutGraph = nullptr;
+
+		FString ParentGuidStr;
+		if (!InArgs->TryGetStringField(Args::ParentStateGuid, ParentGuidStr) || ParentGuidStr.IsEmpty())
+		{
+			return true;
+		}
+
+		FGuid ParentGuid;
+		if (!FGuid::Parse(ParentGuidStr, ParentGuid))
+		{
+			OutError = FString::Printf(TEXT("Invalid 'parent_state_guid' '%s'."), *ParentGuidStr);
+			return false;
+		}
+
+		USMGraphNode_Base* ParentNode = LD::Assist::Utils::FindNodeByGuid(InBlueprint, ParentGuid);
+		if (!ParentNode)
+		{
+			OutError = FString::Printf(TEXT("Could not find node with guid '%s' for 'parent_state_guid'."), *ParentGuidStr);
+			return false;
+		}
+
+		USMGraphNode_StateMachineStateNode* ContainerNode = Cast<USMGraphNode_StateMachineStateNode>(ParentNode);
+		if (!ContainerNode)
+		{
+			OutError = FString::Printf(
+				TEXT("Node '%s' is not a nested state machine (kind 'state_machine_state'), so it owns no state machine graph to target. 'parent_state_guid' must name a state machine state node."),
+				*ParentGuidStr);
+			return false;
+		}
+
+		// A reference node delegates its states to another blueprint; its bound graph is either absent
+		// or an intermediate K2 graph, neither of which accepts state nodes.
+		USMGraph* NestedGraph = Cast<USMGraph>(ContainerNode->GetBoundGraph());
+		if (!NestedGraph)
+		{
+			OutError = FString::Printf(
+				TEXT("Nested state machine '%s' owns no state machine graph. State machine references delegate their states to the referenced blueprint; edit that asset instead."),
+				*ContainerNode->GetStateName());
+			return false;
+		}
+
+		if (NestedGraph->GetOutermost() != InBlueprint->GetOutermost())
+		{
+			OutError = FString::Printf(
+				TEXT("Nested state machine '%s' resolves to a graph in another asset. Edit that asset directly."),
+				*ContainerNode->GetStateName());
+			return false;
+		}
+
+		OutGraph = NestedGraph;
+		return true;
+	}
+
 	// FindStateNodeByGuid resolves Any State (output pin only), Link State (input pin only), and nodes in
 	// nested graphs, but core transition/entry APIs assume two-pin states in a single graph and assert or
 	// null-deref otherwise. Reject unusable endpoints with a specific message before reaching core.
@@ -272,7 +439,17 @@ FSMAssistOperationResult LD::Assist::AddState(const TSharedRef<FJsonObject>& InA
 		return FSMAssistOperationResult::MakeError(GraphGenError);
 	}
 
+	USMGraph* TargetGraph = nullptr;
+	{
+		FString TargetGraphError;
+		if (!LD::Assist::Private::ResolveTargetStateMachineGraph(InArgs, Blueprint, TargetGraph, TargetGraphError))
+		{
+			return FSMAssistOperationResult::MakeError(TargetGraphError);
+		}
+	}
+
 	ISMGraphGeneration::FCreateStateNodeArgs CreateArgs;
+	CreateArgs.GraphOwner = TargetGraph;
 
 	FString StateName;
 	if (InArgs->TryGetStringField(Args::StateName, StateName))
@@ -467,7 +644,17 @@ FSMAssistOperationResult LD::Assist::AddTransitionReroute(const TSharedRef<FJson
 		return FSMAssistOperationResult::MakeError(LoadError);
 	}
 
+	USMGraph* TargetGraph = nullptr;
+	{
+		FString TargetGraphError;
+		if (!LD::Assist::Private::ResolveTargetStateMachineGraph(InArgs, Blueprint, TargetGraph, TargetGraphError))
+		{
+			return FSMAssistOperationResult::MakeError(TargetGraphError);
+		}
+	}
+
 	ISMGraphGeneration::FCreateTransitionRerouteArgs RerouteArgs;
+	RerouteArgs.GraphOwner = TargetGraph;
 
 	// Optional inline-insert target: when transition_guid is supplied, the reroute is spliced
 	// into that transition's outgoing pin chain. When omitted, the reroute is created standalone.
@@ -593,176 +780,226 @@ FSMAssistOperationResult LD::Assist::GetAsset(const TSharedRef<FJsonObject>& InA
 		return FSMAssistOperationResult::MakeError(TEXT("Blueprint has no root state machine graph."));
 	}
 
-	TSet<FGuid> EntryStateGuids;
-	if (const USMGraphNode_StateMachineEntryNode* EntryNode = RootGraph->GetEntryNode())
+	bool bScopeAll = false;
 	{
-		if (const UEdGraphPin* EntryOutputPin = EntryNode->GetOutputPin())
+		FString ScopeError;
+		if (!LD::Assist::Private::TryParseGraphScope(InArgs, bScopeAll, ScopeError))
 		{
-			for (const UEdGraphPin* LinkedPin : EntryOutputPin->LinkedTo)
-			{
-				if (LinkedPin)
-				{
-					if (const USMGraphNode_StateNodeBase* LinkedState = Cast<USMGraphNode_StateNodeBase>(LinkedPin->GetOwningNode()))
-					{
-						EntryStateGuids.Add(LinkedState->NodeGuid);
-					}
-				}
-			}
+			return FSMAssistOperationResult::MakeError(ScopeError);
 		}
 	}
 
+	TArray<LD::Assist::Private::FStateMachineGraphEntry> GraphsToScan;
+	if (bScopeAll)
+	{
+		LD::Assist::Private::CollectStateMachineGraphs(RootGraph, GraphsToScan);
+	}
+	else
+	{
+		LD::Assist::Private::FStateMachineGraphEntry RootEntry;
+		RootEntry.Graph = RootGraph;
+		RootEntry.GraphPath = RootGraph->GetName();
+		GraphsToScan.Add(MoveTemp(RootEntry));
+	}
+
+	// Top-level entry_state_guids stays the root graph's, preserving its documented meaning. A nested
+	// graph's own entry states are reported by their is_entry flag, which is evaluated per graph.
+	TSet<FGuid> EntryStateGuids;
 	TArray<TSharedPtr<FJsonValue>> States;
 	TArray<TSharedPtr<FJsonValue>> Transitions;
 
-	for (UEdGraphNode* Node : RootGraph->Nodes)
+	for (const LD::Assist::Private::FStateMachineGraphEntry& GraphEntry : GraphsToScan)
 	{
-		if (!Node || Node->IsA<USMGraphNode_StateMachineEntryNode>())
+		USMGraph* Graph = GraphEntry.Graph;
+
+		// Under scope='root' no per-node fields are added, so existing callers parse the same entries.
+		auto StampGraphLocation = [bScopeAll, &GraphEntry](const TSharedRef<FJsonObject>& InTarget)
 		{
-			continue;
-		}
+			if (!bScopeAll)
+			{
+				return;
+			}
+			InTarget->SetStringField(Args::GraphPath, GraphEntry.GraphPath);
+			if (GraphEntry.ParentStateGuid.IsValid())
+			{
+				InTarget->SetStringField(Args::ParentStateGuid, GraphEntry.ParentStateGuid.ToString());
+			}
+		};
 
-		if (const USMGraphNode_StateNodeBase* StateNode = Cast<USMGraphNode_StateNodeBase>(Node))
+		TSet<FGuid> GraphEntryStateGuids;
+		if (const USMGraphNode_StateMachineEntryNode* EntryNode = Graph->GetEntryNode())
 		{
-			const TSharedRef<FJsonObject> Entry = MakeShared<FJsonObject>();
-			Entry->SetStringField(Args::StateGuid, StateNode->NodeGuid.ToString());
-			Entry->SetStringField(Args::StateName, StateNode->GetStateName());
-			if (const UClass* NodeClass = StateNode->GetNodeClass())
+			if (const UEdGraphPin* EntryOutputPin = EntryNode->GetOutputPin())
 			{
-				Entry->SetStringField(Args::StateClass, NodeClass->GetPathName());
-			}
-			Entry->SetNumberField(Args::PositionX, StateNode->NodePosX);
-			Entry->SetNumberField(Args::PositionY, StateNode->NodePosY);
-			Entry->SetBoolField(Args::IsEntry, EntryStateGuids.Contains(StateNode->NodeGuid));
-
-			const TCHAR* Kind = TEXT("state");
-			if (StateNode->IsA<USMGraphNode_AnyStateNode>())
-			{
-				Kind = TEXT("any_state");
-			}
-			else if (const USMGraphNode_LinkStateNode* LinkNode = Cast<USMGraphNode_LinkStateNode>(StateNode))
-			{
-				Kind = TEXT("link_state");
-				if (const USMGraphNode_StateNodeBase* LinkedState = LinkNode->GetLinkedState())
+				for (const UEdGraphPin* LinkedPin : EntryOutputPin->LinkedTo)
 				{
-					Entry->SetStringField(Args::LinkedStateGuid, LinkedState->NodeGuid.ToString());
-					Entry->SetStringField(Args::LinkToStateName, LinkedState->GetStateName());
-				}
-			}
-			else if (StateNode->IsA<USMGraphNode_RerouteNode>())
-			{
-				Kind = TEXT("reroute");
-			}
-			else if (StateNode->IsA<USMGraphNode_StateMachineStateNode>())
-			{
-				Kind = TEXT("state_machine_state");
-			}
-			else if (StateNode->IsA<USMGraphNode_ConduitNode>())
-			{
-				Kind = TEXT("conduit");
-			}
-			Entry->SetStringField(Args::Kind, Kind);
-
-			States.Add(MakeShared<FJsonValueObject>(Entry));
-			continue;
-		}
-
-		if (const USMGraphNode_TransitionEdge* TransitionEdge = Cast<USMGraphNode_TransitionEdge>(Node))
-		{
-			const TSharedRef<FJsonObject> Entry = MakeShared<FJsonObject>();
-			Entry->SetStringField(Args::TransitionGuid, TransitionEdge->NodeGuid.ToString());
-			if (const USMGraphNode_StateNodeBase* FromState = TransitionEdge->GetFromState())
-			{
-				Entry->SetStringField(Args::FromStateGuid, FromState->NodeGuid.ToString());
-			}
-			if (const USMGraphNode_StateNodeBase* ToState = TransitionEdge->GetToState())
-			{
-				Entry->SetStringField(Args::ToStateGuid, ToState->NodeGuid.ToString());
-			}
-			const UClass* TransitionNodeClass = TransitionEdge->GetNodeClass();
-			if (TransitionNodeClass)
-			{
-				Entry->SetStringField(Args::TransitionClass, TransitionNodeClass->GetPathName());
-			}
-
-			// Condition axis ("what must be true"), readable without a get_local_graph. The trigger axis below is
-			// independent. Reuse the plugin's own classifier so the constant/inline call matches compilation and
-			// handles a result node buried in a nested graph.
-			FString Gate;
-			if (TransitionNodeClass && TransitionNodeClass != USMTransitionInstance::StaticClass())
-			{
-				Gate = TEXT("class");
-			}
-			else if (const USMTransitionGraph* TransitionGraph = TransitionEdge->GetTransitionGraph())
-			{
-				switch (TransitionGraph->GetConditionalEvaluationType())
-				{
-				case ESMConditionalEvaluationType::SM_AlwaysTrue:
-					Gate = TEXT("constant:true");
-					break;
-				case ESMConditionalEvaluationType::SM_AlwaysFalse:
-					Gate = TEXT("constant:false");
-					break;
-				default:
-					Gate = TEXT("inline");
-					break;
-				}
-			}
-			if (!Gate.IsEmpty())
-			{
-				Entry->SetStringField(Args::Gate, Gate);
-			}
-
-			// Trigger axis, independent of the gate: polled each tick, fired by an auto-bound event, or both. The
-			// event component needs an actual binding, since the permission flag defaults true.
-			if (const USMTransitionInstance* TransitionInstance = Cast<USMTransitionInstance>(TransitionEdge->GetNodeTemplate()))
-			{
-				bool bTick = TransitionInstance->GetCanEvaluate();
-				// A from-state that disables tick transition evaluation suppresses polling of its outgoing edges,
-				// leaving them event-only. Mirrors FSMState_Base::CanEvaluateTransitionsOnTick.
-				if (const USMGraphNode_StateNodeBase* FromState = TransitionEdge->GetFromState())
-				{
-					if (const USMStateInstance_Base* FromInstance = Cast<USMStateInstance_Base>(FromState->GetNodeTemplate()))
+					if (LinkedPin)
 					{
-						bTick = bTick && !FromInstance->GetDisableTickTransitionEvaluation();
+						if (const USMGraphNode_StateNodeBase* LinkedState = Cast<USMGraphNode_StateNodeBase>(LinkedPin->GetOwningNode()))
+						{
+							GraphEntryStateGuids.Add(LinkedState->NodeGuid);
+						}
 					}
 				}
-				const bool bEvent = TransitionEdge->DelegatePropertyName != NAME_None && TransitionInstance->GetCanEvaluateFromEvent();
-				const TCHAR* Evaluation = bTick
-					? (bEvent ? TEXT("tick+event") : TEXT("tick"))
-					: (bEvent ? TEXT("event") : TEXT("none"));
-				Entry->SetStringField(Args::Evaluation, Evaluation);
 			}
+		}
+		if (Graph == RootGraph)
+		{
+			EntryStateGuids = GraphEntryStateGuids;
+		}
 
-			// Auto-bound event binding, mirroring configure_transition_event's fields so a caller can verify it
-			// landed without a get_local_graph.
-			if (TransitionEdge->DelegatePropertyName != NAME_None)
+		for (UEdGraphNode* Node : Graph->Nodes)
+		{
+			if (!Node || Node->IsA<USMGraphNode_StateMachineEntryNode>())
 			{
-				const TCHAR* OwnerInstance = TEXT("Context");
-				switch (TransitionEdge->DelegateOwnerInstance.GetValue())
-				{
-				case SMDO_This:
-					OwnerInstance = TEXT("This");
-					break;
-				case SMDO_PreviousState:
-					OwnerInstance = TEXT("PreviousState");
-					break;
-				default:
-					break;
-				}
-
-				const TSharedRef<FJsonObject> EventObject = MakeShared<FJsonObject>();
-				EventObject->SetStringField(Args::DelegatePropertyName, TransitionEdge->DelegatePropertyName.ToString());
-				EventObject->SetStringField(Args::DelegateOwnerInstance, OwnerInstance);
-				if (const UClass* OwnerClass = TransitionEdge->DelegateOwnerClass)
-				{
-					EventObject->SetStringField(Args::DelegateOwnerClass, OwnerClass->GetPathName());
-				}
-				EventObject->SetBoolField(Args::EventTriggersTargetedUpdate, TransitionEdge->bEventTriggersTargetedUpdate != 0);
-				EventObject->SetBoolField(Args::EventTriggersFullUpdate, TransitionEdge->bEventTriggersFullUpdate != 0);
-				Entry->SetObjectField(Args::Event, EventObject);
+				continue;
 			}
 
-			Transitions.Add(MakeShared<FJsonValueObject>(Entry));
+			if (const USMGraphNode_StateNodeBase* StateNode = Cast<USMGraphNode_StateNodeBase>(Node))
+			{
+				const TSharedRef<FJsonObject> Entry = MakeShared<FJsonObject>();
+				Entry->SetStringField(Args::StateGuid, StateNode->NodeGuid.ToString());
+				Entry->SetStringField(Args::StateName, StateNode->GetStateName());
+				if (const UClass* NodeClass = StateNode->GetNodeClass())
+				{
+					Entry->SetStringField(Args::StateClass, NodeClass->GetPathName());
+				}
+				Entry->SetNumberField(Args::PositionX, StateNode->NodePosX);
+				Entry->SetNumberField(Args::PositionY, StateNode->NodePosY);
+				Entry->SetBoolField(Args::IsEntry, GraphEntryStateGuids.Contains(StateNode->NodeGuid));
+
+				const TCHAR* Kind = TEXT("state");
+				if (StateNode->IsA<USMGraphNode_AnyStateNode>())
+				{
+					Kind = TEXT("any_state");
+				}
+				else if (const USMGraphNode_LinkStateNode* LinkNode = Cast<USMGraphNode_LinkStateNode>(StateNode))
+				{
+					Kind = TEXT("link_state");
+					if (const USMGraphNode_StateNodeBase* LinkedState = LinkNode->GetLinkedState())
+					{
+						Entry->SetStringField(Args::LinkedStateGuid, LinkedState->NodeGuid.ToString());
+						Entry->SetStringField(Args::LinkToStateName, LinkedState->GetStateName());
+					}
+				}
+				else if (StateNode->IsA<USMGraphNode_RerouteNode>())
+				{
+					Kind = TEXT("reroute");
+				}
+				else if (StateNode->IsA<USMGraphNode_StateMachineStateNode>())
+				{
+					Kind = TEXT("state_machine_state");
+				}
+				else if (StateNode->IsA<USMGraphNode_ConduitNode>())
+				{
+					Kind = TEXT("conduit");
+				}
+				Entry->SetStringField(Args::Kind, Kind);
+				StampGraphLocation(Entry);
+
+				States.Add(MakeShared<FJsonValueObject>(Entry));
+				continue;
+			}
+
+			if (const USMGraphNode_TransitionEdge* TransitionEdge = Cast<USMGraphNode_TransitionEdge>(Node))
+			{
+				const TSharedRef<FJsonObject> Entry = MakeShared<FJsonObject>();
+				Entry->SetStringField(Args::TransitionGuid, TransitionEdge->NodeGuid.ToString());
+				if (const USMGraphNode_StateNodeBase* FromState = TransitionEdge->GetFromState())
+				{
+					Entry->SetStringField(Args::FromStateGuid, FromState->NodeGuid.ToString());
+				}
+				if (const USMGraphNode_StateNodeBase* ToState = TransitionEdge->GetToState())
+				{
+					Entry->SetStringField(Args::ToStateGuid, ToState->NodeGuid.ToString());
+				}
+				const UClass* TransitionNodeClass = TransitionEdge->GetNodeClass();
+				if (TransitionNodeClass)
+				{
+					Entry->SetStringField(Args::TransitionClass, TransitionNodeClass->GetPathName());
+				}
+
+				// Condition axis ("what must be true"), readable without a get_local_graph. The trigger axis below is
+				// independent. Reuse the plugin's own classifier so the constant/inline call matches compilation and
+				// handles a result node buried in a nested graph.
+				FString Gate;
+				if (TransitionNodeClass && TransitionNodeClass != USMTransitionInstance::StaticClass())
+				{
+					Gate = TEXT("class");
+				}
+				else if (const USMTransitionGraph* TransitionGraph = TransitionEdge->GetTransitionGraph())
+				{
+					switch (TransitionGraph->GetConditionalEvaluationType())
+					{
+					case ESMConditionalEvaluationType::SM_AlwaysTrue:
+						Gate = TEXT("constant:true");
+						break;
+					case ESMConditionalEvaluationType::SM_AlwaysFalse:
+						Gate = TEXT("constant:false");
+						break;
+					default:
+						Gate = TEXT("inline");
+						break;
+					}
+				}
+				if (!Gate.IsEmpty())
+				{
+					Entry->SetStringField(Args::Gate, Gate);
+				}
+
+				// Trigger axis, independent of the gate: polled each tick, fired by an auto-bound event, or both. The
+				// event component needs an actual binding, since the permission flag defaults true.
+				if (const USMTransitionInstance* TransitionInstance = Cast<USMTransitionInstance>(TransitionEdge->GetNodeTemplate()))
+				{
+					bool bTick = TransitionInstance->GetCanEvaluate();
+					// A from-state that disables tick transition evaluation suppresses polling of its outgoing edges,
+					// leaving them event-only. Mirrors FSMState_Base::CanEvaluateTransitionsOnTick.
+					if (const USMGraphNode_StateNodeBase* FromState = TransitionEdge->GetFromState())
+					{
+						if (const USMStateInstance_Base* FromInstance = Cast<USMStateInstance_Base>(FromState->GetNodeTemplate()))
+						{
+							bTick = bTick && !FromInstance->GetDisableTickTransitionEvaluation();
+						}
+					}
+					const bool bEvent = TransitionEdge->DelegatePropertyName != NAME_None && TransitionInstance->GetCanEvaluateFromEvent();
+					const TCHAR* Evaluation = bTick
+						? (bEvent ? TEXT("tick+event") : TEXT("tick"))
+						: (bEvent ? TEXT("event") : TEXT("none"));
+					Entry->SetStringField(Args::Evaluation, Evaluation);
+				}
+
+				// Auto-bound event binding, mirroring configure_transition_event's fields so a caller can verify it
+				// landed without a get_local_graph.
+				if (TransitionEdge->DelegatePropertyName != NAME_None)
+				{
+					const TCHAR* OwnerInstance = TEXT("Context");
+					switch (TransitionEdge->DelegateOwnerInstance.GetValue())
+					{
+					case SMDO_This:
+						OwnerInstance = TEXT("This");
+						break;
+					case SMDO_PreviousState:
+						OwnerInstance = TEXT("PreviousState");
+						break;
+					default:
+						break;
+					}
+
+					const TSharedRef<FJsonObject> EventObject = MakeShared<FJsonObject>();
+					EventObject->SetStringField(Args::DelegatePropertyName, TransitionEdge->DelegatePropertyName.ToString());
+					EventObject->SetStringField(Args::DelegateOwnerInstance, OwnerInstance);
+					if (const UClass* OwnerClass = TransitionEdge->DelegateOwnerClass)
+					{
+						EventObject->SetStringField(Args::DelegateOwnerClass, OwnerClass->GetPathName());
+					}
+					EventObject->SetBoolField(Args::EventTriggersTargetedUpdate, TransitionEdge->bEventTriggersTargetedUpdate != 0);
+					EventObject->SetBoolField(Args::EventTriggersFullUpdate, TransitionEdge->bEventTriggersFullUpdate != 0);
+					Entry->SetObjectField(Args::Event, EventObject);
+				}
+
+				StampGraphLocation(Entry);
+				Transitions.Add(MakeShared<FJsonValueObject>(Entry));
+			}
 		}
 	}
 
@@ -779,6 +1016,7 @@ FSMAssistOperationResult LD::Assist::GetAsset(const TSharedRef<FJsonObject>& InA
 	{
 		Payload->SetStringField(Args::ParentClass, ParentClass->GetPathName());
 	}
+	Payload->SetStringField(Args::Scope, bScopeAll ? TEXT("all") : TEXT("root"));
 	Payload->SetArrayField(Args::EntryStateGuids, EntryGuidArray);
 	Payload->SetArrayField(Args::States, States);
 	Payload->SetArrayField(Args::Transitions, Transitions);
@@ -1820,7 +2058,17 @@ FSMAssistOperationResult LD::Assist::AddConduit(const TSharedRef<FJsonObject>& I
 		return FSMAssistOperationResult::MakeError(GraphGenError);
 	}
 
+	USMGraph* TargetGraph = nullptr;
+	{
+		FString TargetGraphError;
+		if (!LD::Assist::Private::ResolveTargetStateMachineGraph(InArgs, Blueprint, TargetGraph, TargetGraphError))
+		{
+			return FSMAssistOperationResult::MakeError(TargetGraphError);
+		}
+	}
+
 	ISMGraphGeneration::FCreateStateNodeArgs CreateArgs;
+	CreateArgs.GraphOwner = TargetGraph;
 	CreateArgs.StateInstanceClass = USMConduitInstance::StaticClass();
 
 	FString StateName;
@@ -1930,7 +2178,17 @@ FSMAssistOperationResult LD::Assist::AddReference(const TSharedRef<FJsonObject>&
 		return FSMAssistOperationResult::MakeError(GraphGenError);
 	}
 
+	USMGraph* TargetGraph = nullptr;
+	{
+		FString TargetGraphError;
+		if (!LD::Assist::Private::ResolveTargetStateMachineGraph(InArgs, Blueprint, TargetGraph, TargetGraphError))
+		{
+			return FSMAssistOperationResult::MakeError(TargetGraphError);
+		}
+	}
+
 	ISMGraphGeneration::FCreateStateNodeArgs CreateArgs;
+	CreateArgs.GraphOwner = TargetGraph;
 	CreateArgs.StateInstanceClass = USMStateMachineInstance::StaticClass();
 	if (ReferencedBlueprint)
 	{
@@ -2119,7 +2377,17 @@ FSMAssistOperationResult LD::Assist::AddAnyState(const TSharedRef<FJsonObject>& 
 		return FSMAssistOperationResult::MakeError(GraphGenError);
 	}
 
+	USMGraph* TargetGraph = nullptr;
+	{
+		FString TargetGraphError;
+		if (!LD::Assist::Private::ResolveTargetStateMachineGraph(InArgs, Blueprint, TargetGraph, TargetGraphError))
+		{
+			return FSMAssistOperationResult::MakeError(TargetGraphError);
+		}
+	}
+
 	ISMGraphGeneration::FCreateStateNodeArgs CreateArgs;
+	CreateArgs.GraphOwner = TargetGraph;
 	CreateArgs.GraphNodeClass = USMGraphNode_AnyStateNode::StaticClass();
 	// Any State has no bound graph and takes no node instance class. Leaving the struct
 	// default (USMStateInstance) trips an ensure in FSMGraphSchemaAction_NewNode::PerformAction.
@@ -2185,7 +2453,17 @@ FSMAssistOperationResult LD::Assist::AddLinkState(const TSharedRef<FJsonObject>&
 		return FSMAssistOperationResult::MakeError(GraphGenError);
 	}
 
+	USMGraph* TargetGraph = nullptr;
+	{
+		FString TargetGraphError;
+		if (!LD::Assist::Private::ResolveTargetStateMachineGraph(InArgs, Blueprint, TargetGraph, TargetGraphError))
+		{
+			return FSMAssistOperationResult::MakeError(TargetGraphError);
+		}
+	}
+
 	ISMGraphGeneration::FCreateStateNodeArgs CreateArgs;
+	CreateArgs.GraphOwner = TargetGraph;
 	CreateArgs.GraphNodeClass = USMGraphNode_LinkStateNode::StaticClass();
 	// Link State has no bound graph and takes no node instance class. Leaving the struct
 	// default (USMStateInstance) trips an ensure in FSMGraphSchemaAction_NewNode::PerformAction.
@@ -2964,6 +3242,23 @@ FSMAssistOperationResult LD::Assist::GetGraphView(const TSharedRef<FJsonObject>&
 		return FSMAssistOperationResult::MakeError(LoadError);
 	}
 
+	USMGraph* TargetGraph = nullptr;
+	{
+		FString TargetGraphError;
+		if (!LD::Assist::Private::ResolveTargetStateMachineGraph(InArgs, Blueprint, TargetGraph, TargetGraphError))
+		{
+			return FSMAssistOperationResult::MakeError(TargetGraphError);
+		}
+	}
+	if (!TargetGraph)
+	{
+		TargetGraph = LD::Assist::Utils::GetRootStateMachineGraph(Blueprint);
+		if (!TargetGraph)
+		{
+			return FSMAssistOperationResult::MakeError(TEXT("Blueprint has no root state machine graph."));
+		}
+	}
+
 	FString EditorError;
 	FBlueprintEditor* BlueprintEditor = LD::Assist::GraphView::FindOrOpenBlueprintEditor(Blueprint, EditorError);
 	if (!BlueprintEditor)
@@ -2971,8 +3266,10 @@ FSMAssistOperationResult LD::Assist::GetGraphView(const TSharedRef<FJsonObject>&
 		return FSMAssistOperationResult::MakeError(EditorError);
 	}
 
+	// Widget sizes and overlaps are read off the focused panel, so the target graph has to be the one
+	// on screen. Focusing a nested graph opens its tab exactly as double-clicking the container would.
 	FString GraphError;
-	TSharedPtr<SGraphEditor> GraphEditor = LD::Assist::GraphView::OpenAndFocusRootGraph(BlueprintEditor, Blueprint, GraphError);
+	TSharedPtr<SGraphEditor> GraphEditor = LD::Assist::GraphView::OpenAndFocusGraph(BlueprintEditor, TargetGraph, GraphError);
 	if (!GraphEditor.IsValid())
 	{
 		return FSMAssistOperationResult::MakeError(GraphError);
@@ -2984,12 +3281,9 @@ FSMAssistOperationResult LD::Assist::GetGraphView(const TSharedRef<FJsonObject>&
 		return FSMAssistOperationResult::MakeError(TEXT("Graph editor has no panel."));
 	}
 
-	USMGraph* RootGraph = LD::Assist::Utils::GetRootStateMachineGraph(Blueprint);
-	check(RootGraph);
-
 	// Every widget_size and overlap below is read straight off the node widgets.
 	TArray<FString> MeasureWarnings;
-	LD::Assist::GraphView::MeasureGraphNodeWidgets(GraphEditor.ToSharedRef(), Panel, RootGraph, MeasureWarnings);
+	LD::Assist::GraphView::MeasureGraphNodeWidgets(GraphEditor.ToSharedRef(), Panel, TargetGraph, MeasureWarnings);
 
 	// Map data nodes to their slate widgets so we can co-iterate. GetAllChildren includes off-viewport nodes,
 	// which is what we want; GetChildren would only report the currently-visible ones.
@@ -3011,7 +3305,7 @@ FSMAssistOperationResult LD::Assist::GetGraphView(const TSharedRef<FJsonObject>&
 	TArray<TSharedPtr<FJsonValue>> NodesArray;
 	TArray<TSharedPtr<FJsonValue>> TransitionsArray;
 
-	for (UEdGraphNode* Node : RootGraph->Nodes)
+	for (UEdGraphNode* Node : TargetGraph->Nodes)
 	{
 		if (!Node)
 		{
@@ -3086,7 +3380,7 @@ FSMAssistOperationResult LD::Assist::GetGraphView(const TSharedRef<FJsonObject>&
 	// Reported so a caller can confirm a layout reads cleanly without capturing and looking at a PNG.
 	TArray<TSharedPtr<FJsonValue>> OverlapsArray;
 	TArray<TSharedPtr<FJsonValue>> TransitionOverlapsArray;
-	LD::Assist::GraphView::BuildOverlapJson(RootGraph, NodeToWidget, OverlapsArray, TransitionOverlapsArray);
+	LD::Assist::GraphView::BuildOverlapJson(TargetGraph, NodeToWidget, OverlapsArray, TransitionOverlapsArray);
 
 	TArray<TSharedPtr<FJsonValue>> WarningsArray;
 	for (const FString& Warning : MeasureWarnings)
@@ -3105,6 +3399,8 @@ FSMAssistOperationResult LD::Assist::GetGraphView(const TSharedRef<FJsonObject>&
 
 	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
 	Payload->SetStringField(Args::AssetPath, Blueprint->GetPathName());
+	Payload->SetStringField(Args::GraphPath,
+		LD::Assist::Private::FindGraphPathLabel(LD::Assist::Utils::GetRootStateMachineGraph(Blueprint), TargetGraph));
 	Payload->SetObjectField(Args::PanelView, PanelView);
 	Payload->SetArrayField(Args::Overlaps, OverlapsArray);
 	Payload->SetArrayField(Args::TransitionOverlaps, TransitionOverlapsArray);
@@ -3283,28 +3579,6 @@ FSMAssistOperationResult LD::Assist::ClearScreenshots(const TSharedRef<FJsonObje
 
 namespace LD::Assist::Private
 {
-	// Walk the BP and gather every USMGraph reachable through state-machine state nodes. The root
-	// graph is index 0; nested graphs follow in encounter order. Used by ld.layout_states with
-	// scope=all so a single op call can lay out an entire hierarchical state machine.
-	static void CollectAllStateMachineGraphs(USMGraph* InRoot, TArray<USMGraph*>& OutGraphs)
-	{
-		if (!InRoot || OutGraphs.Contains(InRoot))
-		{
-			return;
-		}
-		OutGraphs.Add(InRoot);
-		for (UEdGraphNode* Node : InRoot->Nodes)
-		{
-			if (USMGraphNode_StateMachineStateNode* SubMachineNode = Cast<USMGraphNode_StateMachineStateNode>(Node))
-			{
-				if (USMGraph* NestedSM = Cast<USMGraph>(SubMachineNode->GetBoundGraph()))
-				{
-					CollectAllStateMachineGraphs(NestedSM, OutGraphs);
-				}
-			}
-		}
-	}
-
 	static FGuid FindEntryStateGuid(USMGraph* InGraph)
 	{
 		if (!InGraph)
@@ -3333,37 +3607,6 @@ namespace LD::Assist::Private
 			}
 		}
 		return FGuid();
-	}
-
-	// Build a path label like "RootStateMachine" or "RootStateMachine/StateA" for nested graphs so
-	// the response can disambiguate when scope=all returns multiple graphs.
-	static FString BuildGraphPathLabel(USMGraph* InGraph, USMGraph* InRoot)
-	{
-		if (InGraph == InRoot || !InGraph)
-		{
-			return InGraph ? InGraph->GetName() : FString();
-		}
-		TArray<FString> Segments;
-		UEdGraph* Current = InGraph;
-		while (Current && Current != InRoot)
-		{
-			Segments.Add(Current->GetName());
-			UObject* Outer = Current->GetOuter();
-			UEdGraph* ParentGraph = nullptr;
-			while (Outer)
-			{
-				if (UEdGraphNode* OuterNode = Cast<UEdGraphNode>(Outer))
-				{
-					ParentGraph = OuterNode->GetGraph();
-					break;
-				}
-				Outer = Outer->GetOuter();
-			}
-			Current = ParentGraph;
-		}
-		Segments.Add(InRoot->GetName());
-		Algo::Reverse(Segments);
-		return FString::Join(Segments, TEXT("/"));
 	}
 
 	// Translate one USMGraph into a Layout::FLayoutInput. NodeToWidget supplies measured widget
@@ -3470,6 +3713,7 @@ namespace LD::Assist::Private
 	{
 		USMGraph* Graph = nullptr;
 		FString GraphPathLabel;
+		FGuid ParentStateGuid;
 		LD::Assist::Layout::FLayoutGraphResult Result;
 	};
 }
@@ -3500,17 +3744,13 @@ FSMAssistOperationResult LD::Assist::LayoutStates(const TSharedRef<FJsonObject>&
 	bool bApply = false;
 	InArgs->TryGetBoolField(Args::Apply, bApply);
 
-	FString ScopeStr = TEXT("root");
-	InArgs->TryGetStringField(Args::Scope, ScopeStr);
 	bool bScopeAll = false;
-	if (ScopeStr.Equals(TEXT("all"), ESearchCase::IgnoreCase))
 	{
-		bScopeAll = true;
-	}
-	else if (!ScopeStr.Equals(TEXT("root"), ESearchCase::IgnoreCase))
-	{
-		return FSMAssistOperationResult::MakeError(
-			FString::Printf(TEXT("Unknown scope '%s'. Use 'root' or 'all'."), *ScopeStr));
+		FString ScopeError;
+		if (!LD::Assist::Private::TryParseGraphScope(InArgs, bScopeAll, ScopeError))
+		{
+			return FSMAssistOperationResult::MakeError(ScopeError);
+		}
 	}
 
 	double ColumnGap = 80.0;
@@ -3604,14 +3844,17 @@ FSMAssistOperationResult LD::Assist::LayoutStates(const TSharedRef<FJsonObject>&
 		}
 	}
 
-	TArray<USMGraph*> GraphsToLayout;
+	TArray<LD::Assist::Private::FStateMachineGraphEntry> GraphsToLayout;
 	if (bScopeAll)
 	{
-		LD::Assist::Private::CollectAllStateMachineGraphs(RootGraph, GraphsToLayout);
+		LD::Assist::Private::CollectStateMachineGraphs(RootGraph, GraphsToLayout);
 	}
 	else
 	{
-		GraphsToLayout.Add(RootGraph);
+		LD::Assist::Private::FStateMachineGraphEntry RootEntry;
+		RootEntry.Graph = RootGraph;
+		RootEntry.GraphPath = RootGraph->GetName();
+		GraphsToLayout.Add(MoveTemp(RootEntry));
 	}
 
 	const float SnapGridSize = static_cast<float>(SNodePanel::GetSnapGridSize());
@@ -3619,11 +3862,14 @@ FSMAssistOperationResult LD::Assist::LayoutStates(const TSharedRef<FJsonObject>&
 	TArray<LD::Assist::Private::FLayoutGraphContext> GraphContexts;
 	GraphContexts.Reserve(GraphsToLayout.Num());
 
-	for (USMGraph* Graph : GraphsToLayout)
+	for (const LD::Assist::Private::FStateMachineGraphEntry& GraphEntry : GraphsToLayout)
 	{
+		USMGraph* Graph = GraphEntry.Graph;
+
 		LD::Assist::Private::FLayoutGraphContext Context;
 		Context.Graph = Graph;
-		Context.GraphPathLabel = LD::Assist::Private::BuildGraphPathLabel(Graph, RootGraph);
+		Context.GraphPathLabel = GraphEntry.GraphPath;
+		Context.ParentStateGuid = GraphEntry.ParentStateGuid;
 
 		LD::Assist::Layout::FLayoutInput Input;
 		Input.Strategy = Strategy;
@@ -3694,6 +3940,10 @@ FSMAssistOperationResult LD::Assist::LayoutStates(const TSharedRef<FJsonObject>&
 	{
 		const TSharedRef<FJsonObject> GraphEntry = MakeShared<FJsonObject>();
 		GraphEntry->SetStringField(Args::GraphPath, Context.GraphPathLabel);
+		if (Context.ParentStateGuid.IsValid())
+		{
+			GraphEntry->SetStringField(Args::ParentStateGuid, Context.ParentStateGuid.ToString());
+		}
 
 		TArray<TSharedPtr<FJsonValue>> NodeLayoutArray;
 		NodeLayoutArray.Reserve(Context.Result.Nodes.Num());
@@ -5556,6 +5806,9 @@ namespace LD::Assist::Private
 	{
 		const TSharedRef<FJsonObject> Obj = MakeShared<FJsonObject>();
 		Obj->SetStringField(TEXT("id"), InNode->GetName());
+		// The write ops here accept either identifier, but every guid-addressed op outside this family
+		// needs the guid.
+		Obj->SetStringField(Args::NodeGuid, InNode->NodeGuid.ToString());
 		Obj->SetStringField(TEXT("class"), InNode->GetClass()->GetName());
 		Obj->SetStringField(TEXT("title"), InNode->GetNodeTitle(ENodeTitleType::ListView).ToString());
 
@@ -7166,6 +7419,30 @@ FSMAssistOperationResult LD::Assist::CollapseToStateMachine(const TSharedRef<FJs
 	const TSharedRef<FJsonObject> Payload = MakeShared<FJsonObject>();
 	Payload->SetStringField(Args::StateGuid, Container->NodeGuid.ToString());
 	Payload->SetStringField(Args::StateName, Container->GetStateName());
+
+	// Report what the container actually holds, which is not the requested set: boundary transitions stay
+	// in the parent graph, and an interior transition the caller omitted is deleted by
+	// CleanUpIsolatedTransitions rather than carried in. Collapse relocates the same node objects rather
+	// than cloning them, so these guids stay valid.
+	TArray<TSharedPtr<FJsonValue>> MovedGuids;
+	if (const USMGraph* ContainerGraph = Cast<USMGraph>(Container->GetBoundGraph()))
+	{
+		MovedGuids.Reserve(ContainerGraph->Nodes.Num());
+		for (const UEdGraphNode* MovedNode : ContainerGraph->Nodes)
+		{
+			if (!MovedNode || MovedNode->IsA<USMGraphNode_StateMachineEntryNode>())
+			{
+				continue;
+			}
+			if (MovedNode->IsA<USMGraphNode_Base>())
+			{
+				MovedGuids.Add(MakeShared<FJsonValueString>(MovedNode->NodeGuid.ToString()));
+			}
+		}
+		Payload->SetStringField(Args::GraphPath,
+			LD::Assist::Private::FindGraphPathLabel(LD::Assist::Utils::GetRootStateMachineGraph(Blueprint), ContainerGraph));
+	}
+	Payload->SetArrayField(Args::NodeGuids, MovedGuids);
 	return FSMAssistOperationResult::MakeSuccess(Payload);
 }
 
