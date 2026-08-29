@@ -2,6 +2,8 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
+#include "HAL/Platform.h"
+
 #if PLATFORM_DESKTOP
 
 #if WITH_TOOLSET_REGISTRY
