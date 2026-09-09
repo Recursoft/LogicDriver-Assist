@@ -183,6 +183,7 @@ namespace LD::Assist::Args
 	inline constexpr const TCHAR* PinNodeGuids = TEXT("pin_node_guids");
 	inline constexpr const TCHAR* RespectExistingOrder = TEXT("respect_existing_order");
 	inline constexpr const TCHAR* SnapToGrid = TEXT("snap_to_grid");
+	inline constexpr const TCHAR* RouteEdges = TEXT("route_edges");
 	inline constexpr const TCHAR* Graphs = TEXT("graphs");
 	inline constexpr const TCHAR* GraphPath = TEXT("graph_path");
 	inline constexpr const TCHAR* NodeLayout = TEXT("node_layout");
@@ -192,6 +193,12 @@ namespace LD::Assist::Args
 	inline constexpr const TCHAR* Delta = TEXT("delta");
 	inline constexpr const TCHAR* Warnings = TEXT("warnings");
 	inline constexpr const TCHAR* Applied = TEXT("applied");
+	inline constexpr const TCHAR* Skipped = TEXT("skipped");
+	inline constexpr const TCHAR* Reroutes = TEXT("reroutes");
+	inline constexpr const TCHAR* ReroutesAdded = TEXT("reroutes_added");
+	inline constexpr const TCHAR* ChainIndex = TEXT("chain_index");
+	inline constexpr const TCHAR* Passes = TEXT("passes");
+	inline constexpr const TCHAR* IconLocationAdjustments = TEXT("icon_location_adjustments");
 
 	inline constexpr const TCHAR* VariableName = TEXT("variable_name");
 	inline constexpr const TCHAR* VarType = TEXT("var_type");

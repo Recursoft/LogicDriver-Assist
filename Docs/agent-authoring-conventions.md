@@ -28,26 +28,30 @@ Logic Driver authoring (via the LogicDriver-Assist ld.* operations):
   or "function not found", not at bind time.
 - Author into a clean folder such as /Game/MCP/<Feature>/. Do not mutate the
   user's existing reference assets unless they ask for it.
-- For greenfield graphs, lay out with ld.layout_states apply=true. It measures
-  each node as rendered and spaces by that, so one pass is normally enough.
-  Check the top-level 'measurement_warnings' for anything it could not measure,
-  and each graphs[].warnings for what it had to flow around. Hand
-  coordinates are for targeted tweaks only: Entry at (0,0), first state near
-  (200,0), ~400 units of X between states, positive X, and >=150 units between
-  parallel rows. Budget much more for a state that displays property widgets or
-  dialogue text: a node's size grows with its DisplayName and with everything
-  its body draws, so a state showing a few properties runs 300-380 wide and
-  100-280 tall against roughly 70-160 x 44 for a bare one, where a bare state's
-  width is almost entirely its name: a two-character name measures 69 wide and a
-  thirty-six-character one measures 417.
+- For greenfield graphs, lay out with ld.layout_states apply=true, once, at the
+  end. It measures every graph in scope as rendered and spaces by that. It
+  starts each graph one column gap past that graph's own Entry node. It carries
+  any edge that would draw its marker over a state on a rail of reroute nodes.
+  It lays out a second time if a node grew after it was measured, and 'passes'
+  says whether it did. Check the top-level 'measurement_warnings' for
+  anything it could not measure, and each graphs[].warnings for what it had to
+  flow around. Hand coordinates are for targeted tweaks only: positive X, and
+  >=150 units between parallel rows. Budget much more for a state that displays
+  property widgets or dialogue text: a node's size grows with its DisplayName and
+  with everything its body draws, so a state showing a few properties runs
+  300-380 wide and 100-280 tall against roughly 70-160 x 44 for a bare one, where
+  a bare state's width is almost entirely its name: a two-character name measures
+  69 wide and a thirty-six-character one measures 417.
 - Find collisions with ld.get_graph_view rather than a screenshot. Its
-  'overlaps' array lists every intersecting pair among the nodes a layout can
-  move (states, conduits, references, link states, any states); its
-  'transition_overlaps' array lists transition markers and reroutes stacked on
-  each other, which spacing does not fix and a reroute does; and its widget_size
-  is measured at 1:1 zoom whatever the panel is showing. Read
-  'measurement_warnings' first: the arrays mean nothing while it is non-empty,
-  because the unmeasured part of the graph contributes no overlaps to either.
+  'overlaps' array lists every intersecting pair among the nodes a layout places
+  (states, conduits, references, link states, any states) plus the Entry node,
+  which a layout flows around rather than moves and which a state dropped on top
+  of hides completely; its 'transition_overlaps' array lists transition markers
+  and reroutes stacked on each other, which spacing does not fix and a reroute
+  does; and its widget_size is measured at 1:1 zoom whatever the panel is
+  showing. Read 'measurement_warnings' first: the arrays mean nothing while it is
+  non-empty, because the unmeasured part of the graph contributes no overlaps to
+  either.
 - Judge readability with a ld.capture_graph_view, which is a different question
   from collisions and the one the arrays cannot answer: a transition line routed
   across intervening states shows up in neither. Empty arrays mean nothing
@@ -137,7 +141,7 @@ A nested state machine is one asset, not many. `ld.get_asset` reports the root g
 
 To author inside a container, pass its guid as `parent_state_guid` to `ld.add_state`, `ld.add_conduit`, `ld.add_any_state`, `ld.add_link_state`, `ld.add_reference`, or `ld.add_transition_reroute`; omitting it targets the root graph. Everything else already resolves a guid at any depth, so `ld.add_transition`, `ld.set_initial_state`, `ld.set_node_property`, `ld.rename_state`, and `ld.collapse_to_state_machine` need no extra argument. Transitions must stay within one graph, and a state machine REFERENCE delegates its states to another asset, so target that asset directly rather than the reference node.
 
-For a visual check, `ld.get_graph_view` takes the same `parent_state_guid` to measure a nested graph, and `ld.capture_local_graph` screenshots it. `ld.layout_states` with `scope="all"` lays out every level in one transaction, though only the root graph is spaced from measured widget sizes.
+For a visual check, `ld.get_graph_view` takes the same `parent_state_guid` to measure a nested graph, and `ld.capture_local_graph` screenshots it. `ld.layout_states` with `scope="all"` lays out every level in one transaction, measuring each level on its own panel and restoring the tab you started on when it is done.
 
 Collapsing is not destructive to identity: `ld.collapse_to_state_machine` moves the same nodes rather than cloning them, so guids recorded beforehand stay valid. Its `node_guids` response lists what the container now holds, which is not the set you passed: boundary transitions stay in the parent graph. Pass every interior transition too, because one whose endpoints both moved is deleted rather than carried in. There is no un-collapse operation.
 
@@ -149,11 +153,23 @@ Author new work into a dedicated folder such as `/Game/MCP/<Feature>/`. Treat th
 
 Generated graphs should read like a person laid them out. For a greenfield graph, prefer `ld.layout_states` with `apply=true` over hand-picking coordinates; hand placement is for targeted adjustments after an auto-layout.
 
-When you do place by hand, Entry sits at `(0, 0)` and the main flow runs left to right with positive X. Put the first state around `(200, 0)` to leave room for the Entry node, then keep roughly `350` units of X between states. State nodes are about 130-150 units wide at 1:1 zoom and wider for longer display names, which is why that spacing matters. Use Y only for deliberate parallel or branching rows and keep at least `150` units between rows so transitions never cross unrelated nodes.
+Run it once, after the last edit. It handles three things in one call. Each graph is anchored one column gap past its own Entry node and centered on it, so the first state never lands on top of Entry, in the root graph or in any nested one. Every graph in scope is measured on its own panel, so a nested graph is spaced by what it renders at rather than by a default. Placement comes first. The op picks the within-layer order that draws fewest transitions through a state box, measuring each candidate order by placing it, and only then rails what ordering could not clear. A transition whose wire would still be drawn through a state is carried on a rail of two reroute nodes clear of the flow. How many layers an edge spans does not decide this by itself: a long edge that runs clear of every state gets no rail, and an edge between neighboring layers gets one if a state sits in its way. Reroutes are cosmetic and change nothing at runtime; the op adds and repositions them but never removes one, because a reroute already in the graph may be the user's own. Pass `route_edges=false` to leave those edges drawn straight.
+
+It reports three more things afterwards. `passes` is 2 when a node grew after it was measured and the layout had to run again. `icon_location_adjustments` counts the transition markers it slid along their own wires. Sliding is what separates two markers from different state pairs whose midpoints landed on the same point. State spacing never separates those, because the midpoint moves with the states. `skipped` lists work the op could not do, such as a rail it could not create. An empty array means nothing was dropped.
+
+When you do place by hand, Entry sits at `(0, 0)` in a fresh graph and the main flow runs left to right with positive X. Put the first state far enough right to clear the Entry node, then keep roughly `350` units of X between states. State nodes are about 130-150 units wide at 1:1 zoom and wider for longer display names, which is why that spacing matters. Use Y only for deliberate parallel or branching rows and keep at least `150` units between rows so transitions never cross unrelated nodes.
 
 ### No orphans
 
 Every state must be wired into the flow, and exactly one must be the machine's initial state, connected from Entry (pass `is_entry=true` to `ld.add_state`, or call `ld.set_initial_state`). Without an initial state the machine compiles but has no active state at runtime. Conduits, references, link states, and any states must likewise be wired in the same authoring step that creates them. A node with no connections is a failure, not an in-progress state.
+
+### Any States
+
+Use an Any State when most or all of the states need the same outgoing transition. It exists to save authoring that transition by hand from every state, so it earns its place exactly when the alternative is a pile of duplicate edges. "Dies from any state" is the shape it is for.
+
+When only two or three states need the transition, author those edges directly. An Any State fed into one target from a handful of sources costs a node, draws a fan of long wires, and tells a reader the transition applies everywhere when it does not.
+
+Restricting an Any State to a subset of states is not something the `ld.*` surface can do yet. `AnyStateTags` and `AnyStateTagQuery` exist on the node but no operation sets them, so a subset means explicit transitions from the states in it.
 
 ### Transitions fire only with a condition
 

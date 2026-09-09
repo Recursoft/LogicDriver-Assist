@@ -30,6 +30,12 @@ namespace LD::Assist::GraphView
 	/** Opens InBlueprint's asset editor if it is not already open. Null with OutError set on failure. */
 	FBlueprintEditor* FindOrOpenBlueprintEditor(USMBlueprint* InBlueprint, FString& OutError);
 
+	/**
+	 * The blueprint editor already open for InBlueprint, or null when none is. Opens nothing, so a long
+	 * op can re-check that the editor it started with is still there before touching it again.
+	 */
+	FBlueprintEditor* FindOpenBlueprintEditor(USMBlueprint* InBlueprint);
+
 	/** Focuses InBlueprint's root state machine graph. Null with OutError set on failure. */
 	TSharedPtr<SGraphEditor> OpenAndFocusRootGraph(FBlueprintEditor* InEditor, USMBlueprint* InBlueprint, FString& OutError);
 

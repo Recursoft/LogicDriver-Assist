@@ -75,6 +75,17 @@ namespace LD::Assist::GraphView
 		return static_cast<FBlueprintEditor*>(EditorInstance);
 	}
 
+	FBlueprintEditor* FindOpenBlueprintEditor(USMBlueprint* InBlueprint)
+	{
+		UAssetEditorSubsystem* AssetSubsystem = GEditor ? GEditor->GetEditorSubsystem<UAssetEditorSubsystem>() : nullptr;
+		if (!AssetSubsystem || !InBlueprint)
+		{
+			return nullptr;
+		}
+		IAssetEditorInstance* EditorInstance = AssetSubsystem->FindEditorForAsset(InBlueprint, /*bFocusIfOpen=*/false);
+		return EditorInstance ? static_cast<FBlueprintEditor*>(EditorInstance) : nullptr;
+	}
+
 	TSharedPtr<SGraphEditor> OpenAndFocusGraph(FBlueprintEditor* InEditor, UEdGraph* InGraph, FString& OutError)
 	{
 		if (!InGraph)
@@ -603,16 +614,16 @@ namespace LD::Assist::GraphView
 		TArray<TSharedPtr<FJsonValue>>& OutNodeOverlaps,
 		TArray<TSharedPtr<FJsonValue>>& OutTransitionOverlaps)
 	{
-		// Exactly the set BuildLayoutInputForGraph positions, so every pair reported here is one a layout
-		// can actually clear. A comment is drawn to enclose the states it groups, so it overlaps every one
-		// of them by design, and the entry node is never moved.
+		// The set a layout positions, plus the entry node. A comment node is drawn to enclose the states
+		// it groups, so it overlaps them by design and is left out. The entry node is included because a
+		// layout flows around it rather than moving it. A state placed on top of it hides it completely,
+		// which is the most common defect in a generated graph.
 		TArray<FMeasuredNode> FlowNodes;
 		CollectMeasuredNodes(InGraph, InNodeToWidget,
 			[](const UEdGraphNode* InNode)
 			{
 				return !InNode->IsA<USMGraphNode_TransitionEdge>()
 					&& !InNode->IsA<USMGraphNode_RerouteNode>()
-					&& !InNode->IsA<USMGraphNode_StateMachineEntryNode>()
 					&& !InNode->IsA<UEdGraphNode_Comment>();
 			},
 			FlowNodes);

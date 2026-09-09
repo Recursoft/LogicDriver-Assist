@@ -1174,6 +1174,80 @@ void FAssistOperationsSpec::Define()
 			TestEqual("No transition was added", GetTransitionCount(AssetPath), TransitionCountBefore);
 		});
 
+		// Regression: a reroute node derives from USMGraphNode_StateNodeBase and carries both pins, so it
+		// passed endpoint validation. Connecting from one ran BreakAllOutgoingReroutedConnections, which
+		// destroyed the rerouted transition and left its destination with no inbound edge, and the
+		// operation still reported success.
+		It("Fails cleanly when an endpoint is a transition reroute node", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString FromGuid = AddStateToBlueprint(AssetPath, TEXT("From"), nullptr, /*bIsEntry*/true);
+			const FString ToGuid = AddStateToBlueprint(AssetPath, TEXT("To"));
+			const FString OtherGuid = AddStateToBlueprint(AssetPath, TEXT("Other"));
+			const FString TransitionGuid = AddTransitionBetween(AssetPath, FromGuid, ToGuid);
+			if (!TestFalse("Other state created", OtherGuid.IsEmpty())
+				|| !TestFalse("Transition created", TransitionGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			if (!Subsystem)
+			{
+				return;
+			}
+
+			const TSharedRef<FJsonObject> RerouteArgs = MakeShared<FJsonObject>();
+			RerouteArgs->SetStringField(TEXT("asset_path"), AssetPath);
+			RerouteArgs->SetStringField(TEXT("transition_guid"), TransitionGuid);
+			RerouteArgs->SetNumberField(TEXT("position_x"), 300.0);
+			RerouteArgs->SetNumberField(TEXT("position_y"), 300.0);
+			const FSMAssistOperationResult RerouteResult = Subsystem->ExecuteOperation(
+				FName(TEXT("ld.add_transition_reroute")), RerouteArgs);
+
+			FString RerouteGuid;
+			if (RerouteResult.Payload.IsValid())
+			{
+				RerouteResult.Payload->TryGetStringField(TEXT("reroute_guid"), RerouteGuid);
+			}
+			if (!TestFalse("Reroute created", RerouteGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			const int32 TransitionCountBefore = GetTransitionCount(AssetPath);
+
+			const TSharedRef<FJsonObject> FromRerouteArgs = MakeShared<FJsonObject>();
+			FromRerouteArgs->SetStringField(TEXT("asset_path"), AssetPath);
+			FromRerouteArgs->SetStringField(TEXT("from_state_guid"), RerouteGuid);
+			FromRerouteArgs->SetStringField(TEXT("to_state_guid"), OtherGuid);
+			const FSMAssistOperationResult FromResult = Subsystem->ExecuteOperation(
+				FName(TEXT("ld.add_transition")), FromRerouteArgs);
+
+			TestFalse("Connecting from a reroute fails", FromResult.bSuccess);
+			TestTrue("Error identifies the reroute endpoint",
+				FromResult.ErrorMessage.Contains(TEXT("reroute node")));
+
+			const TSharedRef<FJsonObject> ToRerouteArgs = MakeShared<FJsonObject>();
+			ToRerouteArgs->SetStringField(TEXT("asset_path"), AssetPath);
+			ToRerouteArgs->SetStringField(TEXT("from_state_guid"), OtherGuid);
+			ToRerouteArgs->SetStringField(TEXT("to_state_guid"), RerouteGuid);
+			const FSMAssistOperationResult ToResult = Subsystem->ExecuteOperation(
+				FName(TEXT("ld.add_transition")), ToRerouteArgs);
+
+			TestFalse("Connecting to a reroute fails", ToResult.bSuccess);
+			TestTrue("Error identifies the reroute endpoint",
+				ToResult.ErrorMessage.Contains(TEXT("reroute node")));
+
+			TestEqual("The rerouted transition survives both rejections",
+				GetTransitionCount(AssetPath), TransitionCountBefore);
+		});
+
 		// Regression: an Any State has no input pin; before endpoint validation this reached the graph
 		// schema with a null pin and crashed the editor.
 		It("Fails cleanly when the to state is an Any State", [this]()

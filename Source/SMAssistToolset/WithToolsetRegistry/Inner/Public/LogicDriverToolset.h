@@ -677,9 +677,10 @@ public:
 	 * @param ParentStateGuid Guid of a nested state machine node (kind 'state_machine_state') whose graph to measure instead of the root graph. Sizes and overlaps are read off the focused panel, so this opens that graph's tab in the editor. Empty = the root state machine graph. The measured graph comes back as 'graph_path'.
 	 * @return JSON: { asset_path, graph_path, panel_view, overlaps:[...], transition_overlaps:[...],
 	 *         measurement_warnings:[...], nodes:[...], transitions?:[...] }
-	 *         'overlaps' pairs every two state boxes that intersect, as first_node_guid /
-	 *         first_title_text, second_node_guid / second_title_text, overlap_extent ([w, h]). Transitions,
-	 *         reroutes, comments and the entry node are excluded, being the ones LayoutStates never moves.
+	 *         'overlaps' pairs every two boxes that intersect, as first_node_guid / first_title_text,
+	 *         second_node_guid / second_title_text, overlap_extent ([w, h]). It covers the flow nodes plus
+	 *         the entry node. LayoutStates flows around the entry node rather than moving it, and a state
+	 *         placed on top of it hides it completely. Transitions, reroutes and comments are excluded.
 	 *         'transition_overlaps' is the same shape and reports transition markers and reroutes stacked on
 	 *         each other, which hides a transition and which state spacing does not fix; add a reroute to
 	 *         separate them, and re-read the array afterwards since reroutes are scanned too.
@@ -759,29 +760,36 @@ public:
 
 	/**
 	 * Computes (and optionally applies) an automatic layout for a state machine graph. Recommended
-	 * default after authoring a graph from scratch: greenfield Add* calls can leave nodes at
-	 * positions that collide with the editor's Entry-pointer marker or overlap each other.
-	 * Calling this with bApply=true after the last node is added produces a clean left-to-right
-	 * layout. Use manual position_x/y on the Add* ops only when reproducing an existing layout
-	 * the user already approved.
+	 * default after authoring a graph from scratch: greenfield Add* calls leave nodes at positions that
+	 * collide with the Entry node or with each other. Calling this with bApply=true after the last node
+	 * is added produces a clean left-to-right layout, and one call is enough. It measures every graph in
+	 * scope and lays each out past its own Entry node. Edges that would draw over a state are carried on
+	 * reroute rails. A second pass runs if a node grew after it was measured. Use manual position_x/y on
+	 * the Add* ops only when reproducing an existing layout the user already approved.
 	 * @param Blueprint The blueprint to lay out. Required.
-	 * @param Strategy Layout algorithm key (e.g., "topological"). Empty = SMAssist default.
+	 * @param Strategy "left_to_right" or "top_to_bottom". Empty = left_to_right.
 	 * @param bApply Apply the computed layout to the asset (true) or return as proposal only (false). Default false.
-	 * @param Scope "graph" / "selection" / etc. Empty = whole graph.
+	 * @param Scope "root" lays out only the root graph; "all" lays out every nested graph too. Empty = root.
 	 * @param ColumnGap Horizontal spacing between columns. Negative sentinel (e.g., -1.0) = SMAssist default gap.
 	 * @param RowGap Vertical spacing between rows. Negative sentinel (e.g., -1.0) = SMAssist default gap.
-	 * @param bDefaultOrigin True (default) = SMAssist default layout origin; StartX/StartY are ignored. Set false to lay out from StartX/StartY.
+	 * @param bDefaultOrigin True (default) anchors each graph off its own Entry node, one column gap past it and centered on it, so the first state stays clear of Entry. StartX and StartY are then ignored. Set false to lay every graph in scope out from StartX/StartY instead.
 	 * @param StartX Origin X for the layout; used only when bDefaultOrigin is false. Negative values are valid.
 	 * @param StartY Origin Y for the layout; used only when bDefaultOrigin is false.
 	 * @param PinNodeGuidsJson JSON-encoded array of state GUID strings that should remain pinned at their existing positions. Empty = no pins.
 	 * @param bRespectExistingOrder Whether to preserve existing graph-order hints. Default true.
 	 * @param bSnapToGrid Snap final positions to the editor grid. Default true.
-	 * @return JSON: { asset_path, strategy, scope, applied, measurement_warnings:[...], graphs:[...] }
-	 *         Root-graph spacing comes from measured widget sizes; a non-empty 'measurement_warnings'
-	 *         names a part of the root graph that could not be measured, whose states were spaced against
-	 *         sizes that read too small. Nested graphs under scope='all' are spaced from per-kind default
-	 *         sizes instead, which no warning covers. Both are separate from graphs[].warnings, which are
-	 *         layout notes such as reversed back-edges and pinned-node overlaps.
+	 * @param bRouteEdges Carry every back-edge, and every forward edge spanning more than one layer, on a rail of two reroute nodes clear of the flow. Its marker then stops landing on the states in between. The rail positions come back in graphs[].reroutes on a dry run and are created when bApply is true. Reroutes are cosmetic and change nothing at runtime. They are added and repositioned, never removed. Default true. False leaves those edges drawn straight and plans no rail.
+	 * @return JSON: { asset_path, strategy, scope, applied, passes, icon_location_adjustments,
+	 *         measurement_warnings:[...], skipped:[...], graphs:[...] }
+	 *         Every graph in scope is measured on its own panel, so nested graphs are spaced from what
+	 *         they render at. A non-empty 'measurement_warnings' names the graph and the part of it that
+	 *         could not be measured, whose nodes were spaced against sizes that read too small. Separate
+	 *         from graphs[].warnings, which are layout notes such as reversed back-edges and pinned-node
+	 *         overlaps. 'skipped' lists work the op could not do, such as a rail it could not create or a
+	 *         second pass dropped because the editor closed. 'passes' is 2 when a node grew after it was
+	 *         measured and the layout had to run again. 'icon_location_adjustments' counts the transition
+	 *         markers slid apart along their own wires afterwards. Each graphs[] entry also carries
+	 *         'reroutes' (the planned rail positions) and 'reroutes_added'.
 	 */
 	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
 	static FString LayoutStates(
@@ -796,7 +804,8 @@ public:
 		double StartY = 0.0,
 		const FString& PinNodeGuidsJson = TEXT(""),
 		bool bRespectExistingOrder = true,
-		bool bSnapToGrid = true);
+		bool bSnapToGrid = true,
+		bool bRouteEdges = true);
 
 	/**
 	 * Adds a member variable to a state-machine blueprint. Mirrors the editor's My-Blueprint

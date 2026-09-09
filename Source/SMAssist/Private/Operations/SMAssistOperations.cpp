@@ -270,6 +270,24 @@ namespace LD::Assist::Private
 	static bool ValidateTransitionEndpoints(const USMGraphNode_StateNodeBase* InFromState,
 		const USMGraphNode_StateNodeBase* InToState, FString& OutError)
 	{
+		// A reroute node carries both pins and would pass every check below. Connecting from one runs
+		// BreakAllOutgoingReroutedConnections, which severs the downstream chain and destroys each severed
+		// transition's condition graph. ld.layout_states creates reroutes on every back-edge and
+		// ld.get_graph_view returns their guids beside state guids, so a caller reaches this by accident.
+		if (InFromState->IsA<USMGraphNode_RerouteNode>())
+		{
+			OutError = FString::Printf(
+				TEXT("'from' state '%s' is a transition reroute node and cannot be a transition endpoint. A reroute is a waypoint on a transition that already exists; add one with ld.add_transition_reroute."),
+				*InFromState->GetStateName());
+			return false;
+		}
+		if (InToState->IsA<USMGraphNode_RerouteNode>())
+		{
+			OutError = FString::Printf(
+				TEXT("'to' state '%s' is a transition reroute node and cannot be a transition endpoint. A reroute is a waypoint on a transition that already exists; add one with ld.add_transition_reroute."),
+				*InToState->GetStateName());
+			return false;
+		}
 		if (InFromState->IsA<USMGraphNode_LinkStateNode>())
 		{
 			OutError = FString::Printf(
@@ -3609,11 +3627,29 @@ namespace LD::Assist::Private
 		return FGuid();
 	}
 
+	// Measured size of one node, or a zero vector when the panel holds no widget for it. The layout
+	// module substitutes a per-kind default for a zero, so a caller never has to.
+	static FVector2f MeasuredSize(
+		const UEdGraphNode* InNode,
+		const TMap<const UEdGraphNode*, TSharedRef<SGraphNode>>* InNodeToWidget)
+	{
+		if (!InNodeToWidget)
+		{
+			return FVector2f::ZeroVector;
+		}
+		if (const TSharedRef<SGraphNode>* WidgetPtr = InNodeToWidget->Find(InNode))
+		{
+			return (*WidgetPtr)->GetDesiredSizeForMarquee2f();
+		}
+		return FVector2f::ZeroVector;
+	}
+
 	// Translate one USMGraph into a Layout::FLayoutInput. NodeToWidget supplies measured widget
 	// sizes for nodes whose Slate widget exists; the algorithm falls back to a per-kind default
-	// table for the rest. Comment, transition, entry, and reroute nodes are filtered out; only
-	// flow nodes (state, conduit, reference, link_state, any_state) are passed to the algorithm.
-	// Transitions become FLayoutEdge entries.
+	// table for the rest. Comment and reroute nodes are filtered out; only flow nodes (state,
+	// conduit, reference, link_state, any_state) are passed to the algorithm. Transitions become
+	// FLayoutEdge entries. The entry node is passed as a rectangle rather than as a node. It is never
+	// moved and has no place in the layering, but the flow has to start clear of it.
 	static void BuildLayoutInputForGraph(
 		USMGraph* InGraph,
 		const TMap<const UEdGraphNode*, TSharedRef<SGraphNode>>* InNodeToWidget,
@@ -3633,6 +3669,15 @@ namespace LD::Assist::Private
 			}
 			if (Node->IsA<USMGraphNode_StateMachineEntryNode>())
 			{
+				OutInput.EntryNodePosition = FVector2f(static_cast<float>(Node->NodePosX), static_cast<float>(Node->NodePosY));
+				OutInput.EntryNodeSize = MeasuredSize(Node, InNodeToWidget);
+				if (OutInput.EntryNodeSize.X <= 0.0f || OutInput.EntryNodeSize.Y <= 0.0f)
+				{
+					// The entry node draws a fixed body: a border around a pin box with 10 units of
+					// padding, no title and no property rows. Its size does not vary with content, so
+					// a constant is a safe stand-in on a pass where its widget was not realized.
+					OutInput.EntryNodeSize = FVector2f(48.0f, 40.0f);
+				}
 				continue;
 			}
 			if (Node->IsA<USMGraphNode_RerouteNode>())
@@ -3645,6 +3690,14 @@ namespace LD::Assist::Private
 			}
 			if (USMGraphNode_TransitionEdge* TransitionEdge = Cast<USMGraphNode_TransitionEdge>(Node))
 			{
+				// A rerouted transition is a chain of transition edge nodes, and every segment reports the
+				// same two states. Only the primary segment contributes an edge, so one logical edge gets
+				// one rail. IsPrimaryReroutedTransition is also true for a lone transition, so a lone
+				// transition whose bound graph is missing still contributes its edge.
+				if (TransitionEdge->IsRerouted() && !TransitionEdge->IsPrimaryReroutedTransition())
+				{
+					continue;
+				}
 				const USMGraphNode_StateNodeBase* From = TransitionEdge->GetFromState();
 				const USMGraphNode_StateNodeBase* To = TransitionEdge->GetToState();
 				if (From && To && From != To)
@@ -3652,6 +3705,7 @@ namespace LD::Assist::Private
 					LD::Assist::Layout::FLayoutEdge Edge;
 					Edge.FromGuid = From->NodeGuid;
 					Edge.ToGuid = To->NodeGuid;
+					Edge.TransitionGuid = TransitionEdge->NodeGuid;
 					OutInput.Edges.Add(Edge);
 				}
 				continue;
@@ -3663,13 +3717,7 @@ namespace LD::Assist::Private
 			LayoutNode.Name = Node->GetNodeTitle(ENodeTitleType::EditableTitle).ToString();
 			LayoutNode.Kind = LD::Assist::GraphView::ResolveNodeKind(Node);
 			LayoutNode.OldPosition = FVector2f(static_cast<float>(Node->NodePosX), static_cast<float>(Node->NodePosY));
-			if (InNodeToWidget)
-			{
-				if (const TSharedRef<SGraphNode>* WidgetPtr = InNodeToWidget->Find(Node))
-				{
-					LayoutNode.WidgetSize = (*WidgetPtr)->GetDesiredSizeForMarquee2f();
-				}
-			}
+			LayoutNode.WidgetSize = MeasuredSize(Node, InNodeToWidget);
 			OutInput.Nodes.Add(MoveTemp(LayoutNode));
 		}
 	}
@@ -3715,7 +3763,537 @@ namespace LD::Assist::Private
 		FString GraphPathLabel;
 		FGuid ParentStateGuid;
 		LD::Assist::Layout::FLayoutGraphResult Result;
+		TMap<const UEdGraphNode*, TSharedRef<SGraphNode>> NodeToWidget;
+		int32 ReroutesAdded = 0;
 	};
+
+	// Focus one graph, let its panel paint, and map every node in it to the widget that draws it. A node
+	// widget reports a placeholder size until the panel has painted it, and the placeholder is several
+	// times smaller than the rendered size. The layout spaces columns and rows by these sizes, so
+	// measuring early packs the graph and overlaps every node that draws a body.
+	//
+	// Measuring pumps Slate, which dispatches user input, so the user can close the editor between two
+	// calls. The editor is looked up on every call instead of being passed in, so a closed editor
+	// becomes a warning rather than a dangling pointer.
+	static bool MeasureGraphNodeSizes(
+		USMBlueprint* InBlueprint,
+		USMGraph* InGraph,
+		TMap<const UEdGraphNode*, TSharedRef<SGraphNode>>& OutNodeToWidget,
+		TArray<FString>& OutWarnings)
+	{
+		OutNodeToWidget.Reset();
+
+		FBlueprintEditor* BlueprintEditor = LD::Assist::GraphView::FindOpenBlueprintEditor(InBlueprint);
+		if (!BlueprintEditor)
+		{
+			OutWarnings.Add(FString::Printf(
+				TEXT("The blueprint editor is no longer open, so graph '%s' was not measured; its nodes were spaced from default sizes."),
+				*InGraph->GetName()));
+			return false;
+		}
+
+		FString GraphError;
+		const TSharedPtr<SGraphEditor> GraphEditor =
+			LD::Assist::GraphView::OpenAndFocusGraph(BlueprintEditor, InGraph, GraphError);
+		if (!GraphEditor.IsValid())
+		{
+			OutWarnings.Add(GraphError);
+			return false;
+		}
+
+		SGraphPanel* Panel = GraphEditor->GetGraphPanel();
+		if (!Panel)
+		{
+			OutWarnings.Add(FString::Printf(
+				TEXT("Graph '%s' has no panel to measure; its nodes were spaced from default sizes."),
+				*InGraph->GetName()));
+			return false;
+		}
+
+		LD::Assist::GraphView::MeasureGraphNodeWidgets(GraphEditor.ToSharedRef(), Panel, InGraph, OutWarnings);
+
+		if (FChildren* AllChildren = Panel->GetAllChildren())
+		{
+			const int32 NumChildren = AllChildren->Num();
+			for (int32 ChildIdx = 0; ChildIdx < NumChildren; ++ChildIdx)
+			{
+				const TSharedRef<SWidget> Widget = AllChildren->GetChildAt(ChildIdx);
+				const TSharedRef<SGraphNode> NodeWidget = StaticCastSharedRef<SGraphNode>(Widget);
+				if (UEdGraphNode* DataNode = Cast<UEdGraphNode>(NodeWidget->GetObjectBeingDisplayed()))
+				{
+					OutNodeToWidget.Add(DataNode, NodeWidget);
+				}
+			}
+		}
+		return true;
+	}
+
+	// Bring each routed transition's reroute chain up to the length its plan asks for, then place every
+	// reroute in the graph. A planned one goes to its planned point. A transition the plan does not
+	// name has its reroutes spread along the straight line between its two states. A reroute the user
+	// added then keeps following its wire after the states move.
+	//
+	// Nothing is ever removed. A reroute in the graph may be the user's own. Nothing tells it apart
+	// from one this op placed, so the op only adds and repositions.
+	static bool ApplyReroutePlan(
+		USMBlueprint* InBlueprint,
+		ISMGraphGeneration* InGraphGen,
+		USMGraph* InGraph,
+		const LD::Assist::Layout::FLayoutGraphResult& InResult,
+		float InRerouteSize,
+		int32& OutAdded,
+		TArray<FString>& OutWarnings)
+	{
+		bool bChanged = false;
+		// Indexed by chain position, so the plan may list reroutes in any order.
+		TMap<FGuid, TArray<FVector2f>> PlanByTransition;
+		for (const LD::Assist::Layout::FLayoutReroute& Reroute : InResult.Reroutes)
+		{
+			TArray<FVector2f>& Chain = PlanByTransition.FindOrAdd(Reroute.TransitionGuid);
+			if (Chain.Num() <= Reroute.ChainIndex)
+			{
+				Chain.SetNum(Reroute.ChainIndex + 1);
+			}
+			Chain[Reroute.ChainIndex] = Reroute.Position;
+		}
+
+		TMap<FGuid, FVector2f> CenterByNode;
+		CenterByNode.Reserve(InResult.Nodes.Num());
+		for (const LD::Assist::Layout::FLayoutNode& Node : InResult.Nodes)
+		{
+			CenterByNode.Add(Node.NodeGuid, Node.NewPosition + Node.WidgetSize * 0.5f);
+		}
+
+		// Snapshotted before any splice, because creating a reroute appends to InGraph->Nodes.
+		TArray<USMGraphNode_TransitionEdge*> PrimaryTransitions;
+		for (UEdGraphNode* Node : InGraph->Nodes)
+		{
+			USMGraphNode_TransitionEdge* Transition = Cast<USMGraphNode_TransitionEdge>(Node);
+			if (Transition && Transition->IsPrimaryReroutedTransition())
+			{
+				PrimaryTransitions.Add(Transition);
+			}
+		}
+
+		for (USMGraphNode_TransitionEdge* Transition : PrimaryTransitions)
+		{
+			if (!IsValid(Transition))
+			{
+				continue;
+			}
+
+			const TArray<FVector2f>* Plan = PlanByTransition.Find(Transition->NodeGuid);
+			const int32 PlanNum = Plan ? Plan->Num() : 0;
+
+			TArray<USMGraphNode_TransitionEdge*> Segments;
+			TArray<USMGraphNode_RerouteNode*> Reroutes;
+			Transition->GetAllReroutedTransitions(Segments, Reroutes);
+
+			// A splice always lands immediately after the transition it is given, so appending to the
+			// end of a chain means splicing off its last segment. Splicing off the primary every time
+			// would build the chain backwards and cross the wire over itself.
+			for (int32 AddIdx = Reroutes.Num(); AddIdx < PlanNum; ++AddIdx)
+			{
+				ISMGraphGeneration::FCreateTransitionRerouteArgs RerouteArgs;
+				RerouteArgs.GraphOwner = InGraph;
+				RerouteArgs.TransitionEdge = Segments.Num() > 0 ? Segments.Last() : Transition;
+				RerouteArgs.NodePosition = FVector2D((*Plan)[AddIdx]);
+				if (!InGraphGen->CreateTransitionReroute(InBlueprint, RerouteArgs))
+				{
+					OutWarnings.AddUnique(FString::Printf(
+						TEXT("Could not create a reroute for transition '%s' in graph '%s', so its rail was left incomplete."),
+						*Transition->NodeGuid.ToString(), *InGraph->GetName()));
+					break;
+				}
+				++OutAdded;
+				bChanged = true;
+				Transition->GetAllReroutedTransitions(Segments, Reroutes);
+			}
+
+			if (Reroutes.Num() == 0)
+			{
+				continue;
+			}
+
+			// Reroutes past the end of the plan are the user's own. They still have to follow the states.
+			// They are spread evenly along a run to the destination state. The run starts at the last
+			// planned point, or at the source state when nothing was planned.
+			const int32 SurplusNum = Reroutes.Num() - PlanNum;
+			FVector2f SurplusStart = FVector2f::ZeroVector;
+			FVector2f SurplusEnd = FVector2f::ZeroVector;
+			bool bHasSurplusRun = false;
+			if (SurplusNum > 0)
+			{
+				const USMGraphNode_StateNodeBase* FromState = Transition->GetFromState();
+				const USMGraphNode_StateNodeBase* ToState = Transition->GetToState();
+				const FVector2f* StartCenter = FromState ? CenterByNode.Find(FromState->NodeGuid) : nullptr;
+				const FVector2f* EndCenter = ToState ? CenterByNode.Find(ToState->NodeGuid) : nullptr;
+				if (StartCenter && EndCenter)
+				{
+					const FVector2f HalfReroute(InRerouteSize * 0.5f);
+					SurplusStart = PlanNum > 0 ? (*Plan)[PlanNum - 1] + HalfReroute : *StartCenter;
+					SurplusEnd = *EndCenter;
+					bHasSurplusRun = true;
+				}
+			}
+
+			for (int32 RerouteIdx = 0; RerouteIdx < Reroutes.Num(); ++RerouteIdx)
+			{
+				USMGraphNode_RerouteNode* Reroute = Reroutes[RerouteIdx];
+				if (!IsValid(Reroute))
+				{
+					continue;
+				}
+
+				FVector2f Target = FVector2f::ZeroVector;
+				if (RerouteIdx < PlanNum)
+				{
+					Target = (*Plan)[RerouteIdx];
+				}
+				else if (bHasSurplusRun)
+				{
+					const float Alpha = static_cast<float>(RerouteIdx - PlanNum + 1) / static_cast<float>(SurplusNum + 1);
+					Target = FMath::Lerp(SurplusStart, SurplusEnd, Alpha) - FVector2f(InRerouteSize * 0.5f);
+				}
+				else
+				{
+					continue;
+				}
+
+				const FVector2f Current(static_cast<float>(Reroute->NodePosX), static_cast<float>(Reroute->NodePosY));
+				if (Current.Equals(Target, 1.0f))
+				{
+					continue;
+				}
+				if (ApplyNodePosition(Reroute, Target))
+				{
+					bChanged = true;
+				}
+			}
+		}
+
+		return bChanged;
+	}
+
+	// The property the settling pass writes. It is protected and editor-only on USMTransitionInstance, so
+	// it is reached by name rather than by GET_MEMBER_NAME_CHECKED. A rename is reported as a warning
+	// rather than left to look like a graph that needed no adjustment.
+	static const FName IconLocationPropertyName(TEXT("IconLocationPercentage"));
+
+	// Spread the markers of transitions that still draw on top of each other along their own wires.
+	// The editor draws a marker at the midpoint between the two states, and it only separates markers
+	// that share the same from-state and to-state. Two edges between different pairs can still have the
+	// same midpoint, and moving the states does not change that. IconLocationPercentage moves a marker
+	// along its own segment, so it separates them in place.
+	//
+	// Runs last, after the states and the reroutes have their final positions. A rerouted transition is
+	// skipped. Its rail already moved its marker. Each segment of a chain also copies its template from
+	// the primary, so a value written here would be overwritten.
+	static int32 SettleTransitionMarkers(
+		USMBlueprint* InBlueprint,
+		TArray<FLayoutGraphContext>& InOutContexts,
+		TArray<FString>& OutWarnings)
+	{
+		int32 AdjustedCount = 0;
+
+		for (FLayoutGraphContext& Context : InOutContexts)
+		{
+			TArray<FString> GraphWarnings;
+			MeasureGraphNodeSizes(InBlueprint, Context.Graph, Context.NodeToWidget, GraphWarnings);
+			for (const FString& Warning : GraphWarnings)
+			{
+				OutWarnings.AddUnique(FString::Printf(TEXT("%s: %s"), *Context.GraphPathLabel, *Warning));
+			}
+
+			// The same set 'ld.get_graph_view' reports as transition_overlaps, so that every overlap it
+			// reports is one this pass can act on. A rerouted transition takes part: each segment is its
+			// own edge with its own template, and its marker slides along its own segment. A reroute node
+			// takes part as an obstacle only. It is a positioned node the placement pass owns, so it
+			// counts in the overlap test and never receives an icon percentage.
+			struct FMarker
+			{
+				UEdGraphNode* Node = nullptr;
+				USMGraphNode_TransitionEdge* Transition = nullptr;
+				FString Title;
+				FVector2f Min = FVector2f::ZeroVector;
+				FVector2f Max = FVector2f::ZeroVector;
+			};
+
+			bool bAdjustedThisGraph = false;
+
+			TArray<FMarker> Markers;
+			for (UEdGraphNode* Node : Context.Graph->Nodes)
+			{
+				USMGraphNode_TransitionEdge* Transition = Cast<USMGraphNode_TransitionEdge>(Node);
+				const bool bIsMovableMarker = Transition && Transition->GetNodeTemplateAs<USMTransitionInstance>();
+				if (!bIsMovableMarker && !Node->IsA<USMGraphNode_RerouteNode>())
+				{
+					continue;
+				}
+				const TSharedRef<SGraphNode>* WidgetPtr = Context.NodeToWidget.Find(Node);
+				if (!WidgetPtr)
+				{
+					continue;
+				}
+
+				FMarker Marker;
+				Marker.Node = Node;
+				Marker.Transition = bIsMovableMarker ? Transition : nullptr;
+				Marker.Title = (*WidgetPtr)->GetEditableNodeTitleAsText().ToString();
+				Marker.Min = (*WidgetPtr)->GetPosition2f();
+				Marker.Max = Marker.Min + (*WidgetPtr)->GetDesiredSizeForMarquee2f();
+				Markers.Add(MoveTemp(Marker));
+			}
+
+			// Markers that overlap, directly or through another marker, are spread as one group. Markers
+			// stacked on one point form a clique. Three edges crossing between two layers form a chain
+			// instead: the first and the last overlap the middle one but not each other. Treating that as
+			// two pairs would leave the middle marker where it is. Union-find over the overlapping pairs
+			// collects both shapes.
+			TArray<int32> Parent;
+			Parent.Reserve(Markers.Num());
+			for (int32 MarkerIdx = 0; MarkerIdx < Markers.Num(); ++MarkerIdx)
+			{
+				Parent.Add(MarkerIdx);
+			}
+
+			auto FindRoot = [&Parent](int32 InIdx)
+			{
+				while (Parent[InIdx] != InIdx)
+				{
+					Parent[InIdx] = Parent[Parent[InIdx]];
+					InIdx = Parent[InIdx];
+				}
+				return InIdx;
+			};
+
+			for (int32 FirstIdx = 0; FirstIdx < Markers.Num(); ++FirstIdx)
+			{
+				for (int32 SecondIdx = FirstIdx + 1; SecondIdx < Markers.Num(); ++SecondIdx)
+				{
+					const FMarker& First = Markers[FirstIdx];
+					const FMarker& Second = Markers[SecondIdx];
+					const bool bOverlaps = First.Min.X < Second.Max.X && Second.Min.X < First.Max.X
+						&& First.Min.Y < Second.Max.Y && Second.Min.Y < First.Max.Y;
+					if (!bOverlaps)
+					{
+						continue;
+					}
+
+					const int32 FirstRoot = FindRoot(FirstIdx);
+					const int32 SecondRoot = FindRoot(SecondIdx);
+					if (FirstRoot != SecondRoot)
+					{
+						Parent[SecondRoot] = FirstRoot;
+					}
+				}
+			}
+
+			TMap<int32, TArray<int32>> MarkersByRoot;
+			for (int32 MarkerIdx = 0; MarkerIdx < Markers.Num(); ++MarkerIdx)
+			{
+				MarkersByRoot.FindOrAdd(FindRoot(MarkerIdx)).Add(MarkerIdx);
+			}
+
+			TArray<TArray<int32>> Groups;
+			MarkersByRoot.GenerateValueArray(Groups);
+
+			for (TArray<int32>& Group : Groups)
+			{
+				if (Group.Num() < 2)
+				{
+					continue;
+				}
+
+				// Sorted by guid so the same group gets the same result on every run.
+				Group.Sort([&Markers](int32 A, int32 B)
+				{
+					return Markers[A].Node->NodeGuid < Markers[B].Node->NodeGuid;
+				});
+
+				// Where along the wires to spread the group. Transitions that all end at one state cannot
+				// be separated by pushing their markers toward that state, because every wire arrives at
+				// the same point; they separate near their sources, which are far apart. Transitions that
+				// all leave one state are the mirror case. A mixed group has no shared end, so it spreads
+				// around the midpoint.
+				int32 SharedTargetCount = 0;
+				int32 SharedSourceCount = 0;
+				for (const int32 MemberIdx : Group)
+				{
+					USMGraphNode_TransitionEdge* Member = Markers[MemberIdx].Transition;
+					if (!Member)
+					{
+						continue;
+					}
+					const USMGraphNode_StateNodeBase* ToState = Member->GetToState();
+					const USMGraphNode_StateNodeBase* FromState = Member->GetFromState();
+					for (const int32 OtherIdx : Group)
+					{
+						USMGraphNode_TransitionEdge* Other = Markers[OtherIdx].Transition;
+						if (!Other || Other == Member)
+						{
+							continue;
+						}
+						if (ToState && Other->GetToState() == ToState)
+						{
+							++SharedTargetCount;
+							break;
+						}
+						if (FromState && Other->GetFromState() == FromState)
+						{
+							++SharedSourceCount;
+							break;
+						}
+					}
+				}
+
+				float SpanStart = 0.2f;
+				float SpanEnd = 0.8f;
+				if (SharedTargetCount > SharedSourceCount)
+				{
+					SpanStart = 0.15f;
+					SpanEnd = 0.5f;
+				}
+				else if (SharedSourceCount > SharedTargetCount)
+				{
+					SpanStart = 0.5f;
+					SpanEnd = 0.85f;
+				}
+
+				// Dividing by the gaps between members rather than by the member count keeps the span the
+				// same for a pair as for a larger group. A pair divided by the count would use half of it.
+				const float Step = (SpanEnd - SpanStart) / static_cast<float>(FMath::Max(1, Group.Num() - 1));
+				for (int32 PositionIdx = 0; PositionIdx < Group.Num(); ++PositionIdx)
+				{
+					USMGraphNode_TransitionEdge* Transition = Markers[Group[PositionIdx]].Transition;
+					if (!Transition)
+					{
+						continue;
+					}
+					USMTransitionInstance* Template = Transition->GetNodeTemplateAs<USMTransitionInstance>();
+					FProperty* Property = Template
+						? Template->GetClass()->FindPropertyByName(IconLocationPropertyName)
+						: nullptr;
+					if (!Property)
+					{
+						OutWarnings.AddUnique(FString::Printf(
+							TEXT("No '%s' property on the transition template, so overlapping markers were left stacked."),
+							*IconLocationPropertyName.ToString()));
+						continue;
+					}
+
+					const float Percentage = FMath::Clamp(
+						SpanStart + static_cast<float>(PositionIdx) * Step, 0.05f, 0.95f);
+
+					Transition->Modify();
+					Template->Modify();
+					LD::Editor::PropertyUtils::SetPropertyValue(
+						Property, FString::SanitizeFloat(Percentage), Template);
+					++AdjustedCount;
+					bAdjustedThisGraph = true;
+				}
+			}
+
+			if (!bAdjustedThisGraph)
+			{
+				continue;
+			}
+
+			// A spread of 0.6 along each wire does not separate every group. Two markers on short wires
+			// that cross at a shallow angle can still touch afterwards. Measure once more and name what
+			// survived, so the payload does not report an adjustment the graph did not get.
+			TArray<FString> RecheckWarnings;
+			MeasureGraphNodeSizes(InBlueprint, Context.Graph, Context.NodeToWidget, RecheckWarnings);
+			for (const FString& Warning : RecheckWarnings)
+			{
+				OutWarnings.AddUnique(FString::Printf(TEXT("%s: %s"), *Context.GraphPathLabel, *Warning));
+			}
+
+			for (int32 FirstIdx = 0; FirstIdx < Markers.Num(); ++FirstIdx)
+			{
+				for (int32 SecondIdx = FirstIdx + 1; SecondIdx < Markers.Num(); ++SecondIdx)
+				{
+					const TSharedRef<SGraphNode>* FirstWidget = Context.NodeToWidget.Find(Markers[FirstIdx].Node);
+					const TSharedRef<SGraphNode>* SecondWidget = Context.NodeToWidget.Find(Markers[SecondIdx].Node);
+					if (!FirstWidget || !SecondWidget)
+					{
+						continue;
+					}
+
+					const FVector2f FirstMin = (*FirstWidget)->GetPosition2f();
+					const FVector2f FirstMax = FirstMin + (*FirstWidget)->GetDesiredSizeForMarquee2f();
+					const FVector2f SecondMin = (*SecondWidget)->GetPosition2f();
+					const FVector2f SecondMax = SecondMin + (*SecondWidget)->GetDesiredSizeForMarquee2f();
+					const bool bStillOverlaps = FirstMin.X < SecondMax.X && SecondMin.X < FirstMax.X
+						&& FirstMin.Y < SecondMax.Y && SecondMin.Y < FirstMax.Y;
+					if (!bStillOverlaps)
+					{
+						continue;
+					}
+
+					OutWarnings.AddUnique(FString::Printf(
+						TEXT("%s: '%s' and '%s' still overlap after the markers were spaced along their wires."),
+						*Context.GraphPathLabel,
+						*Markers[FirstIdx].Title,
+						*Markers[SecondIdx].Title));
+				}
+			}
+		}
+
+		return AdjustedCount;
+	}
+
+	// Measure every graph again and report whether any of them still draws two flow nodes on top of each
+	// other. Each context's widget map is replaced rather than reused, because a node that grew since the
+	// last measurement is what this function detects.
+	//
+	// A graph that could not be measured contributes no overlaps, so a failure here would otherwise read
+	// as a clean graph. Its warning goes to the caller instead of being dropped.
+	static bool RemeasureAndFindOverlap(
+		USMBlueprint* InBlueprint,
+		TArray<FLayoutGraphContext>& InOutContexts,
+		TArray<FString>& OutWarnings)
+	{
+		bool bAnyOverlap = false;
+		for (FLayoutGraphContext& Context : InOutContexts)
+		{
+			TArray<FString> GraphWarnings;
+			MeasureGraphNodeSizes(InBlueprint, Context.Graph, Context.NodeToWidget, GraphWarnings);
+			for (const FString& Warning : GraphWarnings)
+			{
+				OutWarnings.AddUnique(FString::Printf(TEXT("%s: %s"), *Context.GraphPathLabel, *Warning));
+			}
+
+			TArray<TSharedPtr<FJsonValue>> NodeOverlaps;
+			TArray<TSharedPtr<FJsonValue>> EdgeOverlaps;
+			LD::Assist::GraphView::BuildOverlapJson(Context.Graph, Context.NodeToWidget, NodeOverlaps, EdgeOverlaps);
+			if (NodeOverlaps.Num() > 0)
+			{
+				bAnyOverlap = true;
+			}
+		}
+		return bAnyOverlap;
+	}
+
+	// Rendered size of a reroute node, taken from one already in the graph when there is one. Every
+	// reroute measures the same (see Layout::DefaultRerouteSize), and that constant covers a graph that
+	// has none yet. The router spaces its lanes by this.
+	static float ResolveRerouteSize(const TMap<const UEdGraphNode*, TSharedRef<SGraphNode>>& InNodeToWidget)
+	{
+		for (const TPair<const UEdGraphNode*, TSharedRef<SGraphNode>>& Pair : InNodeToWidget)
+		{
+			if (!Pair.Key || !Pair.Key->IsA<USMGraphNode_RerouteNode>())
+			{
+				continue;
+			}
+			const FVector2f Size = Pair.Value->GetDesiredSizeForMarquee2f();
+			if (Size.X > 0.0f && Size.Y > 0.0f)
+			{
+				return FMath::Max(Size.X, Size.Y);
+			}
+		}
+		return LD::Assist::Layout::DefaultRerouteSize;
+	}
 }
 
 FSMAssistOperationResult LD::Assist::LayoutStates(const TSharedRef<FJsonObject>& InArgs)
@@ -3757,19 +4335,22 @@ FSMAssistOperationResult LD::Assist::LayoutStates(const TSharedRef<FJsonObject>&
 	InArgs->TryGetNumberField(Args::ColumnGap, ColumnGap);
 	double RowGap = 40.0;
 	InArgs->TryGetNumberField(Args::RowGap, RowGap);
-	// Entry node lives at (0, 0) on every state machine and is not part of the layout. Default the
-	// first state's anchor along the flow axis to 200 so the laid-out main row sits clearly past
-	// Entry, matching the plugin's "states flow rightward from Entry" / "downward from Entry"
-	// convention. Default the perpendicular axis to 0 (centered).
-	double StartX = (Strategy == LD::Assist::Layout::ELayoutStrategy::LeftToRight) ? 200.0 : 0.0;
-	double StartY = (Strategy == LD::Assist::Layout::ELayoutStrategy::TopToBottom) ? 200.0 : 0.0;
-	InArgs->TryGetNumberField(Args::StartX, StartX);
-	InArgs->TryGetNumberField(Args::StartY, StartY);
+	// With neither given, each graph is anchored off its own entry node: one column gap past it
+	// along the flow axis, centered on it across. Giving either one pins the layout to that point
+	// instead, for a caller placing a graph somewhere specific. Both axes move together, because
+	// anchoring one axis to the entry node and the other to a fixed value reads as a mistake.
+	double StartX = 0.0;
+	double StartY = 0.0;
+	const bool bHasStartX = InArgs->TryGetNumberField(Args::StartX, StartX);
+	const bool bHasStartY = InArgs->TryGetNumberField(Args::StartY, StartY);
+	const bool bStartExplicit = bHasStartX || bHasStartY;
 
 	bool bRespectExistingOrder = true;
 	InArgs->TryGetBoolField(Args::RespectExistingOrder, bRespectExistingOrder);
 	bool bSnapToGrid = true;
 	InArgs->TryGetBoolField(Args::SnapToGrid, bSnapToGrid);
+	bool bRouteEdges = true;
+	InArgs->TryGetBoolField(Args::RouteEdges, bRouteEdges);
 
 	TSet<FGuid> PinnedGuids;
 	{
@@ -3811,37 +4392,16 @@ FSMAssistOperationResult LD::Assist::LayoutStates(const TSharedRef<FJsonObject>&
 		return FSMAssistOperationResult::MakeError(EditorError);
 	}
 
+	// Snapshotted before any graph is opened. Focusing a graph makes it the focused graph, so a read
+	// after the root graph is brought to front would always report the root graph. The restore at the
+	// end would then move the caller to the root instead of leaving them where they were.
+	UEdGraph* const FocusedGraphOnEntry = BlueprintEditor->GetFocusedGraph();
+
+	// Only a check that the asset's own graph can be reached; RunLayoutPass focuses each graph itself.
 	FString GraphError;
-	TSharedPtr<SGraphEditor> GraphEditor = LD::Assist::GraphView::OpenAndFocusRootGraph(BlueprintEditor, Blueprint, GraphError);
-	if (!GraphEditor.IsValid())
+	if (!LD::Assist::GraphView::OpenAndFocusRootGraph(BlueprintEditor, Blueprint, GraphError).IsValid())
 	{
 		return FSMAssistOperationResult::MakeError(GraphError);
-	}
-
-	// NodeToWidget map only covers the focused (root) panel. Nested graphs in scope=all rely on
-	// the per-kind default size table inside the layout module, which keeps the op cheap and avoids
-	// disruptively opening every nested graph in the user's editor.
-	TArray<FString> MeasureWarnings;
-	TMap<const UEdGraphNode*, TSharedRef<SGraphNode>> NodeToWidget;
-	if (SGraphPanel* Panel = GraphEditor->GetGraphPanel())
-	{
-		// The layout spaces columns by these widget sizes, so measuring before the panel has painted
-		// packs the graph to a fraction of its rendered width and overlaps every node that draws a body.
-		LD::Assist::GraphView::MeasureGraphNodeWidgets(GraphEditor.ToSharedRef(), Panel, RootGraph, MeasureWarnings);
-
-		if (FChildren* AllChildren = Panel->GetAllChildren())
-		{
-			const int32 NumChildren = AllChildren->Num();
-			for (int32 ChildIdx = 0; ChildIdx < NumChildren; ++ChildIdx)
-			{
-				TSharedRef<SWidget> Widget = AllChildren->GetChildAt(ChildIdx);
-				TSharedRef<SGraphNode> NodeWidget = StaticCastSharedRef<SGraphNode>(Widget);
-				if (UEdGraphNode* DataNode = Cast<UEdGraphNode>(NodeWidget->GetObjectBeingDisplayed()))
-				{
-					NodeToWidget.Add(DataNode, NodeWidget);
-				}
-			}
-		}
 	}
 
 	TArray<LD::Assist::Private::FStateMachineGraphEntry> GraphsToLayout;
@@ -3859,71 +4419,190 @@ FSMAssistOperationResult LD::Assist::LayoutStates(const TSharedRef<FJsonObject>&
 
 	const float SnapGridSize = static_cast<float>(SNodePanel::GetSnapGridSize());
 
+	TArray<FString> MeasureWarnings;
+
+	// Work the op could not do, reported as the top-level 'skipped' array. Kept apart from
+	// measurement_warnings. A caller reads those as nodes spaced against sizes that read too small, and
+	// acts by re-running or by fixing the spacing by hand.
+	TArray<FString> OpWarnings;
+
 	TArray<LD::Assist::Private::FLayoutGraphContext> GraphContexts;
 	GraphContexts.Reserve(GraphsToLayout.Num());
-
 	for (const LD::Assist::Private::FStateMachineGraphEntry& GraphEntry : GraphsToLayout)
 	{
-		USMGraph* Graph = GraphEntry.Graph;
-
 		LD::Assist::Private::FLayoutGraphContext Context;
-		Context.Graph = Graph;
+		Context.Graph = GraphEntry.Graph;
 		Context.GraphPathLabel = GraphEntry.GraphPath;
 		Context.ParentStateGuid = GraphEntry.ParentStateGuid;
-
-		LD::Assist::Layout::FLayoutInput Input;
-		Input.Strategy = Strategy;
-		Input.ColumnGap = static_cast<float>(ColumnGap);
-		Input.RowGap = static_cast<float>(RowGap);
-		Input.Start = (Graph == RootGraph)
-			? FVector2f(static_cast<float>(StartX), static_cast<float>(StartY))
-			: FVector2f::ZeroVector;
-		Input.PinnedGuids = PinnedGuids;
-		Input.bRespectExistingOrder = bRespectExistingOrder;
-		Input.bSnapToGrid = bSnapToGrid;
-		Input.SnapGridSize = SnapGridSize > 0.0f ? SnapGridSize : 16.0f;
-
-		const TMap<const UEdGraphNode*, TSharedRef<SGraphNode>>* NodeToWidgetForGraph = (Graph == RootGraph) ? &NodeToWidget : nullptr;
-		LD::Assist::Private::BuildLayoutInputForGraph(Graph, NodeToWidgetForGraph, Input);
-
-		Context.Result = LD::Assist::Layout::ComputeLayout(Input);
 		GraphContexts.Add(MoveTemp(Context));
 	}
 
+	// Measure every graph in scope and lay each one out from what it actually renders at. Each graph
+	// is measured on its own panel, so a nested graph is spaced by the same real sizes as the root.
+	auto RunLayoutPass = [&](TArray<FString>& OutWarnings)
+	{
+		for (LD::Assist::Private::FLayoutGraphContext& Context : GraphContexts)
+		{
+			TArray<FString> GraphMeasureWarnings;
+			LD::Assist::Private::MeasureGraphNodeSizes(
+				Blueprint, Context.Graph, Context.NodeToWidget, GraphMeasureWarnings);
+			for (const FString& Warning : GraphMeasureWarnings)
+			{
+				OutWarnings.Add(FString::Printf(TEXT("%s: %s"), *Context.GraphPathLabel, *Warning));
+			}
+
+			LD::Assist::Layout::FLayoutInput Input;
+			Input.Strategy = Strategy;
+			Input.ColumnGap = static_cast<float>(ColumnGap);
+			Input.RowGap = static_cast<float>(RowGap);
+			Input.Start = FVector2f(static_cast<float>(StartX), static_cast<float>(StartY));
+			Input.bStartExplicit = bStartExplicit;
+			Input.PinnedGuids = PinnedGuids;
+			Input.bRespectExistingOrder = bRespectExistingOrder;
+			Input.bSnapToGrid = bSnapToGrid;
+			Input.SnapGridSize = SnapGridSize > 0.0f ? SnapGridSize : 16.0f;
+			Input.RerouteSize = LD::Assist::Private::ResolveRerouteSize(Context.NodeToWidget);
+			Input.bRouteEdges = bRouteEdges;
+
+			LD::Assist::Private::BuildLayoutInputForGraph(Context.Graph, &Context.NodeToWidget, Input);
+
+			Context.Result = LD::Assist::Layout::ComputeLayout(Input);
+		}
+	};
+
+	RunLayoutPass(MeasureWarnings);
+
 	// Apply path: single transaction wraps all writes across all graphs so undo is one step.
+	int32 PassesRun = 1;
+	int32 IconAdjustments = 0;
 	if (bApply)
 	{
 		FScopedTransaction Transaction(NSLOCTEXT("SMAssist", "LayoutStatesTransaction", "Auto-Layout States"));
-		TSet<USMGraph*> DirtyGraphs;
-		for (const LD::Assist::Private::FLayoutGraphContext& Context : GraphContexts)
+
+		ISMGraphGeneration* GraphGen = nullptr;
+		if (bRouteEdges)
 		{
-			for (const LD::Assist::Layout::FLayoutNode& Node : Context.Result.Nodes)
+			FString GraphGenError;
+			GraphGen = LD::Assist::Private::GetGraphGeneration(GraphGenError);
+			if (!GraphGen)
 			{
-				if (!Node.Node || Node.bPinned)
+				OpWarnings.Add(FString::Printf(
+					TEXT("Edge routing was skipped and no reroute was placed: %s"), *GraphGenError));
+			}
+		}
+
+		auto ApplyComputedLayout = [&]()
+		{
+			TSet<USMGraph*> DirtyGraphs;
+			for (LD::Assist::Private::FLayoutGraphContext& Context : GraphContexts)
+			{
+				if (!IsValid(Context.Graph))
 				{
 					continue;
 				}
-				if (Node.NewPosition == Node.OldPosition)
+				for (const LD::Assist::Layout::FLayoutNode& Node : Context.Result.Nodes)
 				{
-					continue;
+					if (!Node.Node || Node.bPinned)
+					{
+						continue;
+					}
+					if (Node.NewPosition == Node.OldPosition)
+					{
+						continue;
+					}
+					if (LD::Assist::Private::ApplyNodePosition(Node.Node, Node.NewPosition))
+					{
+						DirtyGraphs.Add(Context.Graph);
+					}
 				}
-				if (LD::Assist::Private::ApplyNodePosition(Node.Node, Node.NewPosition))
+
+				if (GraphGen)
 				{
-					DirtyGraphs.Add(Context.Graph);
+					// Moving an existing reroute counts as a change, not only adding one. A re-run on a
+					// graph that already has its rails repositions them and nothing else. Without the
+					// dirty mark the panel would keep drawing them where they were.
+					if (LD::Assist::Private::ApplyReroutePlan(
+						Blueprint,
+						GraphGen,
+						Context.Graph,
+						Context.Result,
+						LD::Assist::Private::ResolveRerouteSize(Context.NodeToWidget),
+						Context.ReroutesAdded,
+						OpWarnings))
+					{
+						DirtyGraphs.Add(Context.Graph);
+					}
 				}
 			}
-		}
-		for (USMGraph* DirtyGraph : DirtyGraphs)
-		{
-			if (DirtyGraph)
+
+			for (USMGraph* DirtyGraph : DirtyGraphs)
 			{
-				DirtyGraph->NotifyGraphChanged();
+				if (DirtyGraph)
+				{
+					DirtyGraph->NotifyGraphChanged();
+				}
+			}
+			if (DirtyGraphs.Num() > 0)
+			{
+				Blueprint->GetPackage()->MarkPackageDirty();
+				LD::Assist::GraphView::EnsureSlateLayoutReady();
+			}
+		};
+
+		ApplyComputedLayout();
+
+		// Measuring pumps Slate, which dispatches user input, so the editor can be closed between phases.
+		// MeasureGraphNodeSizes guards itself. This check is what reports the skip instead of running a
+		// second pass and the settling against an editor that is gone.
+		auto IsEditorStillOpen = [Blueprint, BlueprintEditor]()
+		{
+			return LD::Assist::GraphView::FindOpenBlueprintEditor(Blueprint) == BlueprintEditor;
+		};
+
+		if (!IsEditorStillOpen())
+		{
+			OpWarnings.Add(TEXT("The blueprint editor closed while the layout was running, so the second pass and the transition-marker settling were skipped."));
+		}
+		else
+		{
+			// A node grows when its class or one of its exposed properties is set. A caller normally
+			// does that in the same batch as the states. The sizes this pass spaced by were read before
+			// those writes landed, so measure again and lay out once more when anything still overlaps.
+			// Two passes is the cap: a third would only repeat the second, since nothing changes the
+			// sizes between them.
+			if (LD::Assist::Private::RemeasureAndFindOverlap(Blueprint, GraphContexts, MeasureWarnings))
+			{
+				TArray<FString> SecondPassWarnings;
+				RunLayoutPass(SecondPassWarnings);
+				for (const FString& Warning : SecondPassWarnings)
+				{
+					MeasureWarnings.AddUnique(Warning);
+				}
+				ApplyComputedLayout();
+				++PassesRun;
+			}
+
+			if (IsEditorStillOpen())
+			{
+				IconAdjustments = LD::Assist::Private::SettleTransitionMarkers(
+					Blueprint, GraphContexts, MeasureWarnings);
+				if (IconAdjustments > 0)
+				{
+					Blueprint->GetPackage()->MarkPackageDirty();
+					LD::Assist::GraphView::EnsureSlateLayoutReady();
+				}
 			}
 		}
-		if (DirtyGraphs.Num() > 0)
+	}
+
+	// The caller is left on the tab they started on, whatever measuring had to focus along the way. The
+	// editor is looked up again because measuring can have let the user close it.
+	if (FocusedGraphOnEntry)
+	{
+		if (FBlueprintEditor* EditorToRestore = LD::Assist::GraphView::FindOpenBlueprintEditor(Blueprint))
 		{
-			Blueprint->GetPackage()->MarkPackageDirty();
-			LD::Assist::GraphView::EnsureSlateLayoutReady();
+			FString RestoreError;
+			LD::Assist::GraphView::OpenAndFocusGraph(EditorToRestore, FocusedGraphOnEntry, RestoreError);
 		}
 	}
 
@@ -3933,6 +4612,8 @@ FSMAssistOperationResult LD::Assist::LayoutStates(const TSharedRef<FJsonObject>&
 	Payload->SetStringField(Args::Strategy, LD::Assist::Layout::StrategyToString(Strategy));
 	Payload->SetStringField(Args::Scope, bScopeAll ? TEXT("all") : TEXT("root"));
 	Payload->SetBoolField(Args::Applied, bApply);
+	Payload->SetNumberField(Args::Passes, PassesRun);
+	Payload->SetNumberField(Args::IconLocationAdjustments, IconAdjustments);
 
 	TArray<TSharedPtr<FJsonValue>> GraphsArray;
 	GraphsArray.Reserve(GraphContexts.Num());
@@ -3977,13 +4658,27 @@ FSMAssistOperationResult LD::Assist::LayoutStates(const TSharedRef<FJsonObject>&
 		}
 		GraphEntry->SetArrayField(Args::Warnings, WarningsArray);
 
+		TArray<TSharedPtr<FJsonValue>> RerouteArray;
+		RerouteArray.Reserve(Context.Result.Reroutes.Num());
+		for (const LD::Assist::Layout::FLayoutReroute& Reroute : Context.Result.Reroutes)
+		{
+			const TSharedRef<FJsonObject> RerouteEntry = MakeShared<FJsonObject>();
+			RerouteEntry->SetStringField(Args::TransitionGuid, Reroute.TransitionGuid.ToString());
+			RerouteEntry->SetNumberField(Args::ChainIndex, Reroute.ChainIndex);
+			RerouteEntry->SetField(Args::ProposedPosition, LD::Assist::Private::Vec2fToJsonArrayValue(Reroute.Position));
+			RerouteArray.Add(MakeShared<FJsonValueObject>(RerouteEntry));
+		}
+		GraphEntry->SetArrayField(Args::Reroutes, RerouteArray);
+		GraphEntry->SetNumberField(Args::ReroutesAdded, Context.ReroutesAdded);
+
 		GraphsArray.Add(MakeShared<FJsonValueObject>(GraphEntry));
 	}
 	Payload->SetArrayField(Args::Graphs, GraphsArray);
 
-	// Op-level rather than per-graph: only the root graph is measured, so these describe the root layout.
-	// Nested graphs under scope=all are spaced from the layout module's per-kind default sizes instead,
-	// which no warning here covers. A layout computed from partial measurements can still overlap.
+	// Op-level rather than per-graph: every graph in scope is measured, and each entry is prefixed with
+	// the graph path it came from. A layout computed from partial measurements can still overlap. A
+	// non-empty array means the spacing in the graph it names was worked out from sizes that read too
+	// small. Separate from the per-graph 'warnings', which are layout notes rather than measurement.
 	TArray<TSharedPtr<FJsonValue>> MeasureWarningsArray;
 	MeasureWarningsArray.Reserve(MeasureWarnings.Num());
 	for (const FString& Warning : MeasureWarnings)
@@ -3991,6 +4686,14 @@ FSMAssistOperationResult LD::Assist::LayoutStates(const TSharedRef<FJsonObject>&
 		MeasureWarningsArray.Add(MakeShared<FJsonValueString>(Warning));
 	}
 	Payload->SetArrayField(Args::MeasurementWarnings, MeasureWarningsArray);
+
+	TArray<TSharedPtr<FJsonValue>> OpWarningsArray;
+	OpWarningsArray.Reserve(OpWarnings.Num());
+	for (const FString& Warning : OpWarnings)
+	{
+		OpWarningsArray.Add(MakeShared<FJsonValueString>(Warning));
+	}
+	Payload->SetArrayField(Args::Skipped, OpWarningsArray);
 
 	return FSMAssistOperationResult::MakeSuccess(Payload);
 }
