@@ -416,7 +416,8 @@ FString ULogicDriverToolset::CaptureGraphView(
 	bool bFitToContent,
 	const FString& NodeGuid,
 	const FString& OutputSubdir,
-	const FString& Prefix)
+	const FString& Prefix,
+	const FString& ParentStateGuid)
 {
 	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
 	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
@@ -425,6 +426,7 @@ FString ULogicDriverToolset::CaptureGraphView(
 	LDA::AddIfNonEmpty(*Args, TEXT("node_guid"), NodeGuid);
 	LDA::AddIfNonEmpty(*Args, TEXT("output_subdir"), OutputSubdir);
 	LDA::AddIfNonEmpty(*Args, TEXT("prefix"), Prefix);
+	LDA::AddIfNonEmpty(*Args, TEXT("parent_state_guid"), ParentStateGuid);
 	return LDA::Execute(TEXT("ld.capture_graph_view"), Args);
 }
 

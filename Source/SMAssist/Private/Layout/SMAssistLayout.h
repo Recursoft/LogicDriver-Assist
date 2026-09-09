@@ -102,6 +102,11 @@ namespace LD::Assist::Layout
 		TArray<FLayoutNode> Nodes;
 		TArray<FLayoutReroute> Reroutes;
 		TArray<FString> Warnings;
+
+		// Transitions still drawn through a state after routing, counted on the path the editor will
+		// draw. Zero is the goal. It rises when bRouteEdges is off, which is the cost of turning routing
+		// off and the reason the number is reported rather than kept internal.
+		int32 EdgesThroughStates = 0;
 	};
 
 	// Exported so SMAssistTests can drive the layout headlessly with hand-built inputs. Running the op

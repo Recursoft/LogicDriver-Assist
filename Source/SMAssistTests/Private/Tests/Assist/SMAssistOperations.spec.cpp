@@ -2617,6 +2617,84 @@ void FAssistOperationsSpec::Define()
 				FName(TEXT("ld.rename_state")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 		});
+
+		It("Accepts 'node_guid' in place of 'state_guid'", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString StateGuid = AddStateToBlueprint(AssetPath, TEXT("Old"));
+			if (!TestFalse("State guid populated", StateGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("node_guid"), StateGuid);
+			Args->SetStringField(TEXT("new_name"), TEXT("RenamedByNodeGuid"));
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("ld.rename_state")), Args);
+			TestTrue("Result is success", Result.bSuccess);
+			if (!TestTrue("Payload populated", Result.Payload.IsValid()))
+			{
+				return;
+			}
+
+			FString ReturnedName;
+			TestTrue("Payload has 'state_name'",
+				Result.Payload->TryGetStringField(TEXT("state_name"), ReturnedName));
+			TestEqual("State name matches request", ReturnedName, FString(TEXT("RenamedByNodeGuid")));
+		});
+
+		It("Fails naming both accepted args when neither guid is supplied", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("new_name"), TEXT("Anything"));
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("ld.rename_state")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+			TestTrue("Error names 'state_guid'", Result.ErrorMessage.Contains(TEXT("state_guid")));
+			TestTrue("Error names 'node_guid'", Result.ErrorMessage.Contains(TEXT("node_guid")));
+		});
+
+		It("Reports the arg the caller sent when its guid does not parse", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("node_guid"), TEXT("not-a-guid"));
+			Args->SetStringField(TEXT("new_name"), TEXT("Anything"));
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("ld.rename_state")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+			TestTrue("Error names the arg that was sent",
+				Result.ErrorMessage.Contains(TEXT("'node_guid'")));
+		});
 	});
 
 	Describe("ld.set_initial_state", [this]()

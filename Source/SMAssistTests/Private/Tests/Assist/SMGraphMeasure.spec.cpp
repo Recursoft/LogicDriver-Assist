@@ -475,6 +475,117 @@ void FSMGraphMeasureSpec::Define()
 		TestEqual(TEXT("a spliced reroute reports no marker collision"), TransitionOverlapCount(View), 0);
 	});
 
+	It("describes a rerouted transition by its segments and its rail order", [this]()
+	{
+		const FString Asset = CreateBlueprint();
+		if (!TestTrue(TEXT("Blueprint created"), !Asset.IsEmpty()))
+		{
+			return;
+		}
+
+		const FString From = AddStateAt(Asset, TEXT("From"), 0.0, 0.0);
+		const FString To = AddStateAt(Asset, TEXT("To"), 900.0, 0.0);
+		if (!TestTrue(TEXT("states created"), !From.IsEmpty() && !To.IsEmpty()))
+		{
+			return;
+		}
+
+		const FString Transition = AddTransition(Asset, From, To);
+		if (!TestTrue(TEXT("transition created"), !Transition.IsEmpty()))
+		{
+			return;
+		}
+
+		const TSharedRef<FJsonObject> RerouteArgs = MakeShared<FJsonObject>();
+		RerouteArgs->SetStringField(TEXT("asset_path"), Asset);
+		RerouteArgs->SetStringField(TEXT("transition_guid"), Transition);
+		RerouteArgs->SetNumberField(TEXT("position_x"), 450.0);
+		RerouteArgs->SetNumberField(TEXT("position_y"), 200.0);
+		if (!TestTrue(TEXT("reroute created"), Run(TEXT("ld.add_transition_reroute"), RerouteArgs).bSuccess))
+		{
+			return;
+		}
+
+		if (!CanMeasure())
+		{
+			return;
+		}
+
+		const FSMAssistOperationResult View = GetGraphView(Asset);
+		if (!TestTrue(FString::Printf(TEXT("get_graph_view succeeded (%s)"), *View.ErrorMessage), View.bSuccess))
+		{
+			return;
+		}
+
+		// One reroute splits the transition into two drawn segments. Both report the same two states, so
+		// only primary_transition_guid says they are one transition, and only the segment fields say where
+		// each piece runs.
+		const TArray<TSharedPtr<FJsonValue>>* Transitions = nullptr;
+		if (!TestTrue(TEXT("payload has 'transitions'"), View.Payload->TryGetArrayField(TEXT("transitions"), Transitions)))
+		{
+			return;
+		}
+		TestEqual(TEXT("the rail draws two segments"), Transitions->Num(), 2);
+
+		TSet<FString> PrimaryGuids;
+		TSet<FString> SegmentEnds;
+		for (const TSharedPtr<FJsonValue>& Value : *Transitions)
+		{
+			const TSharedPtr<FJsonObject>& Entry = Value->AsObject();
+			FString Primary;
+			if (Entry->TryGetStringField(TEXT("primary_transition_guid"), Primary))
+			{
+				PrimaryGuids.Add(Primary);
+			}
+			FString SegmentFrom;
+			FString SegmentTo;
+			Entry->TryGetStringField(TEXT("segment_from_guid"), SegmentFrom);
+			Entry->TryGetStringField(TEXT("segment_to_guid"), SegmentTo);
+			SegmentEnds.Add(SegmentFrom);
+			SegmentEnds.Add(SegmentTo);
+		}
+		TestEqual(TEXT("both segments name one transition"), PrimaryGuids.Num(), 1);
+
+		const TArray<TSharedPtr<FJsonValue>>* Nodes = nullptr;
+		if (!TestTrue(TEXT("payload has 'nodes'"), View.Payload->TryGetArrayField(TEXT("nodes"), Nodes)))
+		{
+			return;
+		}
+
+		int32 RerouteCount = 0;
+		for (const TSharedPtr<FJsonValue>& Value : *Nodes)
+		{
+			const TSharedPtr<FJsonObject>& Entry = Value->AsObject();
+			FString Kind;
+			Entry->TryGetStringField(TEXT("kind"), Kind);
+			if (Kind != TEXT("reroute"))
+			{
+				continue;
+			}
+
+			++RerouteCount;
+
+			FString OwningTransition;
+			TestTrue(TEXT("the reroute names its transition"),
+				Entry->TryGetStringField(TEXT("transition_guid"), OwningTransition));
+			TestTrue(TEXT("the reroute names the transition its segments report"),
+				PrimaryGuids.Contains(OwningTransition));
+
+			double ChainIndex = -1.0;
+			TestTrue(TEXT("the reroute reports its place on the rail"),
+				Entry->TryGetNumberField(TEXT("chain_index"), ChainIndex));
+			TestEqual(TEXT("the only reroute is first on the rail"), static_cast<int32>(ChainIndex), 0);
+
+			FString RerouteGuid;
+			Entry->TryGetStringField(TEXT("node_guid"), RerouteGuid);
+			TestTrue(TEXT("a segment is drawn to the reroute"), SegmentEnds.Contains(RerouteGuid));
+		}
+		TestEqual(TEXT("one reroute is reported"), RerouteCount, 1);
+
+		TestTrue(TEXT("the rail still runs between the two states"),
+			SegmentEnds.Contains(From) && SegmentEnds.Contains(To));
+	});
+
 	It("measures a bare state at its rendered size rather than a placeholder", [this]()
 	{
 		const FString Asset = CreateBlueprint();

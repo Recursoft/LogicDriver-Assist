@@ -176,6 +176,75 @@ namespace LD::Assist::Layout::Private
 		return false;
 	}
 
+	// How many transitions are left drawn through a state once routing has run. Counted on the polyline
+	// the editor will draw, so an edge carried on a rail is judged by the rail and not by the straight
+	// line it would otherwise have taken. This is the number route_edges moves, so reporting it is what
+	// lets a caller see what turning routing off just cost.
+	int32 CountEdgesDrawnThroughNodes(
+		const TArray<FLayoutNode>& InPlaced,
+		const TArray<FLayoutEdge>& InEdges,
+		const TArray<FLayoutReroute>& InReroutes,
+		float InPadding)
+	{
+		TMap<FGuid, const FLayoutNode*> NodeByGuid;
+		NodeByGuid.Reserve(InPlaced.Num());
+		for (const FLayoutNode& Node : InPlaced)
+		{
+			NodeByGuid.Add(Node.NodeGuid, &Node);
+		}
+
+		TMap<FGuid, TArray<const FLayoutReroute*>> RailByTransition;
+		for (const FLayoutReroute& Reroute : InReroutes)
+		{
+			RailByTransition.FindOrAdd(Reroute.TransitionGuid).Add(&Reroute);
+		}
+		for (TPair<FGuid, TArray<const FLayoutReroute*>>& Rail : RailByTransition)
+		{
+			Rail.Value.Sort([](const FLayoutReroute& A, const FLayoutReroute& B)
+			{
+				return A.ChainIndex < B.ChainIndex;
+			});
+		}
+
+		int32 Total = 0;
+		for (const FLayoutEdge& Edge : InEdges)
+		{
+			if (Edge.FromGuid == Edge.ToGuid)
+			{
+				continue;
+			}
+
+			const FLayoutNode* const* FromPtr = NodeByGuid.Find(Edge.FromGuid);
+			const FLayoutNode* const* ToPtr = NodeByGuid.Find(Edge.ToGuid);
+			if (!FromPtr || !ToPtr)
+			{
+				continue;
+			}
+
+			TArray<FVector2f> Points;
+			Points.Add((*FromPtr)->NewPosition + (*FromPtr)->WidgetSize * 0.5f);
+			if (const TArray<const FLayoutReroute*>* Rail = RailByTransition.Find(Edge.TransitionGuid))
+			{
+				for (const FLayoutReroute* Reroute : *Rail)
+				{
+					Points.Add(Reroute->Position + FVector2f(DefaultRerouteSize, DefaultRerouteSize) * 0.5f);
+				}
+			}
+			Points.Add((*ToPtr)->NewPosition + (*ToPtr)->WidgetSize * 0.5f);
+
+			for (int32 PointIdx = 0; PointIdx + 1 < Points.Num(); ++PointIdx)
+			{
+				if (SegmentCrossesAnyNode(
+					Points[PointIdx], Points[PointIdx + 1], InPlaced, Edge.FromGuid, Edge.ToGuid, InPadding))
+				{
+					++Total;
+					break;
+				}
+			}
+		}
+		return Total;
+	}
+
 	// How many transitions a reader would see drawn through a state box. This is the thing ordering is
 	// trying to avoid, and it cannot be measured from the order alone, because a box has no position
 	// until coordinates are assigned.
@@ -1259,6 +1328,9 @@ namespace LD::Assist::Layout
 		{
 			Private::PlanReroutes(Combined, In.Edges, BackEdges, In, Result.Reroutes);
 		}
+
+		Result.EdgesThroughStates = Private::CountEdgesDrawnThroughNodes(
+			Combined, In.Edges, Result.Reroutes, In.RowGap * 0.5f);
 
 		Private::DetectPinnedOverlaps(Combined, Result.Warnings);
 		Private::DetectEntryNodeOverlaps(Combined, In, Result.Warnings);

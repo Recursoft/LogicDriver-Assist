@@ -684,10 +684,18 @@ public:
 	 *         'transition_overlaps' is the same shape and reports transition markers and reroutes stacked on
 	 *         each other, which hides a transition and which state spacing does not fix; add a reroute to
 	 *         separate them, and re-read the array afterwards since reroutes are scanned too.
+	 *         A rerouted transition is drawn as one segment per reroute node plus one, and every segment
+	 *         repeats the same from_state_guid and to_state_guid, so count transitions by
+	 *         primary_transition_guid rather than by entries. Each transition entry also carries
+	 *         segment_from_guid and segment_to_guid, the two nodes that segment is drawn between (either
+	 *         may be a reroute); each reroute node entry carries transition_guid, equal to the
+	 *         primary_transition_guid its segments report, and chain_index, its place along that
+	 *         transition's rail counting from the source state. Together they give the polyline the
+	 *         editor draws. Both reroute fields are omitted when the chain could not be walked.
 	 *         Read 'measurement_warnings' first: when it is non-empty, part of the graph could not be
 	 *         measured and empty overlap arrays then mean unmeasured rather than clean. Empty arrays mean
 	 *         nothing collides, not that the graph reads well: a transition line routed across an
-	 *         intervening state is invisible to both, so capture the graph to judge readability.
+	 *         intervening state is invisible to both, so test the polyline above or capture the graph.
 	 */
 	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
 	static FString GetGraphView(
@@ -705,9 +713,10 @@ public:
 	 * @param Blueprint The blueprint to capture. Required.
 	 * @param bClipToPanel Clip the capture to the editor's graph-panel widget. Default true.
 	 * @param bFitToContent Auto-fit the view to the graph contents before capture. Default true.
-	 * @param NodeGuid GUID of a single node to focus on. Empty = capture the whole graph.
+	 * @param NodeGuid GUID of a single node to focus on within the captured graph. Empty = capture the whole graph.
 	 * @param OutputSubdir Output folder under Saved/. Empty = "LogicDriver".
-	 * @param Prefix File-name prefix for the screenshot. Empty = no prefix.
+	 * @param Prefix File-name prefix for the screenshot. Empty = "<BlueprintName>_<timestamp>", or "<BlueprintName>_<GraphName>_<timestamp>" when ParentStateGuid names a nested graph.
+	 * @param ParentStateGuid Guid of a nested state machine node (kind 'state_machine_state') whose graph to capture instead of the root graph. Opens that graph's tab in the editor. Empty = the root state machine graph.
 	 * @return JSON: { asset_path, path, width, height, bytes, mime }
 	 */
 	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
@@ -717,7 +726,8 @@ public:
 		bool bFitToContent = true,
 		const FString& NodeGuid = TEXT(""),
 		const FString& OutputSubdir = TEXT(""),
-		const FString& Prefix = TEXT(""));
+		const FString& Prefix = TEXT(""),
+		const FString& ParentStateGuid = TEXT(""));
 
 	/**
 	 * Captures a single SM node's local (bound) graph as a PNG, saved under the configured Saved/
@@ -725,8 +735,10 @@ public:
 	 * logic as data, this renders it. Use it to actually see the K2 logic inside a transition's
 	 * CanEnterTransition graph, a conduit's graph, or a state's OnStateBegin/Update/End graph (e.g. a
 	 * TimeInState -> Greater -> bCanEnterTransition gate) -- something CaptureGraphView cannot do, because
-	 * that op always frames the root state machine graph. The bound graph is resolved from NodeGuid
-	 * exactly like GetLocalGraph (reroutes normalize to the primary transition). The PNG is non-trivial in
+	 * that op frames a state machine graph. Use CaptureGraphView with ParentStateGuid for a nested state
+	 * machine's own graph, and this op for the K2 logic bound to a single node. The bound graph is
+	 * resolved from NodeGuid exactly like GetLocalGraph (reroutes normalize to the primary transition).
+	 * The PNG is non-trivial in
 	 * image tokens, so call only when the bound-graph logic is in visual question, not reflexively.
 	 * @param Blueprint The blueprint owning the node. Required.
 	 * @param NodeGuid GUID of the state/transition/conduit/reroute node whose local graph to capture. Required.

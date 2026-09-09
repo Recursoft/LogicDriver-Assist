@@ -205,6 +205,27 @@ namespace LD::Assist::Private
 		return false;
 	}
 
+	// 'node_guid' is accepted alongside 'state_guid' because that is the field name ld.get_graph_view
+	// uses for every node, so a caller reading a graph does not have to rename it. OutArgName reports
+	// which of the two was read, so a later message about the value names the arg the caller sent.
+	static bool TryGetStateGuidArg(const TSharedRef<FJsonObject>& InArgs, FString& OutGuidStr,
+		const TCHAR*& OutArgName, FString& OutError)
+	{
+		if (InArgs->TryGetStringField(Args::StateGuid, OutGuidStr) && !OutGuidStr.IsEmpty())
+		{
+			OutArgName = Args::StateGuid;
+			return true;
+		}
+		if (InArgs->TryGetStringField(Args::NodeGuid, OutGuidStr) && !OutGuidStr.IsEmpty())
+		{
+			OutArgName = Args::NodeGuid;
+			return true;
+		}
+		OutArgName = Args::StateGuid;
+		OutError = TEXT("Missing required arg 'state_guid' (or 'node_guid', which is accepted for it).");
+		return false;
+	}
+
 	// Resolve the optional 'parent_state_guid' arg to the nested state machine graph an op should act
 	// on. An absent guid leaves OutGraph null, which every caller treats as the blueprint root graph.
 	static bool ResolveTargetStateMachineGraph(const TSharedRef<FJsonObject>& InArgs, USMBlueprint* InBlueprint,
@@ -1732,9 +1753,13 @@ FSMAssistOperationResult LD::Assist::RenameState(const TSharedRef<FJsonObject>& 
 	}
 
 	FString NodeGuidStr;
-	if (!InArgs->TryGetStringField(Args::StateGuid, NodeGuidStr))
+	const TCHAR* GuidArgName = Args::StateGuid;
 	{
-		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'state_guid'."));
+		FString GuidArgError;
+		if (!LD::Assist::Private::TryGetStateGuidArg(InArgs, NodeGuidStr, GuidArgName, GuidArgError))
+		{
+			return FSMAssistOperationResult::MakeError(GuidArgError);
+		}
 	}
 
 	FString NewName;
@@ -1753,7 +1778,7 @@ FSMAssistOperationResult LD::Assist::RenameState(const TSharedRef<FJsonObject>& 
 	if (!FGuid::Parse(NodeGuidStr, NodeGuid))
 	{
 		return FSMAssistOperationResult::MakeError(
-			FString::Printf(TEXT("Invalid 'state_guid' '%s'."), *NodeGuidStr));
+			FString::Printf(TEXT("Invalid '%s' '%s'."), GuidArgName, *NodeGuidStr));
 	}
 
 	FString LoadError;
@@ -1792,16 +1817,20 @@ FSMAssistOperationResult LD::Assist::SetInitialState(const TSharedRef<FJsonObjec
 	}
 
 	FString StateGuidStr;
-	if (!InArgs->TryGetStringField(Args::StateGuid, StateGuidStr))
+	const TCHAR* GuidArgName = Args::StateGuid;
 	{
-		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'state_guid'."));
+		FString GuidArgError;
+		if (!LD::Assist::Private::TryGetStateGuidArg(InArgs, StateGuidStr, GuidArgName, GuidArgError))
+		{
+			return FSMAssistOperationResult::MakeError(GuidArgError);
+		}
 	}
 
 	FGuid StateGuid;
 	if (!FGuid::Parse(StateGuidStr, StateGuid))
 	{
 		return FSMAssistOperationResult::MakeError(
-			FString::Printf(TEXT("Invalid 'state_guid' '%s'."), *StateGuidStr));
+			FString::Printf(TEXT("Invalid '%s' '%s'."), GuidArgName, *StateGuidStr));
 	}
 
 	FString LoadError;
@@ -1863,9 +1892,13 @@ FSMAssistOperationResult LD::Assist::AddStateStack(const TSharedRef<FJsonObject>
 	}
 
 	FString StateGuidStr;
-	if (!InArgs->TryGetStringField(Args::StateGuid, StateGuidStr))
+	const TCHAR* GuidArgName = Args::StateGuid;
 	{
-		return FSMAssistOperationResult::MakeError(TEXT("Missing required arg 'state_guid'."));
+		FString GuidArgError;
+		if (!LD::Assist::Private::TryGetStateGuidArg(InArgs, StateGuidStr, GuidArgName, GuidArgError))
+		{
+			return FSMAssistOperationResult::MakeError(GuidArgError);
+		}
 	}
 
 	FString StateClassPath;
@@ -1878,7 +1911,7 @@ FSMAssistOperationResult LD::Assist::AddStateStack(const TSharedRef<FJsonObject>
 	if (!FGuid::Parse(StateGuidStr, StateGuid))
 	{
 		return FSMAssistOperationResult::MakeError(
-			FString::Printf(TEXT("Invalid 'state_guid' '%s'."), *StateGuidStr));
+			FString::Printf(TEXT("Invalid '%s' '%s'."), GuidArgName, *StateGuidStr));
 	}
 
 	FString LengthError;
@@ -3320,6 +3353,38 @@ FSMAssistOperationResult LD::Assist::GetGraphView(const TSharedRef<FJsonObject>&
 		}
 	}
 
+	// Which transition each reroute node belongs to, and its place along that transition's rail counting
+	// from the source state. Walked from the transitions because USMGraphNode_RerouteNode is MinimalAPI,
+	// so its own chain accessors are not callable from here.
+	//
+	// IsPrimaryReroutedTransition is also true for a lone transition, so IsRerouted has to gate it or
+	// every plain transition in the graph pays for a chain walk.
+	struct FRerouteOwner
+	{
+		FGuid TransitionGuid;
+		int32 ChainIndex = 0;
+	};
+	TMap<FGuid, FRerouteOwner> RerouteOwners;
+	for (UEdGraphNode* Node : TargetGraph->Nodes)
+	{
+		USMGraphNode_TransitionEdge* TransitionEdge = Cast<USMGraphNode_TransitionEdge>(Node);
+		if (!TransitionEdge || !TransitionEdge->IsRerouted() || !TransitionEdge->IsPrimaryReroutedTransition())
+		{
+			continue;
+		}
+
+		TArray<USMGraphNode_TransitionEdge*> ChainTransitions;
+		TArray<USMGraphNode_RerouteNode*> ChainReroutes;
+		TransitionEdge->GetAllReroutedTransitions(ChainTransitions, ChainReroutes);
+		for (int32 ChainIdx = 0; ChainIdx < ChainReroutes.Num(); ++ChainIdx)
+		{
+			if (const USMGraphNode_RerouteNode* Reroute = ChainReroutes[ChainIdx])
+			{
+				RerouteOwners.Add(Reroute->NodeGuid, FRerouteOwner{ TransitionEdge->NodeGuid, ChainIdx });
+			}
+		}
+	}
+
 	TArray<TSharedPtr<FJsonValue>> NodesArray;
 	TArray<TSharedPtr<FJsonValue>> TransitionsArray;
 
@@ -3365,7 +3430,7 @@ FSMAssistOperationResult LD::Assist::GetGraphView(const TSharedRef<FJsonObject>&
 
 		if (bIsTransition)
 		{
-			if (const USMGraphNode_TransitionEdge* TransitionEdge = Cast<USMGraphNode_TransitionEdge>(Node))
+			if (USMGraphNode_TransitionEdge* TransitionEdge = Cast<USMGraphNode_TransitionEdge>(Node))
 			{
 				if (const USMGraphNode_StateNodeBase* FromState = TransitionEdge->GetFromState())
 				{
@@ -3375,7 +3440,28 @@ FSMAssistOperationResult LD::Assist::GetGraphView(const TSharedRef<FJsonObject>&
 				{
 					Entry->SetStringField(Args::ToStateGuid, ToState->NodeGuid.ToString());
 				}
+
+				// The segment fields, not from_state_guid and to_state_guid, say where a rerouted
+				// transition is drawn: every segment of a chain reports the same two states.
+				if (const USMGraphNode_StateNodeBase* SegmentFrom = TransitionEdge->GetFromState(/*bIncludeReroute=*/true))
+				{
+					Entry->SetStringField(Args::SegmentFromGuid, SegmentFrom->NodeGuid.ToString());
+				}
+				if (const USMGraphNode_StateNodeBase* SegmentTo = TransitionEdge->GetToState(/*bIncludeReroute=*/true))
+				{
+					Entry->SetStringField(Args::SegmentToGuid, SegmentTo->NodeGuid.ToString());
+				}
+				const USMGraphNode_TransitionEdge* PrimaryTransition = TransitionEdge->GetPrimaryReroutedTransition();
+				Entry->SetStringField(Args::PrimaryTransitionGuid,
+					(PrimaryTransition ? PrimaryTransition->NodeGuid : TransitionEdge->NodeGuid).ToString());
 			}
+		}
+		else if (const FRerouteOwner* Owner = RerouteOwners.Find(Node->NodeGuid))
+		{
+			// A reroute whose chain could not be walked reaches neither branch, so it is emitted without
+			// these two rather than with a guessed owner.
+			Entry->SetStringField(Args::TransitionGuid, Owner->TransitionGuid.ToString());
+			Entry->SetNumberField(Args::ChainIndex, Owner->ChainIndex);
 		}
 
 		if (bIncludePins)
@@ -3469,6 +3555,36 @@ FSMAssistOperationResult LD::Assist::CaptureGraphView(const TSharedRef<FJsonObje
 		return FSMAssistOperationResult::MakeError(LoadError);
 	}
 
+	FString EditorError;
+	FBlueprintEditor* BlueprintEditor = LD::Assist::GraphView::FindOrOpenBlueprintEditor(Blueprint, EditorError);
+	if (!BlueprintEditor)
+	{
+		return FSMAssistOperationResult::MakeError(EditorError);
+	}
+
+	USMGraph* TargetGraph = nullptr;
+	{
+		FString TargetGraphError;
+		if (!LD::Assist::Private::ResolveTargetStateMachineGraph(InArgs, Blueprint, TargetGraph, TargetGraphError))
+		{
+			return FSMAssistOperationResult::MakeError(TargetGraphError);
+		}
+	}
+
+	FString DefaultPrefixName = Blueprint->GetName();
+	if (TargetGraph)
+	{
+		DefaultPrefixName = FString::Printf(TEXT("%s_%s"), *Blueprint->GetName(), *TargetGraph->GetName());
+	}
+	else
+	{
+		TargetGraph = LD::Assist::Utils::GetRootStateMachineGraph(Blueprint);
+		if (!TargetGraph)
+		{
+			return FSMAssistOperationResult::MakeError(TEXT("Blueprint has no root state machine graph."));
+		}
+	}
+
 	USMGraphNode_Base* FocusNode = nullptr;
 	if (bHasNodeGuid)
 	{
@@ -3478,24 +3594,22 @@ FSMAssistOperationResult LD::Assist::CaptureGraphView(const TSharedRef<FJsonObje
 			return FSMAssistOperationResult::MakeError(
 				FString::Printf(TEXT("Could not find node with guid '%s'."), *NodeGuidStr));
 		}
-	}
 
-	FString EditorError;
-	FBlueprintEditor* BlueprintEditor = LD::Assist::GraphView::FindOrOpenBlueprintEditor(Blueprint, EditorError);
-	if (!BlueprintEditor)
-	{
-		return FSMAssistOperationResult::MakeError(EditorError);
-	}
-
-	USMGraph* RootGraph = LD::Assist::Utils::GetRootStateMachineGraph(Blueprint);
-	if (!RootGraph)
-	{
-		return FSMAssistOperationResult::MakeError(TEXT("Blueprint has no root state machine graph."));
+		// FindNodeByGuid searches every graph in the asset, so the node can belong to a different graph
+		// than the one being captured. Framing looks the node up on the captured graph's panel, finds no
+		// widget, and gives up, which would return a PNG of that graph at whatever view it happened to
+		// hold under a success status.
+		if (FocusNode->GetGraph() != TargetGraph)
+		{
+			return FSMAssistOperationResult::MakeError(FString::Printf(
+				TEXT("Node '%s' is not in the graph being captured. Omit 'parent_state_guid' to capture the graph that owns it, or pass the guid of that graph's own state machine node."),
+				*NodeGuidStr));
+		}
 	}
 
 	return LD::Assist::GraphView::CaptureGraphToPng(
-		BlueprintEditor, RootGraph, Blueprint, FocusNode,
-		bClipToPanel, bFitToContent, OutputSubdir, Prefix, Blueprint->GetName());
+		BlueprintEditor, TargetGraph, Blueprint, FocusNode,
+		bClipToPanel, bFitToContent, OutputSubdir, Prefix, DefaultPrefixName);
 }
 
 FSMAssistOperationResult LD::Assist::ClearScreenshots(const TSharedRef<FJsonObject>& InArgs)
@@ -4385,6 +4499,23 @@ FSMAssistOperationResult LD::Assist::LayoutStates(const TSharedRef<FJsonObject>&
 		return FSMAssistOperationResult::MakeError(TEXT("Blueprint has no root state machine graph."));
 	}
 
+	// 'parent_state_guid' moves the base of the layout to one nested state machine, and 'scope' keeps
+	// its meaning against that base: 'root' lays out only that graph, 'all' lays out it and everything
+	// nested under it. Without it there is no way to lay out a single nested graph, and a caller who
+	// passes it expecting one, as ld.get_graph_view accepts it, gets the whole asset re-laid instead.
+	USMGraph* BaseGraph = nullptr;
+	{
+		FString BaseGraphError;
+		if (!LD::Assist::Private::ResolveTargetStateMachineGraph(InArgs, Blueprint, BaseGraph, BaseGraphError))
+		{
+			return FSMAssistOperationResult::MakeError(BaseGraphError);
+		}
+	}
+	if (!BaseGraph)
+	{
+		BaseGraph = RootGraph;
+	}
+
 	FString EditorError;
 	FBlueprintEditor* BlueprintEditor = LD::Assist::GraphView::FindOrOpenBlueprintEditor(Blueprint, EditorError);
 	if (!BlueprintEditor)
@@ -4407,14 +4538,14 @@ FSMAssistOperationResult LD::Assist::LayoutStates(const TSharedRef<FJsonObject>&
 	TArray<LD::Assist::Private::FStateMachineGraphEntry> GraphsToLayout;
 	if (bScopeAll)
 	{
-		LD::Assist::Private::CollectStateMachineGraphs(RootGraph, GraphsToLayout);
+		LD::Assist::Private::CollectStateMachineGraphs(BaseGraph, GraphsToLayout);
 	}
 	else
 	{
-		LD::Assist::Private::FStateMachineGraphEntry RootEntry;
-		RootEntry.Graph = RootGraph;
-		RootEntry.GraphPath = RootGraph->GetName();
-		GraphsToLayout.Add(MoveTemp(RootEntry));
+		LD::Assist::Private::FStateMachineGraphEntry BaseEntry;
+		BaseEntry.Graph = BaseGraph;
+		BaseEntry.GraphPath = BaseGraph->GetName();
+		GraphsToLayout.Add(MoveTemp(BaseEntry));
 	}
 
 	const float SnapGridSize = static_cast<float>(SNodePanel::GetSnapGridSize());
@@ -4615,6 +4746,7 @@ FSMAssistOperationResult LD::Assist::LayoutStates(const TSharedRef<FJsonObject>&
 	Payload->SetNumberField(Args::Passes, PassesRun);
 	Payload->SetNumberField(Args::IconLocationAdjustments, IconAdjustments);
 
+	int32 EdgesThroughStatesTotal = 0;
 	TArray<TSharedPtr<FJsonValue>> GraphsArray;
 	GraphsArray.Reserve(GraphContexts.Num());
 	for (const LD::Assist::Private::FLayoutGraphContext& Context : GraphContexts)
@@ -4670,10 +4802,13 @@ FSMAssistOperationResult LD::Assist::LayoutStates(const TSharedRef<FJsonObject>&
 		}
 		GraphEntry->SetArrayField(Args::Reroutes, RerouteArray);
 		GraphEntry->SetNumberField(Args::ReroutesAdded, Context.ReroutesAdded);
+		GraphEntry->SetNumberField(Args::EdgesThroughStates, Context.Result.EdgesThroughStates);
+		EdgesThroughStatesTotal += Context.Result.EdgesThroughStates;
 
 		GraphsArray.Add(MakeShared<FJsonValueObject>(GraphEntry));
 	}
 	Payload->SetArrayField(Args::Graphs, GraphsArray);
+	Payload->SetNumberField(Args::EdgesThroughStates, EdgesThroughStatesTotal);
 
 	// Op-level rather than per-graph: every graph in scope is measured, and each entry is prefixed with
 	// the graph path it came from. A layout computed from partial measurements can still overlap. A

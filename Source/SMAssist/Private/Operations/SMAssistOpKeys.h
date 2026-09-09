@@ -85,6 +85,9 @@ namespace LD::Assist::Args
 
 	inline constexpr const TCHAR* FromStateGuid = TEXT("from_state_guid");
 	inline constexpr const TCHAR* ToStateGuid = TEXT("to_state_guid");
+	inline constexpr const TCHAR* SegmentFromGuid = TEXT("segment_from_guid");
+	inline constexpr const TCHAR* SegmentToGuid = TEXT("segment_to_guid");
+	inline constexpr const TCHAR* PrimaryTransitionGuid = TEXT("primary_transition_guid");
 	inline constexpr const TCHAR* TransitionGuid = TEXT("transition_guid");
 	inline constexpr const TCHAR* TransitionClass = TEXT("transition_class");
 	inline constexpr const TCHAR* Gate = TEXT("gate");
@@ -198,6 +201,7 @@ namespace LD::Assist::Args
 	inline constexpr const TCHAR* ReroutesAdded = TEXT("reroutes_added");
 	inline constexpr const TCHAR* ChainIndex = TEXT("chain_index");
 	inline constexpr const TCHAR* Passes = TEXT("passes");
+	inline constexpr const TCHAR* EdgesThroughStates = TEXT("edges_through_states");
 	inline constexpr const TCHAR* IconLocationAdjustments = TEXT("icon_location_adjustments");
 
 	inline constexpr const TCHAR* VariableName = TEXT("variable_name");
