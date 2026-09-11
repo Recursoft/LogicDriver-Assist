@@ -48,6 +48,7 @@
 #include "Algo/Reverse.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
+#include "BlueprintEditor.h"
 #include "K2Node.h"
 #include "K2Node_CallFunction.h"
 #include "K2Node_DynamicCast.h"
