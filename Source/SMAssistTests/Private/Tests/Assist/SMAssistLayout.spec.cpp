@@ -90,6 +90,42 @@ BEGIN_DEFINE_SPEC(FSMAssistLayoutSpec, "LogicDriver.Assist.Layout",
 		return Run(TEXT("ld.get_graph_view"), Args);
 	}
 
+	bool SetTransitionPriority(const FString& InAsset, const FString& InTransitionGuid, int32 InPriority)
+	{
+		const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+		Args->SetStringField(TEXT("asset_path"), InAsset);
+		Args->SetStringField(TEXT("node_guid"), InTransitionGuid);
+		Args->SetStringField(TEXT("property_name"), TEXT("PriorityOrder"));
+		Args->SetStringField(TEXT("value"), FString::FromInt(InPriority));
+		return Run(TEXT("ld.set_node_property"), Args).bSuccess;
+	}
+
+	// Every transition's priority, keyed by the transition's own node guid, read back off the graph.
+	TMap<FString, int32> TransitionPriorities(const FString& InAsset)
+	{
+		TMap<FString, int32> Priorities;
+		const FSMAssistOperationResult Result = GetGraphView(InAsset);
+		const TArray<TSharedPtr<FJsonValue>>* Transitions = nullptr;
+		if (!Result.Payload.IsValid() || !Result.Payload->TryGetArrayField(TEXT("transitions"), Transitions))
+		{
+			return Priorities;
+		}
+
+		for (const TSharedPtr<FJsonValue>& Value : *Transitions)
+		{
+			const TSharedPtr<FJsonObject>* Entry = nullptr;
+			FString Guid;
+			double Priority = 0.0;
+			if (Value->TryGetObject(Entry)
+				&& (*Entry)->TryGetStringField(TEXT("node_guid"), Guid)
+				&& (*Entry)->TryGetNumberField(TEXT("priority"), Priority))
+			{
+				Priorities.Add(Guid, static_cast<int32>(Priority));
+			}
+		}
+		return Priorities;
+	}
+
 	static int32 ArrayCount(const FSMAssistOperationResult& InResult, const TCHAR* InField)
 	{
 		const TArray<TSharedPtr<FJsonValue>>* Array = nullptr;
@@ -666,6 +702,67 @@ void FSMAssistLayoutSpec::Define()
 		double Passes = 0.0;
 		TestTrue(TEXT("passes is reported"), Result.Payload->TryGetNumberField(TEXT("passes"), Passes));
 		TestEqual(TEXT("one graph with one state needs a single pass"), static_cast<int32>(Passes), 1);
+	});
+
+	// The layout reads PriorityOrder to order one state's outgoing siblings and must never write it. It
+	// decides which transition is evaluated first at runtime, so renumbering it to match a visual order
+	// would change what the state machine does. Only the editor-driven spec can see this: the compute
+	// spec hands ComputeLayout a priority it made up, and never touches a real transition template.
+	It("leaves every transition priority unchanged", [this]()
+	{
+		const FString Asset = CreateBlueprint();
+		const FString Hub = AddState(Asset, TEXT("Hub"), /*bIsEntry=*/true);
+		const FString Alpha = AddState(Asset, TEXT("Alpha"));
+		const FString Bravo = AddState(Asset, TEXT("Bravo"));
+		const FString Charlie = AddState(Asset, TEXT("Charlie"));
+		const FString ToAlpha = AddTransition(Asset, Hub, Alpha);
+		const FString ToBravo = AddTransition(Asset, Hub, Bravo);
+		const FString ToCharlie = AddTransition(Asset, Hub, Charlie);
+		if (!TestTrue(TEXT("the fan was built"),
+			!ToAlpha.IsEmpty() && !ToBravo.IsEmpty() && !ToCharlie.IsEmpty()))
+		{
+			return;
+		}
+
+		// Set against alphabetical order, so a layout that renumbered priorities to match the order it
+		// chose would have to change all three.
+		if (!TestTrue(TEXT("the priorities were set"),
+			SetTransitionPriority(Asset, ToAlpha, 2)
+			&& SetTransitionPriority(Asset, ToBravo, 1)
+			&& SetTransitionPriority(Asset, ToCharlie, 0)))
+		{
+			return;
+		}
+
+		// The gate comes before the first read, not just before the layout: TransitionPriorities goes
+		// through ld.get_graph_view, which opens the asset editor, and opening a window under -NullRHI is
+		// fatal rather than merely unsupported.
+		if (!CanOpenAssetEditor())
+		{
+			return;
+		}
+
+		const TMap<FString, int32> Before = TransitionPriorities(Asset);
+		if (!TestEqual(TEXT("all three priorities read back"), Before.Num(), 3))
+		{
+			return;
+		}
+		TestEqual(TEXT("'Hub to Alpha' starts at 2"), Before.FindRef(ToAlpha), 2);
+		TestEqual(TEXT("'Hub to Bravo' starts at 1"), Before.FindRef(ToBravo), 1);
+		TestEqual(TEXT("'Hub to Charlie' starts at 0"), Before.FindRef(ToCharlie), 0);
+
+		const FSMAssistOperationResult Result = Layout(Asset, /*bApply=*/true);
+		if (!TestTrue(FString::Printf(TEXT("layout_states succeeded (%s)"), *Result.ErrorMessage), Result.bSuccess))
+		{
+			return;
+		}
+
+		const TMap<FString, int32> After = TransitionPriorities(Asset);
+		for (const TPair<FString, int32>& Pair : Before)
+		{
+			TestEqual(FString::Printf(TEXT("priority of '%s' is untouched"), *Pair.Key),
+				After.FindRef(Pair.Key), Pair.Value);
+		}
 	});
 
 	It("errors when asset_path is missing", [this]()

@@ -176,23 +176,40 @@ namespace LD::Assist::Layout::Private
 		return false;
 	}
 
-	// How many transitions are left drawn through a state once routing has run. Counted on the polyline
-	// the editor will draw, so an edge carried on a rail is judged by the rail and not by the straight
-	// line it would otherwise have taken. This is the number route_edges moves, so reporting it is what
-	// lets a caller see what turning routing off just cost.
-	int32 CountEdgesDrawnThroughNodes(
-		const TArray<FLayoutNode>& InPlaced,
-		const TArray<FLayoutEdge>& InEdges,
-		const TArray<FLayoutReroute>& InReroutes,
-		float InPadding)
+	// The path the editor draws for one transition: the source center, every reroute on its rail in
+	// order, then the destination center. Both the crossing count and the marker count read the drawn
+	// path, so they build it the same way here rather than each deciding for itself what gets drawn.
+	void BuildDrawnPolyline(
+		const FLayoutEdge& InEdge,
+		const TMap<FGuid, const FLayoutNode*>& InNodeByGuid,
+		const TMap<FGuid, TArray<const FLayoutReroute*>>& InRailByTransition,
+		float InRerouteSize,
+		TArray<FVector2f>& OutPoints)
 	{
-		TMap<FGuid, const FLayoutNode*> NodeByGuid;
-		NodeByGuid.Reserve(InPlaced.Num());
-		for (const FLayoutNode& Node : InPlaced)
+		OutPoints.Reset();
+
+		const FLayoutNode* const* FromPtr = InNodeByGuid.Find(InEdge.FromGuid);
+		const FLayoutNode* const* ToPtr = InNodeByGuid.Find(InEdge.ToGuid);
+		if (!FromPtr || !ToPtr)
 		{
-			NodeByGuid.Add(Node.NodeGuid, &Node);
+			return;
 		}
 
+		OutPoints.Add((*FromPtr)->NewPosition + (*FromPtr)->WidgetSize * 0.5f);
+		if (const TArray<const FLayoutReroute*>* Rail = InRailByTransition.Find(InEdge.TransitionGuid))
+		{
+			for (const FLayoutReroute* Reroute : *Rail)
+			{
+				OutPoints.Add(Reroute->Position + FVector2f(InRerouteSize, InRerouteSize) * 0.5f);
+			}
+		}
+		OutPoints.Add((*ToPtr)->NewPosition + (*ToPtr)->WidgetSize * 0.5f);
+	}
+
+	// Rails indexed by the transition they carry, each in the order it is walked from source to
+	// destination.
+	TMap<FGuid, TArray<const FLayoutReroute*>> BuildRailIndex(const TArray<FLayoutReroute>& InReroutes)
+	{
 		TMap<FGuid, TArray<const FLayoutReroute*>> RailByTransition;
 		for (const FLayoutReroute& Reroute : InReroutes)
 		{
@@ -205,32 +222,109 @@ namespace LD::Assist::Layout::Private
 				return A.ChainIndex < B.ChainIndex;
 			});
 		}
+		return RailByTransition;
+	}
+
+	// Whether a marker centered on InMidpoint would be drawn over any node's box.
+	bool MarkerLandsOnNode(
+		const FVector2f& InMidpoint,
+		const TArray<FLayoutNode>& InPlaced,
+		const FVector2f& InMarkerSize)
+	{
+		if (InMarkerSize.X <= 0.0f || InMarkerSize.Y <= 0.0f)
+		{
+			return false;
+		}
+
+		const FVector2f MarkerMin = InMidpoint - InMarkerSize * 0.5f;
+		const FVector2f MarkerMax = InMidpoint + InMarkerSize * 0.5f;
+		for (const FLayoutNode& Node : InPlaced)
+		{
+			const FVector2f NodeMin = Node.NewPosition;
+			const FVector2f NodeMax = NodeMin + Node.WidgetSize;
+			if (MarkerMin.X < NodeMax.X && NodeMin.X < MarkerMax.X
+				&& MarkerMin.Y < NodeMax.Y && NodeMin.Y < MarkerMax.Y)
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	// How many transition markers are drawn on top of a state. The editor puts a marker at the midpoint
+	// of every segment it draws, so a railed transition contributes one per segment. A marker there
+	// cannot be read or clicked and it clutters the state underneath, and no amount of state spacing
+	// fixes it once the midpoint lands inside a box, because the midpoint moves with the states.
+	int32 CountMarkersOverNodes(
+		const TArray<FLayoutNode>& InPlaced,
+		const TArray<FLayoutEdge>& InEdges,
+		const TArray<FLayoutReroute>& InReroutes,
+		const FVector2f& InMarkerSize,
+		float InRerouteSize)
+	{
+		if (InMarkerSize.X <= 0.0f || InMarkerSize.Y <= 0.0f)
+		{
+			return 0;
+		}
+
+		TMap<FGuid, const FLayoutNode*> NodeByGuid;
+		NodeByGuid.Reserve(InPlaced.Num());
+		for (const FLayoutNode& Node : InPlaced)
+		{
+			NodeByGuid.Add(Node.NodeGuid, &Node);
+		}
+		const TMap<FGuid, TArray<const FLayoutReroute*>> RailByTransition = BuildRailIndex(InReroutes);
 
 		int32 Total = 0;
+		TArray<FVector2f> Points;
 		for (const FLayoutEdge& Edge : InEdges)
 		{
 			if (Edge.FromGuid == Edge.ToGuid)
 			{
 				continue;
 			}
+			BuildDrawnPolyline(Edge, NodeByGuid, RailByTransition, InRerouteSize, Points);
 
-			const FLayoutNode* const* FromPtr = NodeByGuid.Find(Edge.FromGuid);
-			const FLayoutNode* const* ToPtr = NodeByGuid.Find(Edge.ToGuid);
-			if (!FromPtr || !ToPtr)
+			for (int32 PointIdx = 0; PointIdx + 1 < Points.Num(); ++PointIdx)
+			{
+				if (MarkerLandsOnNode((Points[PointIdx] + Points[PointIdx + 1]) * 0.5f, InPlaced, InMarkerSize))
+				{
+					++Total;
+				}
+			}
+		}
+		return Total;
+	}
+
+	// How many transitions are left drawn through a state once routing has run. Counted on the polyline
+	// the editor will draw, so an edge carried on a rail is judged by the rail and not by the straight
+	// line it would otherwise have taken. This is the number route_edges moves, so reporting it is what
+	// lets a caller see what turning routing off just cost.
+	int32 CountEdgesDrawnThroughNodes(
+		const TArray<FLayoutNode>& InPlaced,
+		const TArray<FLayoutEdge>& InEdges,
+		const TArray<FLayoutReroute>& InReroutes,
+		float InPadding,
+		float InRerouteSize)
+	{
+		TMap<FGuid, const FLayoutNode*> NodeByGuid;
+		NodeByGuid.Reserve(InPlaced.Num());
+		for (const FLayoutNode& Node : InPlaced)
+		{
+			NodeByGuid.Add(Node.NodeGuid, &Node);
+		}
+
+		const TMap<FGuid, TArray<const FLayoutReroute*>> RailByTransition = BuildRailIndex(InReroutes);
+
+		int32 Total = 0;
+		TArray<FVector2f> Points;
+		for (const FLayoutEdge& Edge : InEdges)
+		{
+			if (Edge.FromGuid == Edge.ToGuid)
 			{
 				continue;
 			}
-
-			TArray<FVector2f> Points;
-			Points.Add((*FromPtr)->NewPosition + (*FromPtr)->WidgetSize * 0.5f);
-			if (const TArray<const FLayoutReroute*>* Rail = RailByTransition.Find(Edge.TransitionGuid))
-			{
-				for (const FLayoutReroute* Reroute : *Rail)
-				{
-					Points.Add(Reroute->Position + FVector2f(DefaultRerouteSize, DefaultRerouteSize) * 0.5f);
-				}
-			}
-			Points.Add((*ToPtr)->NewPosition + (*ToPtr)->WidgetSize * 0.5f);
+			BuildDrawnPolyline(Edge, NodeByGuid, RailByTransition, InRerouteSize, Points);
 
 			for (int32 PointIdx = 0; PointIdx + 1 < Points.Num(); ++PointIdx)
 			{
@@ -293,7 +387,12 @@ namespace LD::Assist::Layout::Private
 	}
 
 	// Ordering places each candidate before scoring it, so it needs the coordinate pass defined below.
-	void AssignCoordinates(TArray<FLayoutNode>& InOutMain, const FLayoutInput& InInput, const FVector2f& InStart);
+	// InExtraGapAfterLayer widens single layer boundaries past ColumnGap; see WidenLayerGaps.
+	void AssignCoordinates(
+		TArray<FLayoutNode>& InOutMain,
+		const FLayoutInput& InInput,
+		const FVector2f& InStart,
+		const TMap<int32, float>* InExtraGapAfterLayer = nullptr);
 
 	void CategorizeAndPrepare(const FLayoutInput& InInput, TArray<FLayoutNode>& OutMain, TArray<FLayoutNode>& OutSide, TArray<FString>& OutWarnings)
 	{
@@ -632,12 +731,101 @@ namespace LD::Assist::Layout::Private
 		}
 	}
 
+	// The entry state is where a reader starts, and the wire reaching it is drawn from an entry node the
+	// layout never moves. A state with no outgoing transition takes no part in the flow past it, so
+	// stacking it in a layer of states that do pushes those states apart, drags the entry wire across the
+	// whole stack to reach it, and reads as one rung of a ladder it is not on. Give it a column of its
+	// own ahead of the flow instead, next to the entry node, and move every other layer along by one.
+	//
+	// Its own incoming transition is then drawn back toward the start, which is what it means: the state
+	// that feeds it is where the machine goes on to, and this is where it comes to rest. That only holds
+	// when every transition into it comes from the first layer, so the rule asks for that. It also asks
+	// for a state to have been sharing its layer, because a layer of one is already a column of its own.
+	void LiftEntryLeafToOwnColumn(
+		TArray<FLayoutNode>& InOutMain,
+		const TMap<FGuid, TArray<FGuid>>& InSuccessors,
+		const TMap<FGuid, TArray<FGuid>>& InPredecessors,
+		const FGuid& InEntryGuid)
+	{
+		if (!InEntryGuid.IsValid() || InOutMain.Num() == 0)
+		{
+			return;
+		}
+
+		FLayoutNode* Entry = nullptr;
+		int32 FirstLayer = TNumericLimits<int32>::Max();
+		for (FLayoutNode& Node : InOutMain)
+		{
+			if (Node.Layer != INDEX_NONE)
+			{
+				FirstLayer = FMath::Min(FirstLayer, Node.Layer);
+			}
+			if (Node.NodeGuid == InEntryGuid)
+			{
+				Entry = &Node;
+			}
+		}
+
+		if (!Entry || Entry->Layer == INDEX_NONE || Entry->Layer <= FirstLayer)
+		{
+			return;
+		}
+
+		const TArray<FGuid>* Successors = InSuccessors.Find(InEntryGuid);
+		if (Successors && Successors->Num() > 0)
+		{
+			return;
+		}
+
+		const TArray<FGuid>* Predecessors = InPredecessors.Find(InEntryGuid);
+		if (!Predecessors || Predecessors->Num() == 0)
+		{
+			return;
+		}
+
+		TMap<FGuid, int32> LayerByGuid;
+		LayerByGuid.Reserve(InOutMain.Num());
+		int32 LayerMates = 0;
+		for (const FLayoutNode& Node : InOutMain)
+		{
+			LayerByGuid.Add(Node.NodeGuid, Node.Layer);
+			if (Node.Layer == Entry->Layer && Node.NodeGuid != InEntryGuid)
+			{
+				++LayerMates;
+			}
+		}
+		if (LayerMates == 0)
+		{
+			return;
+		}
+
+		for (const FGuid& Predecessor : *Predecessors)
+		{
+			const int32* PredecessorLayer = LayerByGuid.Find(Predecessor);
+			if (!PredecessorLayer || *PredecessorLayer != FirstLayer)
+			{
+				return;
+			}
+		}
+
+		// Every other layer moves along, rather than the entry state moving to FirstLayer - 1, because a
+		// layer of INDEX_NONE means a node the layering could not reach and several passes test for it.
+		for (FLayoutNode& Node : InOutMain)
+		{
+			if (Node.Layer != INDEX_NONE)
+			{
+				++Node.Layer;
+			}
+		}
+		Entry->Layer = FirstLayer;
+	}
+
 	// Initial within-layer order = current secondary-axis position; one barycenter sweep
 	// refines using neighbors in adjacent layers. Tiebreak on name then GUID for determinism.
 	// Choose the within-layer order that draws fewest transitions through a state box. Each candidate
 	// order is placed with the real coordinate pass and then measured, because the objective is about
-	// geometry and the order by itself has none.
-	void OrderWithinLayers(
+	// geometry and the order by itself has none. Returns the score of the order it settled on.
+	int32 OrderWithinLayers(
 		TArray<FLayoutNode>& InOutMain,
 		const TMap<FGuid, TArray<FGuid>>& InSuccessors,
 		const TMap<FGuid, TArray<FGuid>>& InPredecessors,
@@ -671,12 +859,47 @@ namespace LD::Assist::Layout::Private
 			InitialKey.Add(NodeIdx, bRespectExistingOrder ? GetSecondary(Node.OldPosition, InStrategy) : 0.0);
 		}
 
-		auto SortLayer = [&InOutMain, &InitialKey](TArray<int32>& InOutLayerIndices, const TMap<int32, double>& InKey)
+		// Parents in an earlier layer, and the lowest transition priority arriving from one. An edge that
+		// leaves a later layer is a cycle's back-edge, and it says nothing about which sibling comes
+		// first, so it is left out of both. A node reached by no such edge keeps an empty parent set and
+		// MAX_int32, which sorts it after every node that does have a priority.
+		TMap<int32, TSet<FGuid>> ForwardParents;
+		TMap<int32, int32> LowestPriority;
+		ForwardParents.Reserve(InOutMain.Num());
+		LowestPriority.Reserve(InOutMain.Num());
+		for (int32 NodeIdx = 0; NodeIdx < InOutMain.Num(); ++NodeIdx)
 		{
-			Algo::StableSort(InOutLayerIndices, [&InOutMain, &InKey](int32 A, int32 B)
+			ForwardParents.Add(NodeIdx);
+			LowestPriority.Add(NodeIdx, MAX_int32);
+		}
+		for (const FLayoutEdge& Edge : InEdges)
+		{
+			const int32* FromIdx = IndexByGuid.Find(Edge.FromGuid);
+			const int32* ToIdx = IndexByGuid.Find(Edge.ToGuid);
+			if (!FromIdx || !ToIdx || *FromIdx == *ToIdx)
 			{
-				const double KeyA = InKey[A];
-				const double KeyB = InKey[B];
+				continue;
+			}
+			if (InOutMain[*FromIdx].Layer >= InOutMain[*ToIdx].Layer)
+			{
+				continue;
+			}
+			ForwardParents[*ToIdx].Add(Edge.FromGuid);
+			LowestPriority[*ToIdx] = FMath::Min(LowestPriority[*ToIdx], Edge.Priority);
+		}
+
+		// The initial order has to be total, because every sort after it is an Algo::StableSort and so
+		// keeps whatever it was handed whenever the keys tie. Name and GUID are what make it total: with
+		// bRespectExistingOrder off every key is 0, and a graph whose nodes were all added in one batch
+		// has identical authored positions. Without them a layer would fall back to UEdGraph::Nodes
+		// order, which is creation order mutated by every delete, paste and reroute splice, so two assets
+		// built by the same script would lay out differently.
+		auto SortLayerTotal = [&InOutMain, &InitialKey](TArray<int32>& InOutLayerIndices)
+		{
+			Algo::StableSort(InOutLayerIndices, [&InOutMain, &InitialKey](int32 A, int32 B)
+			{
+				const double KeyA = InitialKey[A];
+				const double KeyB = InitialKey[B];
 				if (KeyA != KeyB)
 				{
 					return KeyA < KeyB;
@@ -690,9 +913,85 @@ namespace LD::Assist::Layout::Private
 			});
 		};
 
+		// The sweeps compare the barycenter key and nothing else. Every spoke of a hub shares one
+		// predecessor, so a sweep hands them all the same key, and comparing the name here would throw
+		// away the order the initial sort established and put the layer in alphabetical order instead.
+		// Algo::StableSort keeps the incumbent when the keys tie, which is the right answer when the key
+		// carries no information. The tie is exact rather than approximate: SweepKeys divides an exact
+		// small-integer sum by a count and IEEE division is correctly rounded, so two neighbor-rank means
+		// that are equal as real numbers produce the same double.
+		auto SortLayerByKey = [](TArray<int32>& InOutLayerIndices, const TMap<int32, double>& InKey)
+		{
+			Algo::StableSort(InOutLayerIndices, [&InKey](int32 A, int32 B)
+			{
+				return InKey[A] < InKey[B];
+			});
+		};
+
+		// Transition priority is the order the source state evaluates its transitions in at runtime, so
+		// it is the one signal in the input that carries meaning rather than appearance. The layout reads
+		// it and never writes it, because it decides behavior and is the author's to set.
+		//
+		// It applies in one place only. A priority is numbered per source state, so a number from one
+		// parent means nothing beside a number from another, and a comparator that compared it only
+		// between siblings would not be transitive and would trip Algo::StableSort. Reorder a run of
+		// nodes a sort has left tied instead, and only when every node in the run has the same parents
+		// and the same authored position. The same parents is what makes the numbers comparable. The same
+		// authored position is what says the author has not already arranged these nodes, because an
+		// arrangement someone wrote outranks an evaluation order.
+		//
+		// When a run shares more than one parent, each node's key is the lowest priority over the edges
+		// reaching it, which mixes two independently numbered scales. That is a tie-break, not a claim
+		// about evaluation order: it is applied only where nothing else distinguishes the nodes, and it
+		// is stable, so the run keeps its incumbent order wherever the numbers are equal.
+		auto RefineRunsByPriority = [&InitialKey, &ForwardParents, &LowestPriority](
+			TArray<int32>& InOutLayerIndices, const TMap<int32, double>& InKey)
+		{
+			int32 RunStart = 0;
+			while (RunStart < InOutLayerIndices.Num())
+			{
+				int32 RunEnd = RunStart + 1;
+				while (RunEnd < InOutLayerIndices.Num()
+					&& InKey[InOutLayerIndices[RunEnd]] == InKey[InOutLayerIndices[RunStart]])
+				{
+					++RunEnd;
+				}
+
+				const int32 RunLength = RunEnd - RunStart;
+				if (RunLength > 1)
+				{
+					const int32 FirstIdx = InOutLayerIndices[RunStart];
+					bool bComparable = true;
+					for (int32 Offset = 1; Offset < RunLength && bComparable; ++Offset)
+					{
+						const int32 OtherIdx = InOutLayerIndices[RunStart + Offset];
+						bComparable = InitialKey[OtherIdx] == InitialKey[FirstIdx]
+							&& ForwardParents[OtherIdx].Num() == ForwardParents[FirstIdx].Num()
+							&& ForwardParents[OtherIdx].Includes(ForwardParents[FirstIdx]);
+					}
+
+					if (bComparable)
+					{
+						TArray<int32> Run(InOutLayerIndices.GetData() + RunStart, RunLength);
+						Algo::StableSort(Run, [&LowestPriority](int32 A, int32 B)
+						{
+							return LowestPriority[A] < LowestPriority[B];
+						});
+						for (int32 Offset = 0; Offset < RunLength; ++Offset)
+						{
+							InOutLayerIndices[RunStart + Offset] = Run[Offset];
+						}
+					}
+				}
+
+				RunStart = RunEnd;
+			}
+		};
+
 		for (TPair<int32, TArray<int32>>& Layer : ByLayer)
 		{
-			SortLayer(Layer.Value, InitialKey);
+			SortLayerTotal(Layer.Value);
+			RefineRunsByPriority(Layer.Value, InitialKey);
 		}
 
 		// Sweep ordering, keeping whichever arrangement measures fewest crossings. A single barycenter
@@ -787,13 +1086,19 @@ namespace LD::Assist::Layout::Private
 		TMap<int32, TArray<int32>> BestByLayer = ByLayer;
 		int32 BestScore = ScoreOrder(ByLayer);
 
+		// Alphabetical order is deliberately not scored as a candidate arrangement. Name decides a layer
+		// in the initial sort alone, and only once nothing else distinguishes the nodes. Scoring it here
+		// as a whole arrangement would let one fewer crossing lift it above the order the author wrote,
+		// which inverts the ranking the initial sort sets out.
+
 		for (int32 SweepIdx = 0; SweepIdx < SweepCount && BestScore > 0; ++SweepIdx)
 		{
 			const TMap<int32, int32> Ranks = RanksByIndex();
 			const TMap<int32, double> Keys = SweepKeys(SweepIdx % 2 == 0, Ranks);
 			for (TPair<int32, TArray<int32>>& Layer : ByLayer)
 			{
-				SortLayer(Layer.Value, Keys);
+				SortLayerByKey(Layer.Value, Keys);
+				RefineRunsByPriority(Layer.Value, Keys);
 			}
 
 			const int32 Score = ScoreOrder(ByLayer);
@@ -852,13 +1157,18 @@ namespace LD::Assist::Layout::Private
 			}
 		}
 		InOutMain = MoveTemp(Reordered);
+		return BestScore;
 	}
 
 	// Place each non-pinned main-flow node. Layer primary coordinate is the cumulative sum of
 	// preceding layers' primary extents plus one ColumnGap per layer boundary. Within a layer,
 	// nodes stack along the secondary axis centered around Start.secondary; total stack height
 	// is the sum of widget secondary extents plus (n-1)*RowGap.
-	void AssignCoordinates(TArray<FLayoutNode>& InOutMain, const FLayoutInput& InInput, const FVector2f& InStart)
+	void AssignCoordinates(
+		TArray<FLayoutNode>& InOutMain,
+		const FLayoutInput& InInput,
+		const FVector2f& InStart,
+		const TMap<int32, float>* InExtraGapAfterLayer)
 	{
 		if (InOutMain.Num() == 0)
 		{
@@ -915,84 +1225,625 @@ namespace LD::Assist::Layout::Private
 				SecondaryCursor += GetSecondaryExtent(Node.WidgetSize, InInput.Strategy) + InInput.RowGap;
 			}
 
-			CumulativePrimary += LayerPrimaryExtent[LayerKey] + InInput.ColumnGap;
+			float ExtraGap = 0.0f;
+			if (InExtraGapAfterLayer)
+			{
+				if (const float* Found = InExtraGapAfterLayer->Find(LayerKey))
+				{
+					ExtraGap = *Found;
+				}
+			}
+			CumulativePrimary += LayerPrimaryExtent[LayerKey] + InInput.ColumnGap + ExtraGap;
 		}
 	}
 
-	// Place AnyState side-lane nodes above (LR) / left of (TB) the main flow. Multiple
-	// AnyStates stack along the primary axis ordered by their current primary coordinate so
-	// authored intent is preserved when present.
-	void PlaceSideLane(TArray<FLayoutNode>& InOutSide, const TArray<FLayoutNode>& InMain, const FLayoutInput& InInput, const FVector2f& InStart)
+	// One state's outgoing transitions to a whole layer of siblings, taken as a group.
+	struct FLayoutFan
+	{
+		FGuid HubGuid;
+		int32 TargetLayer = INDEX_NONE;
+		TArray<FGuid> TargetGuids;
+		TArray<FGuid> TransitionGuids;
+	};
+
+	// Every state that feeds InMinTargets or more siblings sitting together in the next layer. Targets
+	// spread over several layers are not a fan: those wires have different lengths and different rows to
+	// reach, and the ordering pass can already separate them.
+	TArray<FLayoutFan> FindFans(
+		const TArray<FLayoutNode>& InMain,
+		const TArray<FLayoutEdge>& InEdges,
+		const TSet<TPair<FGuid, FGuid>>& InBackEdges,
+		int32 InMinTargets)
+	{
+		TArray<FLayoutFan> Fans;
+		if (InMinTargets < 2)
+		{
+			return Fans;
+		}
+
+		TMap<FGuid, const FLayoutNode*> NodeByGuid;
+		NodeByGuid.Reserve(InMain.Num());
+		for (const FLayoutNode& Node : InMain)
+		{
+			NodeByGuid.Add(Node.NodeGuid, &Node);
+		}
+
+		TMap<FGuid, FLayoutFan> ByHub;
+		for (const FLayoutEdge& Edge : InEdges)
+		{
+			if (Edge.FromGuid == Edge.ToGuid || !Edge.TransitionGuid.IsValid()
+				|| InBackEdges.Contains(TPair<FGuid, FGuid>(Edge.FromGuid, Edge.ToGuid)))
+			{
+				continue;
+			}
+
+			const FLayoutNode* const* FromPtr = NodeByGuid.Find(Edge.FromGuid);
+			const FLayoutNode* const* ToPtr = NodeByGuid.Find(Edge.ToGuid);
+			if (!FromPtr || !ToPtr)
+			{
+				continue;
+			}
+
+			const FLayoutNode& From = **FromPtr;
+			const FLayoutNode& To = **ToPtr;
+			if (From.Layer == INDEX_NONE || To.Layer != From.Layer + 1)
+			{
+				continue;
+			}
+
+			FLayoutFan& Fan = ByHub.FindOrAdd(Edge.FromGuid);
+			Fan.HubGuid = Edge.FromGuid;
+			Fan.TargetLayer = To.Layer;
+			Fan.TargetGuids.Add(Edge.ToGuid);
+			Fan.TransitionGuids.Add(Edge.TransitionGuid);
+		}
+
+		for (TPair<FGuid, FLayoutFan>& Pair : ByHub)
+		{
+			if (Pair.Value.TargetGuids.Num() >= InMinTargets)
+			{
+				Fans.Add(MoveTemp(Pair.Value));
+			}
+		}
+
+		Fans.Sort([](const FLayoutFan& A, const FLayoutFan& B)
+		{
+			return A.HubGuid < B.HubGuid;
+		});
+		return Fans;
+	}
+
+	// Carry a fan on a trunk: one line leaving the hub across the gap to the sibling column, and one
+	// reroute per sibling sitting on that line at the sibling's own row, so the last leg into a sibling
+	// is a square corner arriving at exactly one state. That is the shape the straight lines cannot
+	// reach at any spacing. A wire from the hub's center to an outer sibling's center enters the column
+	// far from the row it wants, and the only cure without a rail is to push the two layers so far apart
+	// that every wire is nearly flat, which spends a screen of space on seven wires.
+	//
+	// A sibling flat enough to reach with a clear straight wire keeps it, because a rail that avoids
+	// nothing is one more node to account for. The trunk runs down the hub's own center line when nothing
+	// in the hub's layer stands on it, so each wire leaves through the hub's top or bottom edge. When
+	// something does stand on it, the trunk moves into the gap between the two layers, where no state
+	// can be.
+	void PlanFanRails(
+		const TArray<FLayoutNode>& InPlaced,
+		const TArray<FLayoutFan>& InFans,
+		const FLayoutInput& InInput,
+		TArray<FLayoutReroute>& OutReroutes,
+		TSet<FGuid>& OutRailedTransitions,
+		TMap<FGuid, FGuid>* OutTargetByTransition = nullptr)
+	{
+		if (InFans.Num() == 0 || InPlaced.Num() == 0)
+		{
+			return;
+		}
+
+		TMap<FGuid, const FLayoutNode*> NodeByGuid;
+		NodeByGuid.Reserve(InPlaced.Num());
+		for (const FLayoutNode& Node : InPlaced)
+		{
+			NodeByGuid.Add(Node.NodeGuid, &Node);
+		}
+
+		const ELayoutStrategy Strategy = InInput.Strategy;
+		const float Padding = InInput.RowGap * 0.5f;
+		const float HalfReroute = InInput.RerouteSize * 0.5f;
+
+		auto SecondaryCenter = [Strategy](const FLayoutNode& InNode)
+		{
+			return GetSecondary(InNode.NewPosition, Strategy)
+				+ GetSecondaryExtent(InNode.WidgetSize, Strategy) * 0.5f;
+		};
+
+		for (const FLayoutFan& Fan : InFans)
+		{
+			const FLayoutNode* const* HubPtr = NodeByGuid.Find(Fan.HubGuid);
+			if (!HubPtr)
+			{
+				continue;
+			}
+			const FLayoutNode& Hub = **HubPtr;
+			const FVector2f HubCenter = Hub.NewPosition + Hub.WidgetSize * 0.5f;
+			const float HubPrimaryCenter = GetPrimary(Hub.NewPosition, Strategy)
+				+ GetPrimaryExtent(Hub.WidgetSize, Strategy) * 0.5f;
+
+			float LowestTarget = TNumericLimits<float>::Max();
+			float HighestTarget = TNumericLimits<float>::Lowest();
+			float TargetLayerNear = TNumericLimits<float>::Max();
+			for (const FGuid& TargetGuid : Fan.TargetGuids)
+			{
+				const FLayoutNode* const* TargetPtr = NodeByGuid.Find(TargetGuid);
+				if (!TargetPtr)
+				{
+					continue;
+				}
+				const float Center = SecondaryCenter(**TargetPtr);
+				LowestTarget = FMath::Min(LowestTarget, Center);
+				HighestTarget = FMath::Max(HighestTarget, Center);
+				TargetLayerNear = FMath::Min(TargetLayerNear, GetPrimary((*TargetPtr)->NewPosition, Strategy));
+			}
+			if (LowestTarget > HighestTarget)
+			{
+				continue;
+			}
+
+			float HubLayerFar = GetPrimary(Hub.NewPosition, Strategy)
+				+ GetPrimaryExtent(Hub.WidgetSize, Strategy);
+			bool bCenterLineClear = true;
+			for (const FLayoutNode& Node : InPlaced)
+			{
+				if (Node.Lane != ELayoutLane::Main || Node.Layer != Hub.Layer)
+				{
+					continue;
+				}
+				HubLayerFar = FMath::Max(
+					HubLayerFar,
+					GetPrimary(Node.NewPosition, Strategy) + GetPrimaryExtent(Node.WidgetSize, Strategy));
+
+				if (Node.NodeGuid == Fan.HubGuid)
+				{
+					continue;
+				}
+				const float NodeNear = GetPrimary(Node.NewPosition, Strategy) - Padding;
+				const float NodeFar = NodeNear + GetPrimaryExtent(Node.WidgetSize, Strategy) + Padding * 2.0f;
+				const float NodeLow = GetSecondary(Node.NewPosition, Strategy) - Padding;
+				const float NodeHigh = NodeLow + GetSecondaryExtent(Node.WidgetSize, Strategy) + Padding * 2.0f;
+				if (HubPrimaryCenter > NodeNear && HubPrimaryCenter < NodeFar
+					&& NodeHigh > LowestTarget && NodeLow < HighestTarget)
+				{
+					bCenterLineClear = false;
+				}
+			}
+
+			const float TrunkCenter = bCenterLineClear
+				? HubPrimaryCenter
+				: FMath::Min((HubLayerFar + TargetLayerNear) * 0.5f, TargetLayerNear - HalfReroute - Padding);
+
+			// Which spokes need carrying, decided before any of them is placed, because the lanes are
+			// spread around the trunk and that needs the count.
+			//
+			// A wire that climbs further across the flow than it travels along it no longer reads as a
+			// step forward, and several of them leaving one state converge on that state at angles a
+			// reader has to untangle to see which sibling each one reaches. Carry those whether or not
+			// they happen to miss every box. A flatter wire arrives at its sibling's row nearly level and
+			// is easier to read as the straight line it is, so it stays one.
+			TArray<int32> Carried;
+			Carried.Reserve(Fan.TargetGuids.Num());
+			for (int32 TargetIdx = 0; TargetIdx < Fan.TargetGuids.Num(); ++TargetIdx)
+			{
+				const FLayoutNode* const* TargetPtr = NodeByGuid.Find(Fan.TargetGuids[TargetIdx]);
+				if (!TargetPtr)
+				{
+					continue;
+				}
+				const FLayoutNode& Target = **TargetPtr;
+				const FVector2f TargetCenter = Target.NewPosition + Target.WidgetSize * 0.5f;
+
+				const float PrimaryRun = FMath::Abs(
+					GetPrimary(TargetCenter, Strategy) - GetPrimary(HubCenter, Strategy));
+				const float SecondaryRise = FMath::Abs(
+					GetSecondary(TargetCenter, Strategy) - GetSecondary(HubCenter, Strategy));
+
+				if (SecondaryRise <= PrimaryRun
+					&& !SegmentCrossesAnyNode(
+						HubCenter, TargetCenter, InPlaced, Fan.HubGuid, Fan.TargetGuids[TargetIdx], Padding)
+					&& !MarkerLandsOnNode(
+						(HubCenter + TargetCenter) * 0.5f, InPlaced, InInput.TransitionMarkerSize))
+				{
+					continue;
+				}
+				Carried.Add(TargetIdx);
+			}
+
+			if (Carried.Num() == 0)
+			{
+				continue;
+			}
+
+			// Every carried spoke gets its own lane. Sharing one line would draw two wires on top of each
+			// other, and a reader counting the transitions leaving a state would see one. Ordered by the
+			// row each spoke arrives at, so the lanes fan out the same way the states do and no two of
+			// the legs leaving the hub cross.
+			Carried.Sort([&NodeByGuid, &Fan, &SecondaryCenter](int32 A, int32 B)
+			{
+				const float CenterA = SecondaryCenter(**NodeByGuid.Find(Fan.TargetGuids[A]));
+				const float CenterB = SecondaryCenter(**NodeByGuid.Find(Fan.TargetGuids[B]));
+				if (CenterA != CenterB)
+				{
+					return CenterA < CenterB;
+				}
+				return Fan.TransitionGuids[A] < Fan.TransitionGuids[B];
+			});
+
+			// One reroute width apart, which is the smallest gap that still reads as two lines at the
+			// zoom a whole graph is viewed at. The lanes are centered on the trunk, so the group stays
+			// balanced on the hub, and the span is capped to the room between the hub and the sibling
+			// column. A lane closer than the snap grid would round onto its neighbor, so when there is
+			// not room for that the whole fan shares one lane and the wires overlap as before.
+			const float LaneLow = bCenterLineClear
+				? GetPrimary(Hub.NewPosition, Strategy)
+				: HubLayerFar + HalfReroute + Padding;
+			const float LaneHigh = TargetLayerNear - HalfReroute - Padding;
+			const float LaneRoom = FMath::Min(TrunkCenter - LaneLow, LaneHigh - TrunkCenter) * 2.0f;
+
+			float LaneStep = InInput.RerouteSize;
+			if (Carried.Num() > 1)
+			{
+				LaneStep = FMath::Min(LaneStep, LaneRoom / static_cast<float>(Carried.Num() - 1));
+			}
+			const float NarrowestLane = InInput.bSnapToGrid ? InInput.SnapGridSize : 1.0f;
+			if (LaneStep < NarrowestLane)
+			{
+				LaneStep = 0.0f;
+			}
+
+			const float FirstLane = TrunkCenter - LaneStep * static_cast<float>(Carried.Num() - 1) * 0.5f;
+			for (int32 LaneIdx = 0; LaneIdx < Carried.Num(); ++LaneIdx)
+			{
+				const int32 TargetIdx = Carried[LaneIdx];
+				const FLayoutNode& Target = **NodeByGuid.Find(Fan.TargetGuids[TargetIdx]);
+
+				FLayoutReroute Reroute;
+				Reroute.TransitionGuid = Fan.TransitionGuids[TargetIdx];
+				Reroute.ChainIndex = 0;
+				Reroute.Position = MakePos(
+					FirstLane + LaneStep * static_cast<float>(LaneIdx) - HalfReroute,
+					SecondaryCenter(Target) - HalfReroute,
+					Strategy);
+				OutReroutes.Add(MoveTemp(Reroute));
+				OutRailedTransitions.Add(Fan.TransitionGuids[TargetIdx]);
+				if (OutTargetByTransition)
+				{
+					OutTargetByTransition->Add(Fan.TransitionGuids[TargetIdx], Fan.TargetGuids[TargetIdx]);
+				}
+			}
+		}
+	}
+
+	// A wire is drawn from the source state's center to the target's center. When one state fans out to
+	// a tall column of siblings, the wire to an outer sibling enters that column far from the row it is
+	// going to and sweeps through every sibling in between. Stretching the boundary is the cure: the
+	// further apart the two layers, the shallower every wire, and a shallow wire has almost reached its
+	// own row by the time it arrives at the column.
+	//
+	// This is worth doing before routing rather than leaving it to the rails. A rail lifts the wire out
+	// of the column, but it also adds two nodes and sends the wire out and back, which is harder to
+	// follow than the straight line it replaced. Space costs a reader nothing; a rail costs attention.
+	//
+	// Widen one boundary at a time and keep the smallest widening that reaches the lowest count, so a
+	// graph is never made wider than the crossings it removes justify. The candidates are fractions of
+	// the taller of the two layers the boundary separates, because that height is what a wire has to
+	// climb, and they are capped by MaxExtraLayerGap.
+	void WidenLayerGaps(
+		const TArray<FLayoutNode>& InMain,
+		const TArray<FLayoutEdge>& InEdges,
+		const FLayoutInput& InInput,
+		const FVector2f& InStart,
+		const TArray<FLayoutFan>& InFans,
+		TMap<int32, float>& OutExtraGapAfterLayer)
+	{
+		if (InInput.MaxExtraLayerGap <= 0.0f || InMain.Num() == 0)
+		{
+			return;
+		}
+
+		TMap<int32, float> LayerSecondaryExtent;
+		for (const FLayoutNode& Node : InMain)
+		{
+			if (Node.Layer == INDEX_NONE)
+			{
+				continue;
+			}
+			float& Extent = LayerSecondaryExtent.FindOrAdd(Node.Layer, 0.0f);
+			Extent += GetSecondaryExtent(Node.WidgetSize, InInput.Strategy) + InInput.RowGap;
+		}
+
+		TArray<int32> SortedLayers;
+		LayerSecondaryExtent.GenerateKeyArray(SortedLayers);
+		SortedLayers.Sort();
+		if (SortedLayers.Num() < 2)
+		{
+			return;
+		}
+
+		// Scored on the two things spacing can fix, in the order the decline rule ranks them: a wire drawn
+		// through a state first, then a marker drawn on one. Each candidate is scored with its fan trunks
+		// planned for it, because a fan carried on a trunk is already clear and widening the boundary for
+		// it would buy nothing while spending the space anyway.
+		const float OverlapPadding = InInput.RowGap * 0.5f;
+		auto Score = [&InMain, &InEdges, &InInput, &InStart, &InFans, OverlapPadding](const TMap<int32, float>& InGaps)
+		{
+			TArray<FLayoutNode> Candidate = InMain;
+			AssignCoordinates(Candidate, InInput, InStart, &InGaps);
+
+			TArray<FLayoutReroute> Rails;
+			TSet<FGuid> Railed;
+			PlanFanRails(Candidate, InFans, InInput, Rails, Railed);
+
+			const int32 Crossings = CountEdgesDrawnThroughNodes(
+				Candidate, InEdges, Rails, OverlapPadding, InInput.RerouteSize);
+			const int32 Markers = CountMarkersOverNodes(
+				Candidate, InEdges, Rails, InInput.TransitionMarkerSize, InInput.RerouteSize);
+			return TPair<int32, int32>(Crossings, Markers);
+		};
+
+		// Zero first, so a boundary is only widened when widening it actually removes a crossing.
+		static constexpr float Fractions[] = { 0.0f, 0.125f, 0.25f, 0.5f, 1.0f };
+
+		TPair<int32, int32> BestScore = Score(OutExtraGapAfterLayer);
+		for (int32 LayerIdx = 0;
+			LayerIdx + 1 < SortedLayers.Num() && (BestScore.Key > 0 || BestScore.Value > 0);
+			++LayerIdx)
+		{
+			const int32 LayerKey = SortedLayers[LayerIdx];
+			const float Reach = FMath::Max(
+				LayerSecondaryExtent[LayerKey], LayerSecondaryExtent[SortedLayers[LayerIdx + 1]]);
+
+			float BestGap = 0.0f;
+			for (const float Fraction : Fractions)
+			{
+				const float Candidate = FMath::Min(Reach * Fraction, InInput.MaxExtraLayerGap);
+				if (Fraction > 0.0f && Candidate <= BestGap)
+				{
+					continue;
+				}
+
+				OutExtraGapAfterLayer.Add(LayerKey, Candidate);
+				const TPair<int32, int32> CandidateScore = Score(OutExtraGapAfterLayer);
+				if (CandidateScore < BestScore)
+				{
+					BestScore = CandidateScore;
+					BestGap = Candidate;
+				}
+			}
+
+			OutExtraGapAfterLayer.Add(LayerKey, BestGap);
+		}
+	}
+
+	// Place AnyState side-lane nodes above (LR) / left of (TB) the main flow. Each one sits two row gaps
+	// clear of the highest state it is wired to, and starts at that state's own coordinate along the
+	// flow, so the wire between them is as short as the lane allows. Measuring the lane against the whole
+	// graph instead would hang a node that feeds one state at the top of the tallest column and stretch
+	// its wire the full height of the graph for nothing. A side node wired to nothing falls back to the
+	// flow's own start. Several of them stack along the flow axis, never closer than one column gap.
+	void PlaceSideLane(
+		TArray<FLayoutNode>& InOutSide,
+		const TArray<FLayoutNode>& InMain,
+		const TArray<FLayoutEdge>& InEdges,
+		const FLayoutInput& InInput,
+		const FVector2f& InStart)
 	{
 		if (InOutSide.Num() == 0)
 		{
 			return;
 		}
 
-		float MainMinSecondary = GetSecondary(InStart, InInput.Strategy);
-		float SideHeightTallest = 0.0f;
-		float MainStartPrimary = GetPrimary(InStart, InInput.Strategy);
-		if (InMain.Num() > 0)
+		const ELayoutStrategy Strategy = InInput.Strategy;
+
+		TMap<FGuid, const FLayoutNode*> MainByGuid;
+		MainByGuid.Reserve(InMain.Num());
+		float FlowTopSecondary = TNumericLimits<float>::Max();
+		float FlowNearPrimary = TNumericLimits<float>::Max();
+		for (const FLayoutNode& Node : InMain)
 		{
-			MainMinSecondary = TNumericLimits<float>::Max();
-			MainStartPrimary = TNumericLimits<float>::Max();
-			for (const FLayoutNode& Node : InMain)
+			MainByGuid.Add(Node.NodeGuid, &Node);
+			if (Node.bPinned)
 			{
-				if (Node.bPinned)
-				{
-					continue;
-				}
-				MainMinSecondary = FMath::Min(MainMinSecondary, GetSecondary(Node.NewPosition, InInput.Strategy));
-				MainStartPrimary = FMath::Min(MainStartPrimary, GetPrimary(Node.NewPosition, InInput.Strategy));
+				continue;
 			}
-			if (MainMinSecondary == TNumericLimits<float>::Max())
-			{
-				MainMinSecondary = GetSecondary(InStart, InInput.Strategy);
-			}
-			if (MainStartPrimary == TNumericLimits<float>::Max())
-			{
-				MainStartPrimary = GetPrimary(InStart, InInput.Strategy);
-			}
+			FlowTopSecondary = FMath::Min(FlowTopSecondary, GetSecondary(Node.NewPosition, Strategy));
+			FlowNearPrimary = FMath::Min(FlowNearPrimary, GetPrimary(Node.NewPosition, Strategy));
+		}
+		if (FlowTopSecondary == TNumericLimits<float>::Max())
+		{
+			FlowTopSecondary = GetSecondary(InStart, Strategy);
+		}
+		if (FlowNearPrimary == TNumericLimits<float>::Max())
+		{
+			FlowNearPrimary = GetPrimary(InStart, Strategy);
 		}
 
+		TSet<FGuid> SideGuids;
+		SideGuids.Reserve(InOutSide.Num());
 		for (const FLayoutNode& Node : InOutSide)
 		{
-			SideHeightTallest = FMath::Max(SideHeightTallest, GetSecondaryExtent(Node.WidgetSize, InInput.Strategy));
+			SideGuids.Add(Node.NodeGuid);
 		}
 
-		TArray<int32> Ordering;
-		Ordering.Reserve(InOutSide.Num());
+		// Both directions, because a side node is reached as well as left from and either wire is one a
+		// reader has to follow.
+		TMap<FGuid, TSet<FGuid>> NeighborsBySide;
+		for (const FLayoutEdge& Edge : InEdges)
+		{
+			if (SideGuids.Contains(Edge.FromGuid) && MainByGuid.Contains(Edge.ToGuid))
+			{
+				NeighborsBySide.FindOrAdd(Edge.FromGuid).Add(Edge.ToGuid);
+			}
+			if (SideGuids.Contains(Edge.ToGuid) && MainByGuid.Contains(Edge.FromGuid))
+			{
+				NeighborsBySide.FindOrAdd(Edge.ToGuid).Add(Edge.FromGuid);
+			}
+		}
+
+		struct FSideSlot
+		{
+			int32 Index = 0;
+			float DesiredPrimary = 0.0f;
+			float Secondary = 0.0f;
+		};
+
+		TArray<FSideSlot> Slots;
+		Slots.Reserve(InOutSide.Num());
 		for (int32 SideIdx = 0; SideIdx < InOutSide.Num(); ++SideIdx)
 		{
-			Ordering.Add(SideIdx);
-		}
-		Ordering.StableSort([&InOutSide, &InInput](int32 A, int32 B)
-		{
-			const float PrimaryA = GetPrimary(InOutSide[A].OldPosition, InInput.Strategy);
-			const float PrimaryB = GetPrimary(InOutSide[B].OldPosition, InInput.Strategy);
-			if (PrimaryA != PrimaryB)
+			const FLayoutNode& Node = InOutSide[SideIdx];
+
+			float TopSecondary = TNumericLimits<float>::Max();
+			float NearPrimary = TNumericLimits<float>::Max();
+			if (const TSet<FGuid>* Neighbors = NeighborsBySide.Find(Node.NodeGuid))
 			{
-				return PrimaryA < PrimaryB;
+				for (const FGuid& Neighbor : *Neighbors)
+				{
+					const FLayoutNode* const* MainPtr = MainByGuid.Find(Neighbor);
+					if (!MainPtr)
+					{
+						continue;
+					}
+					const FLayoutNode& MainNode = **MainPtr;
+					TopSecondary = FMath::Min(TopSecondary, GetSecondary(MainNode.NewPosition, Strategy));
+					NearPrimary = FMath::Min(NearPrimary, GetPrimary(MainNode.NewPosition, Strategy));
+				}
 			}
-			const int32 NameCmp = InOutSide[A].Name.Compare(InOutSide[B].Name);
+			if (TopSecondary == TNumericLimits<float>::Max())
+			{
+				TopSecondary = FlowTopSecondary;
+				NearPrimary = FlowNearPrimary;
+			}
+
+			FSideSlot Slot;
+			Slot.Index = SideIdx;
+			Slot.DesiredPrimary = NearPrimary;
+			Slot.Secondary = TopSecondary - InInput.RowGap * 2.0f
+				- GetSecondaryExtent(Node.WidgetSize, Strategy);
+			Slots.Add(Slot);
+		}
+
+		// Ordered by where each one wants to sit, then by where the author had it, so two side nodes that
+		// want the same place keep the order someone gave them.
+		Slots.StableSort([&InOutSide, Strategy](const FSideSlot& A, const FSideSlot& B)
+		{
+			if (A.DesiredPrimary != B.DesiredPrimary)
+			{
+				return A.DesiredPrimary < B.DesiredPrimary;
+			}
+			const float AuthoredA = GetPrimary(InOutSide[A.Index].OldPosition, Strategy);
+			const float AuthoredB = GetPrimary(InOutSide[B.Index].OldPosition, Strategy);
+			if (AuthoredA != AuthoredB)
+			{
+				return AuthoredA < AuthoredB;
+			}
+			const int32 NameCmp = InOutSide[A.Index].Name.Compare(InOutSide[B.Index].Name);
 			if (NameCmp != 0)
 			{
 				return NameCmp < 0;
 			}
-			return InOutSide[A].NodeGuid < InOutSide[B].NodeGuid;
+			return InOutSide[A.Index].NodeGuid < InOutSide[B.Index].NodeGuid;
 		});
 
-		const float SideSecondary = MainMinSecondary - InInput.RowGap * 2.0f - SideHeightTallest;
-		float PrimaryCursor = MainStartPrimary;
-		for (int32 OrderIdx : Ordering)
+		float PrimaryCursor = TNumericLimits<float>::Lowest();
+		for (const FSideSlot& Slot : Slots)
 		{
-			FLayoutNode& Node = InOutSide[OrderIdx];
+			FLayoutNode& Node = InOutSide[Slot.Index];
+			const float Primary = FMath::Max(Slot.DesiredPrimary, PrimaryCursor);
 			if (!Node.bPinned)
 			{
-				Node.NewPosition = MakePos(PrimaryCursor, SideSecondary, InInput.Strategy);
+				Node.NewPosition = MakePos(Primary, Slot.Secondary, Strategy);
 			}
-			PrimaryCursor += GetPrimaryExtent(Node.WidgetSize, InInput.Strategy) + InInput.ColumnGap;
+			PrimaryCursor = Primary + GetPrimaryExtent(Node.WidgetSize, Strategy) + InInput.ColumnGap;
 		}
+	}
+
+	// A side-lane node sits above the flow, in the same band the near-side rails run through, so a rail
+	// dropping back down to the flow can be drawn straight through it. Slide the whole lane along the
+	// flow axis until nothing is, and no further: the smallest move that clears it keeps each node beside
+	// the states it feeds. Both directions are tried, smallest first, because what is in the way can lie
+	// on either side. Nothing is moved when the lane is already clear.
+	void SettleSideLanePrimary(
+		TArray<FLayoutNode>& InOutPlaced,
+		const TArray<FLayoutEdge>& InEdges,
+		const TArray<FLayoutReroute>& InReroutes,
+		const FLayoutInput& InInput)
+	{
+		const ELayoutStrategy Strategy = InInput.Strategy;
+
+		TArray<int32> SideIndices;
+		TArray<FVector2f> BasePositions;
+		float WidestSide = 0.0f;
+		for (int32 NodeIdx = 0; NodeIdx < InOutPlaced.Num(); ++NodeIdx)
+		{
+			const FLayoutNode& Node = InOutPlaced[NodeIdx];
+			if (Node.Lane != ELayoutLane::Side || Node.bPinned)
+			{
+				continue;
+			}
+			SideIndices.Add(NodeIdx);
+			BasePositions.Add(Node.NewPosition);
+			WidestSide = FMath::Max(WidestSide, GetPrimaryExtent(Node.WidgetSize, Strategy));
+		}
+
+		if (SideIndices.Num() == 0 || WidestSide <= 0.0f)
+		{
+			return;
+		}
+
+		const float OverlapPadding = InInput.RowGap * 0.5f;
+		auto Score = [&InOutPlaced, &InEdges, &InReroutes, &InInput, OverlapPadding]()
+		{
+			return TPair<int32, int32>(
+				CountEdgesDrawnThroughNodes(
+					InOutPlaced, InEdges, InReroutes, OverlapPadding, InInput.RerouteSize),
+				CountMarkersOverNodes(
+					InOutPlaced, InEdges, InReroutes, InInput.TransitionMarkerSize, InInput.RerouteSize));
+		};
+
+		auto Apply = [&InOutPlaced, &SideIndices, &BasePositions, Strategy](float InOffset)
+		{
+			for (int32 Slot = 0; Slot < SideIndices.Num(); ++Slot)
+			{
+				InOutPlaced[SideIndices[Slot]].NewPosition = MakePos(
+					GetPrimary(BasePositions[Slot], Strategy) + InOffset,
+					GetSecondary(BasePositions[Slot], Strategy),
+					Strategy);
+			}
+		};
+
+		TPair<int32, int32> BestScore = Score();
+		if (BestScore.Key == 0 && BestScore.Value == 0)
+		{
+			return;
+		}
+
+		static constexpr float Fractions[] =
+			{ -0.25f, 0.25f, -0.5f, 0.5f, -0.75f, 0.75f, -1.0f, 1.0f, -1.5f, 1.5f };
+		float BestOffset = 0.0f;
+		for (const float Fraction : Fractions)
+		{
+			const float Offset = WidestSide * Fraction;
+			Apply(Offset);
+			const TPair<int32, int32> CandidateScore = Score();
+			if (CandidateScore < BestScore)
+			{
+				BestScore = CandidateScore;
+				BestOffset = Offset;
+			}
+			if (BestScore.Key == 0 && BestScore.Value == 0)
+			{
+				break;
+			}
+		}
+
+		Apply(BestOffset);
 	}
 
 	// Half-open span along the primary axis, used to test whether two rails can share a lane.
@@ -1066,6 +1917,7 @@ namespace LD::Assist::Layout::Private
 		const TArray<FLayoutNode>& InPlaced,
 		const TArray<FLayoutEdge>& InEdges,
 		const TSet<TPair<FGuid, FGuid>>& InBackEdges,
+		const TSet<FGuid>& InAlreadyRailed,
 		const FLayoutInput& InInput,
 		TArray<FLayoutReroute>& OutReroutes)
 	{
@@ -1094,7 +1946,8 @@ namespace LD::Assist::Layout::Private
 		TArray<FRoutedEdge> Routed;
 		for (const FLayoutEdge& Edge : InEdges)
 		{
-			if (Edge.FromGuid == Edge.ToGuid || !Edge.TransitionGuid.IsValid())
+			if (Edge.FromGuid == Edge.ToGuid || !Edge.TransitionGuid.IsValid()
+				|| InAlreadyRailed.Contains(Edge.TransitionGuid))
 			{
 				continue;
 			}
@@ -1213,6 +2066,87 @@ namespace LD::Assist::Layout::Private
 		}
 	}
 
+	// How many pairs of nodes have overlapping boxes. The set counted is the flow nodes plus the entry
+	// node rectangle, which is the set ld.get_graph_view reports overlaps over, so the two numbers agree.
+	// The entry rectangle has to be in it: the entry node is never moved and reaches the layout only as a
+	// position and a size, so leaving it out would score a state parked on top of it as no overlap at all
+	// and then leave it there.
+	int32 CountNodeOverlaps(const TArray<FLayoutNode>& InPlaced, const FLayoutInput& InInput)
+	{
+		TArray<FVector2f> Mins;
+		TArray<FVector2f> Maxs;
+		Mins.Reserve(InPlaced.Num() + 1);
+		Maxs.Reserve(InPlaced.Num() + 1);
+		for (const FLayoutNode& Node : InPlaced)
+		{
+			Mins.Add(Node.NewPosition);
+			Maxs.Add(Node.NewPosition + Node.WidgetSize);
+		}
+		if (InInput.EntryNodeSize.X > 0.0f && InInput.EntryNodeSize.Y > 0.0f)
+		{
+			Mins.Add(InInput.EntryNodePosition);
+			Maxs.Add(InInput.EntryNodePosition + InInput.EntryNodeSize);
+		}
+
+		int32 Total = 0;
+		for (int32 FirstIdx = 0; FirstIdx < Mins.Num(); ++FirstIdx)
+		{
+			for (int32 SecondIdx = FirstIdx + 1; SecondIdx < Mins.Num(); ++SecondIdx)
+			{
+				const float OverlapX = FMath::Min(Maxs[FirstIdx].X, Maxs[SecondIdx].X) - FMath::Max(Mins[FirstIdx].X, Mins[SecondIdx].X);
+				const float OverlapY = FMath::Min(Maxs[FirstIdx].Y, Maxs[SecondIdx].Y) - FMath::Max(Mins[FirstIdx].Y, Mins[SecondIdx].Y);
+				if (OverlapX > 0.0f && OverlapY > 0.0f)
+				{
+					++Total;
+				}
+			}
+		}
+		return Total;
+	}
+
+	// What one arrangement of a graph costs a reader, as the four counts the layout compares, held
+	// together so that a call site cannot pass them in the wrong order.
+	//
+	// The declaration order is the comparison order. Overlaps come first because a node hidden under
+	// another cannot be read at all. A wire drawn through a state comes next: it crosses the whole box
+	// and drags the reader off the path they were following. A marker on a state is smaller damage, one
+	// icon that cannot be read or clicked, so it ranks below the wire. Reroutes come last but are
+	// counted, because a rail is one more node to account for and the op adds rails without ever
+	// removing one, so a marker cleared at the cost of eight rails leaves a graph that is harder to
+	// follow than the one it replaced.
+	struct FArrangementScore
+	{
+		int32 Overlaps = 0;
+		int32 EdgesThroughStates = 0;
+		int32 MarkersOverNodes = 0;
+		int32 Reroutes = 0;
+
+		bool operator<(const FArrangementScore& InOther) const
+		{
+			if (Overlaps != InOther.Overlaps)
+			{
+				return Overlaps < InOther.Overlaps;
+			}
+			if (EdgesThroughStates != InOther.EdgesThroughStates)
+			{
+				return EdgesThroughStates < InOther.EdgesThroughStates;
+			}
+			if (MarkersOverNodes != InOther.MarkersOverNodes)
+			{
+				return MarkersOverNodes < InOther.MarkersOverNodes;
+			}
+			return Reroutes < InOther.Reroutes;
+		}
+	};
+
+	// Whether a reader is better off with the computed arrangement than with the one the nodes arrived
+	// in. Only a strict win on the first count that differs is better, so a tie keeps whatever is
+	// already in the graph.
+	bool IsStrictlyBetterArrangement(const FArrangementScore& InProposed, const FArrangementScore& InCurrent)
+	{
+		return InProposed < InCurrent;
+	}
+
 	// Pinned nodes stay at their authored position. We don't try to push other nodes out of the
 	// way (that would create cascading shifts). Instead, surface a warning when a pinned
 	// position overlaps a non-pinned placement so the caller knows manual cleanup may be needed.
@@ -1249,6 +2183,51 @@ namespace LD::Assist::Layout::Private
 						*Pinned.Name, *Other.Name));
 				}
 			}
+		}
+	}
+
+	// A grid snap rounds a reroute and the state it belongs to separately, so a reroute placed level with
+	// its state's center can land up to half a grid cell off it, and the last leg into that state is
+	// drawn as a shallow slope rather than the straight line the trunk is for. Put every fan reroute back
+	// on its state's center across the flow once both have been snapped. Only that coordinate is
+	// restored; the reroute stays on the grid along the flow, where every one of them shares a value.
+	void LevelFanRails(
+		const TArray<FLayoutNode>& InPlaced,
+		const TMap<FGuid, FGuid>& InTargetByTransition,
+		const FLayoutInput& InInput,
+		TArray<FLayoutReroute>& InOutReroutes)
+	{
+		if (InTargetByTransition.Num() == 0)
+		{
+			return;
+		}
+
+		TMap<FGuid, const FLayoutNode*> NodeByGuid;
+		NodeByGuid.Reserve(InPlaced.Num());
+		for (const FLayoutNode& Node : InPlaced)
+		{
+			NodeByGuid.Add(Node.NodeGuid, &Node);
+		}
+
+		const ELayoutStrategy Strategy = InInput.Strategy;
+		const float HalfReroute = InInput.RerouteSize * 0.5f;
+		for (FLayoutReroute& Reroute : InOutReroutes)
+		{
+			const FGuid* TargetGuid = InTargetByTransition.Find(Reroute.TransitionGuid);
+			if (!TargetGuid)
+			{
+				continue;
+			}
+			const FLayoutNode* const* TargetPtr = NodeByGuid.Find(*TargetGuid);
+			if (!TargetPtr)
+			{
+				continue;
+			}
+
+			const FLayoutNode& Target = **TargetPtr;
+			const float Secondary = GetSecondary(Target.NewPosition, Strategy)
+				+ GetSecondaryExtent(Target.WidgetSize, Strategy) * 0.5f - HalfReroute;
+			Reroute.Position = MakePos(GetPrimary(Reroute.Position, Strategy), Secondary, Strategy);
 		}
 	}
 
@@ -1309,15 +2288,44 @@ namespace LD::Assist::Layout
 		const TSet<TPair<FGuid, FGuid>> BackEdges = Private::FindBackEdges(Successors, Main, In.EntryGuid, NamesByGuid, Result.Warnings);
 
 		Private::AssignLayers(Main, Successors, Predecessors, BackEdges, In.EntryGuid, SideLaneFed, NamesByGuid, Result.Warnings);
+		Private::LiftEntryLeafToOwnColumn(Main, Successors, Predecessors, In.EntryGuid);
+
+		// The arrangement the nodes arrived in, taken before anything is placed and after the layers are
+		// known, so a declined result still reports each node's layer. CategorizeAndPrepare has already
+		// seeded NewPosition from OldPosition and filled in any widget size the caller could not measure,
+		// so this is the graph as it stands, measured on the same terms as the computed layout.
+		TArray<FLayoutNode> Current;
+		Current.Reserve(Main.Num() + Side.Num());
+		Current.Append(Main);
+		Current.Append(Side);
 
 		// Ordering places each candidate to score it, so the anchor has to be settled first.
 		const FVector2f Start = Private::ResolveStart(In);
 
-		Private::OrderWithinLayers(Main, Successors, Predecessors, In.Edges, In, Start, In.bRespectExistingOrder);
+		// Found once, off the layers rather than any placement, because which states form a fan is a fact
+		// about the graph. Every later pass that measures a candidate plans the same trunks for it.
+		const TArray<Private::FLayoutFan> Fans = In.bRouteEdges
+			? Private::FindFans(Main, In.Edges, BackEdges, In.MinFanTargets)
+			: TArray<Private::FLayoutFan>();
 
-		Private::AssignCoordinates(Main, In, Start);
+		Result.OrderingScore = Private::OrderWithinLayers(
+			Main, Successors, Predecessors, In.Edges, In, Start, In.bRespectExistingOrder);
 
-		Private::PlaceSideLane(Side, Main, In, Start);
+		// Widened before the final placement, because every wire's slope depends on it and the crossing
+		// count the widening minimises is measured on those wires.
+		TMap<int32, float> ExtraGapAfterLayer;
+		Private::WidenLayerGaps(Main, In.Edges, In, Start, Fans, ExtraGapAfterLayer);
+
+		Private::AssignCoordinates(Main, In, Start, &ExtraGapAfterLayer);
+
+		// The trunks go in before the side lane is placed and before any other rail is planned, because
+		// both of those read the rails already in the plan to decide where they can go.
+		TSet<FGuid> FanRailed;
+		TMap<FGuid, FGuid> FanTargetByTransition;
+		Private::PlanFanRails(Main, Fans, In, Result.Reroutes, FanRailed, &FanTargetByTransition);
+		Result.FanRails = Result.Reroutes.Num();
+
+		Private::PlaceSideLane(Side, Main, In.Edges, In, Start);
 
 		TArray<FLayoutNode> Combined;
 		Combined.Reserve(Main.Num() + Side.Num());
@@ -1326,18 +2334,92 @@ namespace LD::Assist::Layout
 
 		if (In.bRouteEdges)
 		{
-			Private::PlanReroutes(Combined, In.Edges, BackEdges, In, Result.Reroutes);
+			Private::PlanReroutes(Combined, In.Edges, BackEdges, FanRailed, In, Result.Reroutes);
 		}
 
+		Private::SettleSideLanePrimary(Combined, In.Edges, Result.Reroutes, In);
+
 		Result.EdgesThroughStates = Private::CountEdgesDrawnThroughNodes(
-			Combined, In.Edges, Result.Reroutes, In.RowGap * 0.5f);
+			Combined, In.Edges, Result.Reroutes, In.RowGap * 0.5f, In.RerouteSize);
+		Result.NodeOverlaps = Private::CountNodeOverlaps(Combined, In);
+		Result.MarkersOverNodes = Private::CountMarkersOverNodes(
+			Combined, In.Edges, Result.Reroutes, In.TransitionMarkerSize, In.RerouteSize);
+
+		// The graph as it stands is measured with rails planned for it on the same terms, because the
+		// caller strips the reroute nodes a graph already has out of the input and collapses a railed
+		// transition back to one edge. Scoring it with an empty rail plan would charge it for rails it is
+		// already carrying and hand the computed layout a win it did not earn.
+		TArray<FLayoutReroute> CurrentReroutes;
+		if (In.bRouteEdges)
+		{
+			TSet<FGuid> CurrentFanRailed;
+			Private::PlanFanRails(Current, Fans, In, CurrentReroutes, CurrentFanRailed);
+			Private::PlanReroutes(Current, In.Edges, BackEdges, CurrentFanRailed, In, CurrentReroutes);
+		}
+		Result.InputNodeOverlaps = Private::CountNodeOverlaps(Current, In);
+		Result.InputMarkersOverNodes = Private::CountMarkersOverNodes(
+			Current, In.Edges, CurrentReroutes, In.TransitionMarkerSize, In.RerouteSize);
+		Result.InputEdgesThroughStates = Private::CountEdgesDrawnThroughNodes(
+			Current, In.Edges, CurrentReroutes, In.RowGap * 0.5f, In.RerouteSize);
+		Result.InputReroutes = CurrentReroutes.Num();
+
+		Private::FArrangementScore Proposed;
+		Proposed.Overlaps = Result.NodeOverlaps;
+		Proposed.EdgesThroughStates = Result.EdgesThroughStates;
+		Proposed.MarkersOverNodes = Result.MarkersOverNodes;
+		Proposed.Reroutes = Result.Reroutes.Num();
+
+		Private::FArrangementScore AsAuthored;
+		AsAuthored.Overlaps = Result.InputNodeOverlaps;
+		AsAuthored.EdgesThroughStates = Result.InputEdgesThroughStates;
+		AsAuthored.MarkersOverNodes = Result.InputMarkersOverNodes;
+		AsAuthored.Reroutes = Result.InputReroutes;
+
+		if (In.bOnlyIfImproved && !Private::IsStrictlyBetterArrangement(Proposed, AsAuthored))
+		{
+			Result.bDeclined = true;
+			Result.Reroutes.Reset();
+			Result.FanRails = 0;
+
+			// The order the ordering pass settled on was not applied either, and reporting its score
+			// would describe a graph nobody is looking at.
+			Result.OrderingScore = 0;
+
+			Result.NodeOverlaps = AsAuthored.Overlaps;
+			Result.EdgesThroughStates = AsAuthored.EdgesThroughStates;
+			Result.MarkersOverNodes = AsAuthored.MarkersOverNodes;
+			Combined = MoveTemp(Current);
+			Result.Warnings.Add(FString::Printf(
+				TEXT("Nothing was moved: the graph is already at least as good as this layout can make it. ")
+				TEXT("Overlapping node pairs, transitions drawn through a state, transition markers drawn on ")
+				TEXT("a state, then reroute nodes needed, compared in that order: the graph has %d, %d, %d and ")
+				TEXT("%d, and the computed layout has %d, %d, %d and %d. The computed layout is used only when ")
+				TEXT("it wins the first of the four that differs. Pass only_if_improved=false to lay the graph ")
+				TEXT("out anyway."),
+				AsAuthored.Overlaps,
+				AsAuthored.EdgesThroughStates,
+				AsAuthored.MarkersOverNodes,
+				AsAuthored.Reroutes,
+				Proposed.Overlaps,
+				Proposed.EdgesThroughStates,
+				Proposed.MarkersOverNodes,
+				Proposed.Reroutes));
+		}
 
 		Private::DetectPinnedOverlaps(Combined, Result.Warnings);
 		Private::DetectEntryNodeOverlaps(Combined, In, Result.Warnings);
 
-		if (In.bSnapToGrid)
+		// Snapping moves a node, so a declined layout must not run it. The repro for that is a node
+		// authored at a coordinate the grid does not land on: rounding it would move the node and dirty
+		// the package for a run that reported it had changed nothing.
+		if (In.bSnapToGrid && !Result.bDeclined)
 		{
 			Private::SnapAll(Combined, Result.Reroutes, In.SnapGridSize);
+		}
+
+		if (!Result.bDeclined)
+		{
+			Private::LevelFanRails(Combined, FanTargetByTransition, In, Result.Reroutes);
 		}
 
 		Result.Nodes = MoveTemp(Combined);

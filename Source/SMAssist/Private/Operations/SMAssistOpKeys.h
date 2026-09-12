@@ -187,6 +187,7 @@ namespace LD::Assist::Args
 	inline constexpr const TCHAR* RespectExistingOrder = TEXT("respect_existing_order");
 	inline constexpr const TCHAR* SnapToGrid = TEXT("snap_to_grid");
 	inline constexpr const TCHAR* RouteEdges = TEXT("route_edges");
+	inline constexpr const TCHAR* OnlyIfImproved = TEXT("only_if_improved");
 	inline constexpr const TCHAR* Graphs = TEXT("graphs");
 	inline constexpr const TCHAR* GraphPath = TEXT("graph_path");
 	inline constexpr const TCHAR* NodeLayout = TEXT("node_layout");
@@ -202,6 +203,18 @@ namespace LD::Assist::Args
 	inline constexpr const TCHAR* ChainIndex = TEXT("chain_index");
 	inline constexpr const TCHAR* Passes = TEXT("passes");
 	inline constexpr const TCHAR* EdgesThroughStates = TEXT("edges_through_states");
+	inline constexpr const TCHAR* NodeOverlaps = TEXT("node_overlaps");
+	inline constexpr const TCHAR* MarkersOverStates = TEXT("markers_over_states");
+	inline constexpr const TCHAR* InputMarkersOverStates = TEXT("input_markers_over_states");
+	inline constexpr const TCHAR* OrderingScore = TEXT("ordering_score");
+	inline constexpr const TCHAR* RailsPlanned = TEXT("rails_planned");
+	inline constexpr const TCHAR* FanRails = TEXT("fan_rails");
+	inline constexpr const TCHAR* InputEdgesThroughStates = TEXT("input_edges_through_states");
+	inline constexpr const TCHAR* InputNodeOverlaps = TEXT("input_node_overlaps");
+	inline constexpr const TCHAR* InputRailsPlanned = TEXT("input_rails_planned");
+	inline constexpr const TCHAR* Declined = TEXT("declined");
+	inline constexpr const TCHAR* GraphsDeclined = TEXT("graphs_declined");
+	inline constexpr const TCHAR* Priority = TEXT("priority");
 	inline constexpr const TCHAR* IconLocationAdjustments = TEXT("icon_location_adjustments");
 
 	inline constexpr const TCHAR* VariableName = TEXT("variable_name");

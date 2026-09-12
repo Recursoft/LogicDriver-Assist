@@ -782,16 +782,18 @@ public:
 	 * @param Strategy "left_to_right" or "top_to_bottom". Empty = left_to_right.
 	 * @param bApply Apply the computed layout to the asset (true) or return as proposal only (false). Default false.
 	 * @param Scope "root" lays out only the root graph; "all" lays out every nested graph too. Empty = root.
-	 * @param ColumnGap Horizontal spacing between columns. Negative sentinel (e.g., -1.0) = SMAssist default gap.
+	 * @param ColumnGap Smallest horizontal spacing between columns. Negative sentinel (e.g., -1.0) = SMAssist default gap. A single boundary is stretched past this when the extra room is what keeps a wire off the states it passes or a marker off the state it lands on, so read it as a floor rather than the spacing every boundary ends up with.
 	 * @param RowGap Vertical spacing between rows. Negative sentinel (e.g., -1.0) = SMAssist default gap.
 	 * @param bDefaultOrigin True (default) anchors each graph off its own Entry node, one column gap past it and centered on it, so the first state stays clear of Entry. StartX and StartY are then ignored. Set false to lay every graph in scope out from StartX/StartY instead.
 	 * @param StartX Origin X for the layout; used only when bDefaultOrigin is false. Negative values are valid.
 	 * @param StartY Origin Y for the layout; used only when bDefaultOrigin is false.
 	 * @param PinNodeGuidsJson JSON-encoded array of state GUID strings that should remain pinned at their existing positions. Empty = no pins.
-	 * @param bRespectExistingOrder Whether to preserve existing graph-order hints. Default true.
+	 * @param bRespectExistingOrder True (default) seeds each layer's order from where the author already put the nodes, so a layer someone arranged keeps that arrangement. False seeds every node the same, which hands the layer to transition priority and then to name for a fresh, deterministic re-flow. Transition priority is read and never written: it decides which transition is evaluated first at runtime and is the author's to set.
 	 * @param bSnapToGrid Snap final positions to the editor grid. Default true.
-	 * @param bRouteEdges Carry every back-edge, and every forward edge spanning more than one layer, on a rail of two reroute nodes clear of the flow. Its marker then stops landing on the states in between. The rail positions come back in graphs[].reroutes on a dry run and are created when bApply is true. Reroutes are cosmetic and change nothing at runtime. They are added and repositioned, never removed. Default true. False leaves those edges drawn straight and plans no rail.
+	 * @param bRouteEdges Carry every back-edge, and every forward edge spanning more than one layer, on a rail of two reroute nodes clear of the flow. Its marker then stops landing on the states in between. Also lays one state's fan of three or more siblings in the next layer out on a trunk, one reroute per sibling at that sibling's own row, so the last leg into it is a square corner; a sibling flat enough to reach with a clear straight wire keeps that wire, and each carried sibling gets its own lane a reroute width to the side of the last so two wires are never drawn along one line. The rail positions come back in graphs[].reroutes on a dry run and are created when bApply is true. Reroutes are cosmetic and change nothing at runtime. They are added and repositioned, never removed. Default true. False leaves those edges drawn straight and plans no rail, and the layer boundary is stretched instead.
+	 * @param bOnlyIfImproved True (default) returns the graph untouched unless the computed layout is strictly better than the arrangement the nodes are already in, compared on overlapping node pairs, then transitions drawn through a state, then transition markers drawn on a state, then reroute nodes needed, in that order. A hand-arranged graph is often already as good as this algorithm can make it. When it declines, that graph's 'declined' is true and nothing is written for it. False always applies the computed layout.
 	 * @return JSON: { asset_path, strategy, scope, applied, passes, icon_location_adjustments,
+	 *         edges_through_states, node_overlaps, graphs_declined,
 	 *         measurement_warnings:[...], skipped:[...], graphs:[...] }
 	 *         Every graph in scope is measured on its own panel, so nested graphs are spaced from what
 	 *         they render at. A non-empty 'measurement_warnings' names the graph and the part of it that
@@ -802,6 +804,21 @@ public:
 	 *         measured and the layout had to run again. 'icon_location_adjustments' counts the transition
 	 *         markers slid apart along their own wires afterwards. Each graphs[] entry also carries
 	 *         'reroutes' (the planned rail positions) and 'reroutes_added'.
+	 *         'edges_through_states' counts the transitions still drawn through a state once routing has
+	 *         run, measured on the path the editor draws, and is reported per graph and as a total. Each
+	 *         graphs[] entry also carries 'node_overlaps', 'markers_over_states', 'rails_planned' and
+	 *         'fan_rails' for the graph as the call leaves it, 'input_node_overlaps',
+	 *         'input_edges_through_states', 'input_markers_over_states' and 'input_rails_planned' for the
+	 *         arrangement it arrived in, 'ordering_score' (the count the within-layer ordering chose by,
+	 *         taken before routing over main-lane edges only, so it does not match
+	 *         'edges_through_states') and 'declined'. 'markers_over_states' counts the transition markers
+	 *         drawn on top of a state box, which a wire can cause while crossing no state at all.
+	 *         'fan_rails' says how many of 'rails_planned' came from laying a fan out on a trunk.
+	 *         On a declined graph 'node_overlaps', 'edges_through_states' and 'markers_over_states'
+	 *         repeat the input set because nothing moved, while 'rails_planned', 'fan_rails' and
+	 *         'ordering_score' are 0 because no rail was planned and no order was applied. The warning
+	 *         gives the numbers the computed layout would have had. Every one of these counts inflates with RowGap, so none of them is
+	 *         comparable across two values of it.
 	 */
 	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
 	static FString LayoutStates(
@@ -817,7 +834,8 @@ public:
 		const FString& PinNodeGuidsJson = TEXT(""),
 		bool bRespectExistingOrder = true,
 		bool bSnapToGrid = true,
-		bool bRouteEdges = true);
+		bool bRouteEdges = true,
+		bool bOnlyIfImproved = true);
 
 	/**
 	 * Adds a member variable to a state-machine blueprint. Mirrors the editor's My-Blueprint

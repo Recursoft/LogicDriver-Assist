@@ -473,7 +473,8 @@ FString ULogicDriverToolset::LayoutStates(
 	const FString& PinNodeGuidsJson,
 	bool bRespectExistingOrder,
 	bool bSnapToGrid,
-	bool bRouteEdges)
+	bool bRouteEdges,
+	bool bOnlyIfImproved)
 {
 	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
 	LDA::AddObjectPath(*Args, TEXT("asset_path"), Blueprint);
@@ -490,6 +491,7 @@ FString ULogicDriverToolset::LayoutStates(
 	LDA::AddBool(*Args, TEXT("respect_existing_order"), bRespectExistingOrder);
 	LDA::AddBool(*Args, TEXT("snap_to_grid"), bSnapToGrid);
 	LDA::AddBool(*Args, TEXT("route_edges"), bRouteEdges);
+	LDA::AddBool(*Args, TEXT("only_if_improved"), bOnlyIfImproved);
 	return LDA::Execute(TEXT("ld.layout_states"), Args);
 }
 

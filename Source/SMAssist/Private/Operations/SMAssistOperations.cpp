@@ -3455,6 +3455,14 @@ FSMAssistOperationResult LD::Assist::GetGraphView(const TSharedRef<FJsonObject>&
 				const USMGraphNode_TransitionEdge* PrimaryTransition = TransitionEdge->GetPrimaryReroutedTransition();
 				Entry->SetStringField(Args::PrimaryTransitionGuid,
 					(PrimaryTransition ? PrimaryTransition->NodeGuid : TransitionEdge->NodeGuid).ToString());
+
+				// The order the source state evaluates this transition in, lowest first. Reported because
+				// ld.layout_states reads it to order one state's outgoing siblings when nothing else
+				// distinguishes them, and a caller cannot otherwise see why a layer came out as it did.
+				if (const USMTransitionInstance* TransitionInstance = TransitionEdge->GetNodeTemplateAs<USMTransitionInstance>())
+				{
+					Entry->SetNumberField(Args::Priority, TransitionInstance->GetPriorityOrder());
+				}
 			}
 		}
 		else if (const FRerouteOwner* Owner = RerouteOwners.Find(Node->NodeGuid))
@@ -3776,6 +3784,7 @@ namespace LD::Assist::Private
 		}
 		OutInput.EntryGuid = FindEntryStateGuid(InGraph);
 
+		bool bMarkerMeasured = false;
 		for (UEdGraphNode* Node : InGraph->Nodes)
 		{
 			if (!Node)
@@ -3805,6 +3814,21 @@ namespace LD::Assist::Private
 			}
 			if (USMGraphNode_TransitionEdge* TransitionEdge = Cast<USMGraphNode_TransitionEdge>(Node))
 			{
+				// Every transition draws the same fixed marker, so the first one that measures stands for
+				// all of them. The layout spaces states to keep these off the state boxes, which it can
+				// only do if it knows how big they are. The flag is what says "not measured yet": testing
+				// the size against the default instead would re-measure on every transition whenever the
+				// real marker happens to measure the default, and the last transition would win.
+				if (!bMarkerMeasured)
+				{
+					const FVector2f MarkerSize = MeasuredSize(Node, InNodeToWidget);
+					if (MarkerSize.X > 0.0f && MarkerSize.Y > 0.0f)
+					{
+						OutInput.TransitionMarkerSize = MarkerSize;
+						bMarkerMeasured = true;
+					}
+				}
+
 				// A rerouted transition is a chain of transition edge nodes, and every segment reports the
 				// same two states. Only the primary segment contributes an edge, so one logical edge gets
 				// one rail. IsPrimaryReroutedTransition is also true for a lone transition, so a lone
@@ -3821,6 +3845,17 @@ namespace LD::Assist::Private
 					Edge.FromGuid = From->NodeGuid;
 					Edge.ToGuid = To->NodeGuid;
 					Edge.TransitionGuid = TransitionEdge->NodeGuid;
+
+					// The layout reads PriorityOrder and never writes it. It decides which transition the
+					// source state evaluates first at runtime, so it belongs to the functional design of
+					// the graph and is the author's to set. Nothing here renumbers it, and a re-ordered
+					// layer leaves it exactly as it was even when the two disagree. It is read off the
+					// node template, which is what the compiler and the Slate node both read; the editor
+					// node's own PriorityOrder_DEPRECATED is an upgrade leftover and says nothing.
+					if (const USMTransitionInstance* TransitionInstance = TransitionEdge->GetNodeTemplateAs<USMTransitionInstance>())
+					{
+						Edge.Priority = TransitionInstance->GetPriorityOrder();
+					}
 					OutInput.Edges.Add(Edge);
 				}
 				continue;
@@ -4113,6 +4148,14 @@ namespace LD::Assist::Private
 
 		for (FLayoutGraphContext& Context : InOutContexts)
 		{
+			// Settling writes IconLocationPercentage on a transition template and dirties the package. A
+			// graph the layout declined was not touched, so there is nothing to settle and a write here
+			// would contradict the report that nothing changed.
+			if (Context.Result.bDeclined)
+			{
+				continue;
+			}
+
 			TArray<FString> GraphWarnings;
 			MeasureGraphNodeSizes(InBlueprint, Context.Graph, Context.NodeToWidget, GraphWarnings);
 			for (const FString& Warning : GraphWarnings)
@@ -4372,6 +4415,14 @@ namespace LD::Assist::Private
 		bool bAnyOverlap = false;
 		for (FLayoutGraphContext& Context : InOutContexts)
 		{
+			// A graph the layout declined was left exactly as it was, so its overlaps are the ones it
+			// arrived with. Counting them here would run a second pass that could only reach the same
+			// decision and report passes: 2 for work nobody did.
+			if (Context.Result.bDeclined)
+			{
+				continue;
+			}
+
 			TArray<FString> GraphWarnings;
 			MeasureGraphNodeSizes(InBlueprint, Context.Graph, Context.NodeToWidget, GraphWarnings);
 			for (const FString& Warning : GraphWarnings)
@@ -4466,6 +4517,8 @@ FSMAssistOperationResult LD::Assist::LayoutStates(const TSharedRef<FJsonObject>&
 	InArgs->TryGetBoolField(Args::SnapToGrid, bSnapToGrid);
 	bool bRouteEdges = true;
 	InArgs->TryGetBoolField(Args::RouteEdges, bRouteEdges);
+	bool bOnlyIfImproved = true;
+	InArgs->TryGetBoolField(Args::OnlyIfImproved, bOnlyIfImproved);
 
 	TSet<FGuid> PinnedGuids;
 	{
@@ -4595,6 +4648,7 @@ FSMAssistOperationResult LD::Assist::LayoutStates(const TSharedRef<FJsonObject>&
 			Input.SnapGridSize = SnapGridSize > 0.0f ? SnapGridSize : 16.0f;
 			Input.RerouteSize = LD::Assist::Private::ResolveRerouteSize(Context.NodeToWidget);
 			Input.bRouteEdges = bRouteEdges;
+			Input.bOnlyIfImproved = bOnlyIfImproved;
 
 			LD::Assist::Private::BuildLayoutInputForGraph(Context.Graph, &Context.NodeToWidget, Input);
 
@@ -4628,7 +4682,7 @@ FSMAssistOperationResult LD::Assist::LayoutStates(const TSharedRef<FJsonObject>&
 			TSet<USMGraph*> DirtyGraphs;
 			for (LD::Assist::Private::FLayoutGraphContext& Context : GraphContexts)
 			{
-				if (!IsValid(Context.Graph))
+				if (!IsValid(Context.Graph) || Context.Result.bDeclined)
 				{
 					continue;
 				}
@@ -4748,6 +4802,8 @@ FSMAssistOperationResult LD::Assist::LayoutStates(const TSharedRef<FJsonObject>&
 	Payload->SetNumberField(Args::IconLocationAdjustments, IconAdjustments);
 
 	int32 EdgesThroughStatesTotal = 0;
+	int32 NodeOverlapsTotal = 0;
+	int32 GraphsDeclined = 0;
 	TArray<TSharedPtr<FJsonValue>> GraphsArray;
 	GraphsArray.Reserve(GraphContexts.Num());
 	for (const LD::Assist::Private::FLayoutGraphContext& Context : GraphContexts)
@@ -4803,13 +4859,27 @@ FSMAssistOperationResult LD::Assist::LayoutStates(const TSharedRef<FJsonObject>&
 		}
 		GraphEntry->SetArrayField(Args::Reroutes, RerouteArray);
 		GraphEntry->SetNumberField(Args::ReroutesAdded, Context.ReroutesAdded);
+		GraphEntry->SetNumberField(Args::RailsPlanned, Context.Result.Reroutes.Num());
+		GraphEntry->SetNumberField(Args::FanRails, Context.Result.FanRails);
 		GraphEntry->SetNumberField(Args::EdgesThroughStates, Context.Result.EdgesThroughStates);
+		GraphEntry->SetNumberField(Args::NodeOverlaps, Context.Result.NodeOverlaps);
+		GraphEntry->SetNumberField(Args::MarkersOverStates, Context.Result.MarkersOverNodes);
+		GraphEntry->SetNumberField(Args::OrderingScore, Context.Result.OrderingScore);
+		GraphEntry->SetNumberField(Args::InputEdgesThroughStates, Context.Result.InputEdgesThroughStates);
+		GraphEntry->SetNumberField(Args::InputNodeOverlaps, Context.Result.InputNodeOverlaps);
+		GraphEntry->SetNumberField(Args::InputMarkersOverStates, Context.Result.InputMarkersOverNodes);
+		GraphEntry->SetNumberField(Args::InputRailsPlanned, Context.Result.InputReroutes);
+		GraphEntry->SetBoolField(Args::Declined, Context.Result.bDeclined);
 		EdgesThroughStatesTotal += Context.Result.EdgesThroughStates;
+		NodeOverlapsTotal += Context.Result.NodeOverlaps;
+		GraphsDeclined += Context.Result.bDeclined ? 1 : 0;
 
 		GraphsArray.Add(MakeShared<FJsonValueObject>(GraphEntry));
 	}
 	Payload->SetArrayField(Args::Graphs, GraphsArray);
 	Payload->SetNumberField(Args::EdgesThroughStates, EdgesThroughStatesTotal);
+	Payload->SetNumberField(Args::NodeOverlaps, NodeOverlapsTotal);
+	Payload->SetNumberField(Args::GraphsDeclined, GraphsDeclined);
 
 	// Op-level rather than per-graph: every graph in scope is measured, and each entry is prefixed with
 	// the graph path it came from. A layout computed from partial measurements can still overlap. A
