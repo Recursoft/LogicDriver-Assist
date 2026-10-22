@@ -144,6 +144,12 @@ When the engine ships ToolsetRegistry, `ULogicDriverToolset` exposes each operat
 
 The **Monolith bridge** (above) carries the identical payload behind a different outer envelope: `FMonolithActionResult` with an explicit `bSuccess` + `ErrorMessage`, its `*_query` dispatcher nests args under a `params` object, and it addresses assets by an `asset_path` string. Both transports share `USMAssistSubsystem::ExecuteOperation`, so keep the two sections in sync.
 
+### Ultimate Engine Co-Pilot
+
+[Ultimate Engine Co-Pilot (UECP)](https://www.gamedevcore.com/) is a third-party AI copilot for Unreal Engine 5, developed by BlueprintsLab. It runs inside the editor and exposes over 1,400 native editor operations as tools an agent can call against your project. Those tools are reachable from three surfaces at once: UECP's own in-editor chat, external MCP clients (Claude Code, Cursor, Cline, Codex, and others), and ACP command-line agents.
+
+UECP ships a Logic Driver extension that bridges Assist into that tool surface. With the extension enabled, an agent driving UECP can author a state machine end to end using Assist's own operations. It can create the blueprint, add states, transitions, and conduits, write the logic inside a transition's graph, lay the graph out, compile, and read a running PIE instance's state. The bridge lives entirely on the UECP side and is maintained by BlueprintsLab. It needs no change to Logic Driver or to Assist, and it adds no build-time dependency in either direction.
+
 ### Programmatic (C++)
 
 ```cpp
