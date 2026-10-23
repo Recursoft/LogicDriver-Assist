@@ -1,0 +1,1 @@
+Use of Logic Driver Assist requires a Logic Driver Pro license and is governed by the terms of that license.
