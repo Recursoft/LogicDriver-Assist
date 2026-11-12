@@ -64,7 +64,7 @@ BEGIN_DEFINE_SPEC(FAssistUndoRedoSpec, "LogicDriver.Assist.UndoRedo",
 	FString CreateBlueprint()
 	{
 		const FSMAssistOperationResult R = Run(TEXT("ld.create_blueprint"),
-			Obj({ { TEXT("name"), FGuid::NewGuid().ToString() }, { TEXT("path"), FAssetHandler::DefaultGamePath() } }));
+			Obj({ { TEXT("name"), FGuid::NewGuid().ToString() }, { TEXT("path"), FAssetHandler::DefaultGamePath() }, { TEXT("parent_class"), TEXT("/Script/SMSystem.SMInstance") } }));
 		return Str(R, TEXT("asset_path"));
 	}
 

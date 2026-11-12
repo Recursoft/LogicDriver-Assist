@@ -146,7 +146,7 @@ public:
 	 * Creates a new Logic Driver state-machine blueprint asset.
 	 * @param Name Asset name (without path or extension). Required.
 	 * @param Path Package path under /Game where the asset is created. Empty = /Game root.
-	 * @param ParentClass Parent of the new asset: the full class path of a blueprintable USMInstance subclass, such as /Script/MyModule.MyStateMachine, or a state machine Blueprint's asset_path. Empty = USMInstance.
+	 * @param ParentClass Parent of the new asset: the full class path of a blueprintable USMInstance subclass, such as /Script/MyModule.MyStateMachine, or a state machine Blueprint's asset_path. Empty = the project's default parent class setting, which is USMInstance unless changed.
 	 * @return JSON: { asset_path: "/Game/.../<Name>.<Name>", name: "<Name>" }
 	 */
 	UFUNCTION(meta = (AICallable), Category = "LogicDriver")
@@ -1581,7 +1581,7 @@ public:
 	 * @param NodeGuid GUID of the inline nested state-machine node to convert. Required.
 	 * @param Name Asset name for the newly minted reference. Empty = SMAssist default naming.
 	 * @param Path Package path under /Game for the new asset. Empty = SMAssist default location.
-	 * @param ParentClass Parent of the new asset: the full class path of a blueprintable USMInstance subclass, or a state machine Blueprint's asset_path. Empty = USMInstance.
+	 * @param ParentClass Parent of the new asset: the full class path of a blueprintable USMInstance subclass, or a state machine Blueprint's asset_path. Empty = the parent of the Blueprint being edited, as the editor's Convert to Reference dialog does.
 	 * @return JSON: { node_guid, reference_asset_path, name }
 	 */
 	UFUNCTION(meta = (AICallable), Category = "LogicDriver")

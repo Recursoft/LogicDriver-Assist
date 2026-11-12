@@ -53,6 +53,7 @@ BEGIN_DEFINE_SPEC(FSMGraphMeasureSpec, "LogicDriver.Assist.GraphMeasure",
 		const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
 		Args->SetStringField(TEXT("name"), FGuid::NewGuid().ToString());
 		Args->SetStringField(TEXT("path"), FAssetHandler::DefaultGamePath());
+		Args->SetStringField(TEXT("parent_class"), TEXT("/Script/SMSystem.SMInstance"));
 		return Str(Run(TEXT("ld.create_blueprint"), Args), TEXT("asset_path"));
 	}
 

@@ -33,6 +33,7 @@ BEGIN_DEFINE_SPEC(FSMFindNodeTypesSpec, "LogicDriver.Assist.FindNodeTypes",
 		const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
 		Args->SetStringField(TEXT("name"), FGuid::NewGuid().ToString());
 		Args->SetStringField(TEXT("path"), FAssetHandler::DefaultGamePath());
+		Args->SetStringField(TEXT("parent_class"), TEXT("/Script/SMSystem.SMInstance"));
 
 		const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
 			FName(TEXT("ld.create_blueprint")), Args);

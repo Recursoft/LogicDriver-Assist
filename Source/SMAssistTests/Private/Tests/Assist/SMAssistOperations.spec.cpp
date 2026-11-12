@@ -10,12 +10,14 @@
 
 #include "Blueprints/SMBlueprint.h"
 #include "Blueprints/SMBlueprintGeneratedClass.h"
+#include "Configuration/SMProjectEditorSettings.h"
 #include "Graph/Nodes/PropertyNodes/SMGraphK2Node_PropertyNode_Base.h"
 #include "Graph/Nodes/SMGraphNode_Base.h"
 #include "Graph/Nodes/SMGraphNode_RerouteNode.h"
 #include "Graph/Nodes/SMGraphNode_StateMachineStateNode.h"
 #include "Graph/SMPropertyGraph.h"
 #include "Properties/SMGraphProperty_Base.h"
+#include "Utilities/SMBlueprintEditorUtils.h"
 #include "SMInstance.h"
 #include "SMStateInstance.h"
 #include "SMTransitionInstance.h"
@@ -35,6 +37,7 @@
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Misc/Paths.h"
+#include "Misc/ScopeExit.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "UObject/Package.h"
@@ -80,7 +83,9 @@ BEGIN_DEFINE_SPEC(FAssistOperationsSpec, "LogicDriver.Assist",
 		return Info;
 	}
 
-	FString CreateTransientBlueprint()
+	// Creates a state machine blueprint and returns its asset path, or an empty string on failure. The parent is
+	// passed explicitly so the result does not depend on the project's default parent class setting.
+	FString CreateTransientBlueprint(const FString& InParentClass = USMInstance::StaticClass()->GetPathName())
 	{
 		USMAssistSubsystem* Subsystem = GetSubsystem();
 		if (!Subsystem)
@@ -91,6 +96,7 @@ BEGIN_DEFINE_SPEC(FAssistOperationsSpec, "LogicDriver.Assist",
 		const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
 		Args->SetStringField(TEXT("name"), FGuid::NewGuid().ToString());
 		Args->SetStringField(TEXT("path"), FAssetHandler::DefaultGamePath());
+		Args->SetStringField(TEXT("parent_class"), InParentClass);
 
 		const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
 			FName(TEXT("ld.create_blueprint")), Args);
@@ -543,6 +549,68 @@ BEGIN_DEFINE_SPEC(FAssistOperationsSpec, "LogicDriver.Assist",
 		return nullptr;
 	}
 
+	// Sets the project's DefaultStateMachineBlueprintParentClass to InDefaultParent, runs ld.create_blueprint without
+	// 'parent_class', and restores the setting. Returns the new blueprint's parent class, or null when the operation
+	// fails. OutResult holds the operation's result.
+	UClass* CreateBlueprintWithProjectDefaultParent(const FSoftObjectPath& InDefaultParent, FSMAssistOperationResult& OutResult)
+	{
+		USMProjectEditorSettings* Settings = FSMBlueprintEditorUtils::GetMutableProjectEditorSettings();
+		const TSoftClassPtr<USMInstance> PreviousDefaultParent = Settings->DefaultStateMachineBlueprintParentClass;
+		ON_SCOPE_EXIT
+		{
+			Settings->DefaultStateMachineBlueprintParentClass = PreviousDefaultParent;
+		};
+		Settings->DefaultStateMachineBlueprintParentClass = TSoftClassPtr<USMInstance>(InDefaultParent);
+
+		const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+		Args->SetStringField(TEXT("name"), FGuid::NewGuid().ToString());
+		Args->SetStringField(TEXT("path"), FAssetHandler::DefaultGamePath());
+
+		OutResult = GetSubsystem()->ExecuteOperation(FName(TEXT("ld.create_blueprint")), Args);
+		if (!OutResult.bSuccess || !OutResult.Payload.IsValid())
+		{
+			return nullptr;
+		}
+
+		FString AssetPath;
+		OutResult.Payload->TryGetStringField(TEXT("asset_path"), AssetPath);
+		const USMBlueprint* Blueprint = LoadObject<USMBlueprint>(nullptr, *AssetPath);
+		return Blueprint ? Blueprint->ParentClass.Get() : nullptr;
+	}
+
+	// Adds an inline state machine named InStateName to the blueprint at InAssetPath, converts it with
+	// ld.convert_to_reference, and returns the minted reference's parent class, or null on failure. An empty
+	// InParentClass leaves out the 'parent_class' arg.
+	UClass* ConvertNewInlineAndGetParent(const FString& InAssetPath, const FString& InStateName, const FString& InParentClass)
+	{
+		const FString InlineGuid = AddInlineStateMachine(InAssetPath, InStateName);
+		if (!TestFalse("Inline state machine guid populated", InlineGuid.IsEmpty()))
+		{
+			return nullptr;
+		}
+
+		const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+		Args->SetStringField(TEXT("asset_path"), InAssetPath);
+		Args->SetStringField(TEXT("node_guid"), InlineGuid);
+		if (!InParentClass.IsEmpty())
+		{
+			Args->SetStringField(TEXT("parent_class"), InParentClass);
+		}
+
+		const FSMAssistOperationResult Result = GetSubsystem()->ExecuteOperation(
+			FName(TEXT("ld.convert_to_reference")), Args);
+		if (!TestTrue(FString::Printf(TEXT("Converting %s succeeds"), *InStateName), Result.bSuccess)
+			|| !Result.Payload.IsValid())
+		{
+			return nullptr;
+		}
+
+		FString ReferencePath;
+		Result.Payload->TryGetStringField(TEXT("reference_asset_path"), ReferencePath);
+		const USMBlueprint* Reference = LoadObject<USMBlueprint>(nullptr, *ReferencePath);
+		return Reference ? Reference->ParentClass.Get() : nullptr;
+	}
+
 END_DEFINE_SPEC(FAssistOperationsSpec)
 
 void FAssistOperationsSpec::Define()
@@ -925,6 +993,42 @@ void FAssistOperationsSpec::Define()
 				TestEqual("Blueprint parent is the requested class",
 					Blueprint->ParentClass.Get(), USMAssistTestParentInstance::StaticClass());
 			}
+		});
+
+		// The editor's New State Machine dialog parents a new blueprint to this project setting. SMAssist reads the
+		// setting by its name through reflection, so this spec also fails when Logic Driver renames it.
+		It("Parents the blueprint to the project's default parent class when 'parent_class' is empty", [this]()
+		{
+			FSMAssistOperationResult Result;
+			TestEqual("Blueprint parent is the project's default parent class",
+				CreateBlueprintWithProjectDefaultParent(FSoftObjectPath(USMAssistTestParentInstance::StaticClass()), Result),
+				USMAssistTestParentInstance::StaticClass());
+			TestTrue("Result is success", Result.bSuccess);
+		});
+
+		// USMBlueprintFactory also falls back to USMInstance when the setting cannot be loaded. SMAssist logs a
+		// warning that names the setting's path, and the engine may log its own load warning with the same path.
+		It("Falls back to USMInstance when the project's default parent class cannot be loaded", [this]()
+		{
+			AddExpectedMessage(TEXT("ThisClassDoesNotExist"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 0);
+
+			FSMAssistOperationResult Result;
+			TestEqual("Blueprint parent is USMInstance",
+				CreateBlueprintWithProjectDefaultParent(
+					FSoftObjectPath(TEXT("/Game/AssistTests/ThisClassDoesNotExist.ThisClassDoesNotExist_C")), Result),
+				USMInstance::StaticClass());
+			TestTrue("Result is success", Result.bSuccess);
+		});
+
+		// USMBlueprintFactory refuses a parent that loads but cannot be blueprinted, so the operation fails
+		// instead of creating an asset with a different parent than the project asks for.
+		It("Fails when the project's default parent class cannot parent a state machine blueprint", [this]()
+		{
+			FSMAssistOperationResult Result;
+			TestNull("No blueprint is created",
+				CreateBlueprintWithProjectDefaultParent(FSoftObjectPath(USMAssistTestNotBlueprintableInstance::StaticClass()), Result));
+			TestFalse("Result is failure", Result.bSuccess);
+			TestTrue("Error names the setting", Result.ErrorMessage.Contains(TEXT("DefaultStateMachineBlueprintParentClass")));
 		});
 
 		It("Fails when 'parent_class' cannot be loaded", [this]()
@@ -6743,51 +6847,81 @@ void FAssistOperationsSpec::Define()
 		});
 
 		// Logic Driver sets the parent on USMBlueprintFactory's class default object, so a parent given to one call
-		// must not become the parent of the next call that gives none.
+		// must not become the parent of the next call that gives none. That call gets the owning Blueprint's parent.
 		It("Parents the minted reference to 'parent_class' without carrying it to the next call", [this]()
 		{
-			USMAssistSubsystem* Subsystem = GetSubsystem();
 			const FString AssetPath = CreateTransientBlueprint();
-			if (!TestNotNull("Assist subsystem available", Subsystem) || !TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
 			{
 				return;
 			}
 
-			auto ConvertNewInline = [this, Subsystem, &AssetPath](const FString& InStateName, const FString& InParentClass) -> UClass*
-			{
-				const FString InlineGuid = AddInlineStateMachine(AssetPath, InStateName);
-				if (!TestFalse("Inline state machine guid populated", InlineGuid.IsEmpty()))
-				{
-					return nullptr;
-				}
-
-				const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
-				Args->SetStringField(TEXT("asset_path"), AssetPath);
-				Args->SetStringField(TEXT("node_guid"), InlineGuid);
-				if (!InParentClass.IsEmpty())
-				{
-					Args->SetStringField(TEXT("parent_class"), InParentClass);
-				}
-
-				const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
-					FName(TEXT("ld.convert_to_reference")), Args);
-				if (!TestTrue(FString::Printf(TEXT("Converting %s succeeds"), *InStateName), Result.bSuccess)
-					|| !Result.Payload.IsValid())
-				{
-					return nullptr;
-				}
-
-				FString ReferencePath;
-				Result.Payload->TryGetStringField(TEXT("reference_asset_path"), ReferencePath);
-				const USMBlueprint* Reference = LoadObject<USMBlueprint>(nullptr, *ReferencePath);
-				return Reference ? Reference->ParentClass.Get() : nullptr;
-			};
-
 			TestEqual("Minted reference uses the requested parent",
-				ConvertNewInline(TEXT("WithParent"), USMAssistTestParentInstance::StaticClass()->GetPathName()),
+				ConvertNewInlineAndGetParent(AssetPath, TEXT("WithParent"), USMAssistTestParentInstance::StaticClass()->GetPathName()),
 				USMAssistTestParentInstance::StaticClass());
-			TestEqual("A later conversion without 'parent_class' uses USMInstance",
-				ConvertNewInline(TEXT("WithoutParent"), FString()), USMInstance::StaticClass());
+			TestEqual("A later conversion without 'parent_class' uses the owning Blueprint's parent, USMInstance",
+				ConvertNewInlineAndGetParent(AssetPath, TEXT("WithoutParent"), FString()), USMInstance::StaticClass());
+		});
+
+		// The editor's Convert to Reference dialog starts from the owning Blueprint's parent, not the project's
+		// default parent class, so the minted reference keeps the functions and variables that parent declares.
+		It("Parents the minted reference to the owning Blueprint's parent when 'parent_class' is empty", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint(USMAssistTestParentInstance::StaticClass()->GetPathName());
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			TestEqual("Minted reference uses the owning Blueprint's parent",
+				ConvertNewInlineAndGetParent(AssetPath, TEXT("Inline"), FString()), USMAssistTestParentInstance::StaticClass());
+		});
+
+		It("Parents the minted reference to the owning Blueprint's parent Blueprint when 'parent_class' is empty", [this]()
+		{
+			const FString ParentAssetPath = CreateTransientBlueprint();
+			const FString ChildAssetPath = CreateTransientBlueprint(ParentAssetPath);
+			const USMBlueprint* ParentBlueprint = LoadObject<USMBlueprint>(nullptr, *ParentAssetPath);
+			if (!TestNotNull("Parent blueprint created", ParentBlueprint) || !TestFalse("Child blueprint created", ChildAssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			TestEqual("Minted reference uses the parent Blueprint's generated class",
+				ConvertNewInlineAndGetParent(ChildAssetPath, TEXT("Inline"), FString()), ParentBlueprint->GeneratedClass.Get());
+		});
+
+		// The editor's factory refuses an owning parent that can no longer parent a state machine blueprint, for
+		// example a C++ class later marked NotBlueprintable, so the operation fails instead of picking another parent.
+		It("Fails when the owning Blueprint's parent cannot parent a state machine blueprint and 'parent_class' is empty", [this]()
+		{
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			const FString AssetPath = CreateTransientBlueprint();
+			const FString InlineGuid = AddInlineStateMachine(AssetPath, TEXT("Inline"));
+			USMBlueprint* Blueprint = LoadObject<USMBlueprint>(nullptr, *AssetPath);
+			if (!TestNotNull("Assist subsystem available", Subsystem) || !TestNotNull("Blueprint created", Blueprint)
+				|| !TestFalse("Inline state machine guid populated", InlineGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			// Sets the parent in memory only, without reparenting, so the Blueprint looks like one whose parent
+			// class changed after it was created.
+			const TSubclassOf<UObject> PreviousParentClass = Blueprint->ParentClass;
+			ON_SCOPE_EXIT
+			{
+				Blueprint->ParentClass = PreviousParentClass;
+			};
+			Blueprint->ParentClass = USMAssistTestNotBlueprintableInstance::StaticClass();
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("node_guid"), InlineGuid);
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("ld.convert_to_reference")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+			TestTrue("Error asks for 'parent_class'", Result.ErrorMessage.Contains(TEXT("parent_class")));
 		});
 	});
 

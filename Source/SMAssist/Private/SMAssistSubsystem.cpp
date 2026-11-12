@@ -161,7 +161,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 			{
 				{ Args::Name, MakePropertyObject(TEXT("string"), TEXT("Asset name (without path).")) },
 				{ Args::Path, MakePropertyObject(TEXT("string"), TEXT("Content package path; defaults to the plugin's default location.")) },
-				{ Args::ParentClass, MakePropertyObject(TEXT("string"), TEXT("Optional. The parent of the new blueprint: the full class path of a blueprintable USMInstance subclass, such as /Script/MyModule.MyStateMachine, or a state machine Blueprint's asset_path. Empty uses USMInstance.")) }
+				{ Args::ParentClass, MakePropertyObject(TEXT("string"), TEXT("Optional. The parent of the new blueprint: the full class path of a blueprintable USMInstance subclass, such as /Script/MyModule.MyStateMachine, or a state machine Blueprint's asset_path. Empty uses the project's default parent class setting, which is USMInstance unless changed.")) }
 			},
 			{ Args::Name });
 		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::CreateBlueprint);
@@ -1211,7 +1211,7 @@ void USMAssistSubsystem::RegisterBuiltInOperations()
 				{ Args::NodeGuid, MakePropertyObject(TEXT("string"), TEXT("Guid of the inline nested state machine node to convert.")) },
 				{ Args::Name, MakePropertyObject(TEXT("string"), TEXT("Optional. Name for the minted reference asset. Empty derives the name from the node's state name with the project's reference-name prefix.")) },
 				{ Args::Path, MakePropertyObject(TEXT("string"), TEXT("Optional. Package folder for the minted asset. Empty places it alongside the source Blueprint.")) },
-				{ Args::ParentClass, MakePropertyObject(TEXT("string"), TEXT("Optional. The parent of the minted reference Blueprint: the full class path of a blueprintable USMInstance subclass, or a state machine Blueprint's asset_path. Empty uses USMInstance.")) }
+				{ Args::ParentClass, MakePropertyObject(TEXT("string"), TEXT("Optional. The parent of the minted reference Blueprint: the full class path of a blueprintable USMInstance subclass, or a state machine Blueprint's asset_path. Empty uses the parent of the Blueprint being edited, as the editor's Convert to Reference dialog does.")) }
 			},
 			{ Args::AssetPath, Args::NodeGuid });
 		Info.Handler = FSMAssistOperationHandler::CreateStatic(&LD::Assist::ConvertToReference);

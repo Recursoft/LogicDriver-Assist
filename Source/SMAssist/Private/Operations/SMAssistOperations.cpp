@@ -412,12 +412,74 @@ namespace LD::Assist::Private
 		return bParsed;
 	}
 
-	// Resolves the optional 'parent_class' arg of ld.create_blueprint and ld.convert_to_reference. The arg names a
-	// class, such as /Script/MyModule.MyStateMachine, or a Blueprint asset, whose generated class is used. An
-	// absent or empty arg resolves to USMInstance, so OutParentClass is never null when this returns true.
-	static bool TryResolveParentClass(const TSharedRef<FJsonObject>& InArgs, UClass*& OutParentClass, FString& OutError)
+	// The script path of Logic Driver's USMProjectEditorSettings and the name of its default parent class setting.
+	// The class is declared in a private header of SMSystemEditor, so Assist reads it through reflection.
+	static const TCHAR* ProjectEditorSettingsClassPath = TEXT("/Script/SMSystemEditor.SMProjectEditorSettings");
+	static const TCHAR* DefaultParentClassPropertyName = TEXT("DefaultStateMachineBlueprintParentClass");
+
+	// Whether InClass can parent a state machine blueprint. USMBlueprintFactory replaces a class that is not a
+	// USMInstance subclass with USMInstance and reports nothing, and it reports a non-blueprintable one in a modal
+	// dialog that blocks the caller, so Assist checks both conditions before it reaches the factory.
+	static bool CanParentStateMachineBlueprint(const UClass* InClass)
+	{
+		return InClass
+			&& InClass->IsChildOf(USMInstance::StaticClass())
+			&& FKismetEditorUtilities::CanCreateBlueprintOfClass(InClass);
+	}
+
+	// Resolves the project's DefaultStateMachineBlueprintParentClass setting, which the editor's New State Machine
+	// dialog uses as the parent. OutParentClass is USMInstance when the setting is unset or cannot be loaded. Returns
+	// false with OutError when the setting names a class that cannot parent a state machine blueprint. The editor
+	// refuses only a non-blueprintable USMInstance subclass and replaces any other class with USMInstance, but Assist
+	// refuses both, so the caller learns the setting is wrong.
+	static bool TryGetProjectDefaultParentClass(UClass*& OutParentClass, FString& OutError)
 	{
 		OutParentClass = USMInstance::StaticClass();
+
+		const UClass* SettingsClass = FindObject<UClass>(nullptr, ProjectEditorSettingsClassPath);
+		const FSoftClassProperty* DefaultParentProperty = SettingsClass
+			? FindFProperty<FSoftClassProperty>(SettingsClass, DefaultParentClassPropertyName)
+			: nullptr;
+		if (!DefaultParentProperty)
+		{
+			LDASSIST_LOG_WARNING(TEXT("Could not find %s.%s. New state machine blueprints default to USMInstance."),
+				ProjectEditorSettingsClassPath, DefaultParentClassPropertyName);
+			return true;
+		}
+
+		const FSoftObjectPtr& DefaultParent = DefaultParentProperty->GetPropertyValue_InContainer(SettingsClass->GetDefaultObject());
+		if (DefaultParent.IsNull())
+		{
+			return true;
+		}
+
+		UClass* DefaultParentClass = Cast<UClass>(DefaultParent.LoadSynchronous());
+		if (!DefaultParentClass)
+		{
+			LDASSIST_LOG_WARNING(TEXT("Could not load the project's %s '%s'. New state machine blueprints default to USMInstance."),
+				DefaultParentClassPropertyName, *DefaultParent.ToString());
+			return true;
+		}
+
+		if (!CanParentStateMachineBlueprint(DefaultParentClass))
+		{
+			OutError = FString::Printf(
+				TEXT("The project's %s '%s' cannot parent a state machine blueprint. Pass 'parent_class', or change the setting in Project Settings, Plugins, Logic Driver Editor."),
+				DefaultParentClassPropertyName, *DefaultParent.ToString());
+			return false;
+		}
+
+		OutParentClass = DefaultParentClass;
+		return true;
+	}
+
+	// Resolves the optional 'parent_class' arg of ld.create_blueprint and ld.convert_to_reference. The arg names a
+	// class, such as /Script/MyModule.MyStateMachine, or a Blueprint asset, whose generated class is used. When the
+	// arg is absent or empty, this returns true and leaves OutParentClass null, so each operation applies its own
+	// default.
+	static bool TryResolveParentClass(const TSharedRef<FJsonObject>& InArgs, UClass*& OutParentClass, FString& OutError)
+	{
+		OutParentClass = nullptr;
 
 		FString ParentClassPath;
 		if (!InArgs->TryGetStringField(Args::ParentClass, ParentClassPath) || ParentClassPath.IsEmpty())
@@ -448,10 +510,7 @@ namespace LD::Assist::Private
 			return false;
 		}
 
-		// USMBlueprintFactory replaces a class that is not a USMInstance subclass with USMInstance and reports
-		// nothing, and it reports a non-blueprintable one in a modal dialog that blocks the caller.
-		if (!ParentClass->IsChildOf(USMInstance::StaticClass())
-			|| !FKismetEditorUtilities::CanCreateBlueprintOfClass(ParentClass))
+		if (!CanParentStateMachineBlueprint(ParentClass))
 		{
 			OutError = FString::Printf(
 				TEXT("'parent_class' '%s' cannot parent a state machine blueprint. It must be a blueprintable USMInstance subclass."),
@@ -484,7 +543,8 @@ FSMAssistOperationResult LD::Assist::CreateBlueprint(const TSharedRef<FJsonObjec
 
 	UClass* ParentClass = nullptr;
 	FString ParentClassError;
-	if (!LD::Assist::Private::TryResolveParentClass(InArgs, ParentClass, ParentClassError))
+	if (!LD::Assist::Private::TryResolveParentClass(InArgs, ParentClass, ParentClassError)
+		|| (!ParentClass && !LD::Assist::Private::TryGetProjectDefaultParentClass(ParentClass, ParentClassError)))
 	{
 		return FSMAssistOperationResult::MakeError(ParentClassError);
 	}
@@ -8686,13 +8746,26 @@ FSMAssistOperationResult LD::Assist::ConvertToReference(const TSharedRef<FJsonOb
 		return FSMAssistOperationResult::MakeError(LengthError);
 	}
 
-	// ConvertStateMachineToReference sets the parent on USMBlueprintFactory's class default object, and only when
-	// one is given. Passing USMInstance for an empty arg keeps an earlier call's parent from carrying over.
+	// An empty arg uses the parent of the Blueprint that owns the node, as the editor's Convert to Reference dialog
+	// does. The editor refuses that parent when it can no longer parent a state machine blueprint, so Assist fails
+	// too instead of picking another parent. ConvertStateMachineToReference sets the parent on USMBlueprintFactory's
+	// class default object, and only when one is given, so always passing a class also keeps an earlier call's
+	// parent from carrying over.
 	UClass* ParentClass = nullptr;
 	FString ParentClassError;
 	if (!LD::Assist::Private::TryResolveParentClass(InArgs, ParentClass, ParentClassError))
 	{
 		return FSMAssistOperationResult::MakeError(ParentClassError);
+	}
+	if (!ParentClass)
+	{
+		ParentClass = Blueprint->ParentClass.Get();
+		if (!LD::Assist::Private::CanParentStateMachineBlueprint(ParentClass))
+		{
+			return FSMAssistOperationResult::MakeError(FString::Printf(
+				TEXT("The parent '%s' of the Blueprint being edited cannot parent a state machine blueprint. Pass 'parent_class'."),
+				*GetPathNameSafe(ParentClass)));
+		}
 	}
 	ConvertArgs.ParentClass = ParentClass;
 

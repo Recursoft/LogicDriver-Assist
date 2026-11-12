@@ -53,7 +53,7 @@ BEGIN_DEFINE_SPEC(FSMCaptureLocalGraphSpec, "LogicDriver.Assist.CaptureLocalGrap
 	FString CreateBlueprint()
 	{
 		return Str(Run(TEXT("ld.create_blueprint"),
-			Obj({ { TEXT("name"), FGuid::NewGuid().ToString() }, { TEXT("path"), FAssetHandler::DefaultGamePath() } })), TEXT("asset_path"));
+			Obj({ { TEXT("name"), FGuid::NewGuid().ToString() }, { TEXT("path"), FAssetHandler::DefaultGamePath() }, { TEXT("parent_class"), TEXT("/Script/SMSystem.SMInstance") } })), TEXT("asset_path"));
 	}
 
 	FString AddState(const FString& InAsset, const FString& InName)
