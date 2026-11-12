@@ -10,11 +10,12 @@
 
 namespace LDA = LD::Assist::Toolset::Marshal;
 
-FString ULogicDriverToolset::CreateBlueprint(const FString& Name, const FString& Path)
+FString ULogicDriverToolset::CreateBlueprint(const FString& Name, const FString& Path, const FString& ParentClass)
 {
 	const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
 	Args->SetStringField(TEXT("name"), Name);
 	LDA::AddIfNonEmpty(*Args, TEXT("path"), Path);
+	LDA::AddIfNonEmpty(*Args, TEXT("parent_class"), ParentClass);
 	return LDA::Execute(TEXT("ld.create_blueprint"), Args);
 }
 

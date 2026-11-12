@@ -2,11 +2,24 @@
 
 #pragma once
 
+#include "SMInstance.h"
 #include "SMStateInstance.h"
 #include "SMStateMachineInstance.h"
 #include "SMTransitionInstance.h"
 
 #include "SMAssistTestClasses.generated.h"
+
+UCLASS()
+class USMAssistTestParentInstance : public USMInstance
+{
+	GENERATED_BODY()
+};
+
+UCLASS(NotBlueprintable)
+class USMAssistTestNotBlueprintableInstance : public USMInstance
+{
+	GENERATED_BODY()
+};
 
 UCLASS()
 class USMAssistArrayStateInstance : public USMStateInstance

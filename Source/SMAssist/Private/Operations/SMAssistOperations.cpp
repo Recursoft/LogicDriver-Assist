@@ -65,6 +65,7 @@
 #include "EdGraph/EdGraphSchema.h"
 #include "EdGraphSchema_K2.h"
 #include "Editor.h"
+#include "Engine/Blueprint.h"
 #include "Engine/SCS_Node.h"
 #include "GameFramework/Actor.h"
 #include "Engine/SimpleConstructionScript.h"
@@ -410,6 +411,57 @@ namespace LD::Assist::Private
 		FMemory::Free(Temp);
 		return bParsed;
 	}
+
+	// Resolves the optional 'parent_class' arg of ld.create_blueprint and ld.convert_to_reference. The arg names a
+	// class, such as /Script/MyModule.MyStateMachine, or a Blueprint asset, whose generated class is used. An
+	// absent or empty arg resolves to USMInstance, so OutParentClass is never null when this returns true.
+	static bool TryResolveParentClass(const TSharedRef<FJsonObject>& InArgs, UClass*& OutParentClass, FString& OutError)
+	{
+		OutParentClass = USMInstance::StaticClass();
+
+		FString ParentClassPath;
+		if (!InArgs->TryGetStringField(Args::ParentClass, ParentClassPath) || ParentClassPath.IsEmpty())
+		{
+			return true;
+		}
+
+		if (!LD::Assist::Utils::IsWithinNameLength(ParentClassPath, TEXT("parent_class"), OutError))
+		{
+			return false;
+		}
+
+		UClass* ParentClass = LoadObject<UClass>(nullptr, *ParentClassPath, nullptr, LOAD_NoWarn | LOAD_Quiet);
+		if (!ParentClass)
+		{
+			// The asset_path that ld.create_blueprint returns names the Blueprint, not its generated class.
+			if (const UBlueprint* ParentBlueprint = LoadObject<UBlueprint>(nullptr, *ParentClassPath, nullptr, LOAD_NoWarn | LOAD_Quiet))
+			{
+				ParentClass = ParentBlueprint->GeneratedClass;
+			}
+		}
+
+		if (!ParentClass)
+		{
+			OutError = FString::Printf(
+				TEXT("Could not load 'parent_class' '%s'. Pass a full class path, such as /Script/MyModule.MyStateMachine, or a Blueprint's asset path."),
+				*ParentClassPath);
+			return false;
+		}
+
+		// USMBlueprintFactory replaces a class that is not a USMInstance subclass with USMInstance and reports
+		// nothing, and it reports a non-blueprintable one in a modal dialog that blocks the caller.
+		if (!ParentClass->IsChildOf(USMInstance::StaticClass())
+			|| !FKismetEditorUtilities::CanCreateBlueprintOfClass(ParentClass))
+		{
+			OutError = FString::Printf(
+				TEXT("'parent_class' '%s' cannot parent a state machine blueprint. It must be a blueprintable USMInstance subclass."),
+				*ParentClassPath);
+			return false;
+		}
+
+		OutParentClass = ParentClass;
+		return true;
+	}
 }
 
 FSMAssistOperationResult LD::Assist::CreateBlueprint(const TSharedRef<FJsonObject>& InArgs)
@@ -430,6 +482,13 @@ FSMAssistOperationResult LD::Assist::CreateBlueprint(const TSharedRef<FJsonObjec
 		return FSMAssistOperationResult::MakeError(LengthError);
 	}
 
+	UClass* ParentClass = nullptr;
+	FString ParentClassError;
+	if (!LD::Assist::Private::TryResolveParentClass(InArgs, ParentClass, ParentClassError))
+	{
+		return FSMAssistOperationResult::MakeError(ParentClassError);
+	}
+
 	ISMAssetToolsModule& AssetToolsModule = FModuleManager::LoadModuleChecked<ISMAssetToolsModule>(
 		LOGICDRIVER_ASSET_TOOLS_MODULE_NAME);
 
@@ -442,6 +501,7 @@ FSMAssistOperationResult LD::Assist::CreateBlueprint(const TSharedRef<FJsonObjec
 	ISMAssetManager::FCreateStateMachineBlueprintArgs CreateArgs;
 	CreateArgs.Name = *Name;
 	CreateArgs.Path = Path;
+	CreateArgs.ParentClass = ParentClass;
 
 	USMBlueprint* NewBlueprint = AssetManager->CreateStateMachineBlueprint(CreateArgs);
 	if (!NewBlueprint)
@@ -8626,21 +8686,15 @@ FSMAssistOperationResult LD::Assist::ConvertToReference(const TSharedRef<FJsonOb
 		return FSMAssistOperationResult::MakeError(LengthError);
 	}
 
-	FString ParentClassPath;
-	if (InArgs->TryGetStringField(Args::ParentClass, ParentClassPath) && !ParentClassPath.IsEmpty())
+	// ConvertStateMachineToReference sets the parent on USMBlueprintFactory's class default object, and only when
+	// one is given. Passing USMInstance for an empty arg keeps an earlier call's parent from carrying over.
+	UClass* ParentClass = nullptr;
+	FString ParentClassError;
+	if (!LD::Assist::Private::TryResolveParentClass(InArgs, ParentClass, ParentClassError))
 	{
-		if (!LD::Assist::Utils::IsWithinNameLength(ParentClassPath, TEXT("parent_class"), LengthError))
-		{
-			return FSMAssistOperationResult::MakeError(LengthError);
-		}
-		UClass* ParentClass = LoadClass<USMInstance>(nullptr, *ParentClassPath);
-		if (!ParentClass)
-		{
-			return FSMAssistOperationResult::MakeError(
-				FString::Printf(TEXT("Could not load 'parent_class' '%s'."), *ParentClassPath));
-		}
-		ConvertArgs.ParentClass = ParentClass;
+		return FSMAssistOperationResult::MakeError(ParentClassError);
 	}
+	ConvertArgs.ParentClass = ParentClass;
 
 	FString GraphGenError;
 	ISMGraphGeneration* GraphGen = LD::Assist::Private::GetGraphGeneration(GraphGenError);

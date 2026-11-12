@@ -141,6 +141,8 @@ Operation names, arguments, and payload shapes are still evolving (the plugin is
 
 Address assets by the full object path that `ld.create_blueprint` and `ld.get_asset` return (`/Game/.../SM_Foo.SM_Foo`), not the bare package path. Thread the returned `asset_path` forward instead of rebuilding it; the ToolsetRegistry transport rejects a bare path during argument conversion, before the operation runs.
 
+When a machine extends a C++ state machine class, pass that class's full path as `parent_class` to `ld.create_blueprint`, such as `/Script/MyModule.MyStateMachine`. When it extends another state machine Blueprint, pass that Blueprint's `asset_path`. A short class name does not resolve. A class that is not a blueprintable `USMInstance` subclass is refused before any asset is created. An empty `parent_class` uses `USMInstance`, not the project's default parent class setting.
+
 ### Nested state machines
 
 A nested state machine is one asset, not many. `ld.get_asset` reports the root graph by default and shows a container as a single `state_machine_state` entry; pass `scope="all"` to walk every nesting level, where each state and transition also carries `graph_path` and `parent_state_guid` so levels can be told apart. `is_entry` is always relative to a node's own graph, while the top-level `entry_state_guids` stays the root graph's.

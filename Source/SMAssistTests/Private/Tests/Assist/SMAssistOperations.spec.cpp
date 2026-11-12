@@ -12,6 +12,8 @@
 #include "Blueprints/SMBlueprintGeneratedClass.h"
 #include "Graph/Nodes/PropertyNodes/SMGraphK2Node_PropertyNode_Base.h"
 #include "Graph/Nodes/SMGraphNode_Base.h"
+#include "Graph/Nodes/SMGraphNode_RerouteNode.h"
+#include "Graph/Nodes/SMGraphNode_StateMachineStateNode.h"
 #include "Graph/SMPropertyGraph.h"
 #include "Properties/SMGraphProperty_Base.h"
 #include "SMInstance.h"
@@ -519,6 +521,28 @@ BEGIN_DEFINE_SPEC(FAssistOperationsSpec, "LogicDriver.Assist",
 		return StateGuid;
 	}
 
+	template<typename NodeType>
+	NodeType* FindGraphNode(const FString& InAssetPath, const FString& InNodeGuid)
+	{
+		USMBlueprint* Blueprint = LoadObject<USMBlueprint>(nullptr, *InAssetPath);
+		FGuid NodeGuid;
+		if (!Blueprint || !FGuid::Parse(InNodeGuid, NodeGuid))
+		{
+			return nullptr;
+		}
+
+		TArray<NodeType*> Nodes;
+		FBlueprintEditorUtils::GetAllNodesOfClass<NodeType>(Blueprint, Nodes);
+		for (NodeType* Node : Nodes)
+		{
+			if (Node->NodeGuid == NodeGuid)
+			{
+				return Node;
+			}
+		}
+		return nullptr;
+	}
+
 END_DEFINE_SPEC(FAssistOperationsSpec)
 
 void FAssistOperationsSpec::Define()
@@ -871,6 +895,138 @@ void FAssistOperationsSpec::Define()
 				Result.Payload->TryGetStringField(TEXT("asset_path"), AssetPath));
 			TestTrue("Asset path starts with default game path",
 				AssetPath.StartsWith(FAssetHandler::DefaultGamePath()));
+		});
+
+		It("Parents the blueprint to 'parent_class'", [this]()
+		{
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			if (!TestNotNull("Assist subsystem available", Subsystem))
+			{
+				return;
+			}
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("name"), FGuid::NewGuid().ToString());
+			Args->SetStringField(TEXT("path"), FAssetHandler::DefaultGamePath());
+			Args->SetStringField(TEXT("parent_class"), USMAssistTestParentInstance::StaticClass()->GetPathName());
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("ld.create_blueprint")), Args);
+			if (!TestTrue("Result is success", Result.bSuccess) || !TestTrue("Payload populated", Result.Payload.IsValid()))
+			{
+				return;
+			}
+
+			FString AssetPath;
+			Result.Payload->TryGetStringField(TEXT("asset_path"), AssetPath);
+			const USMBlueprint* Blueprint = LoadObject<USMBlueprint>(nullptr, *AssetPath);
+			if (TestNotNull("Created blueprint loads", Blueprint))
+			{
+				TestEqual("Blueprint parent is the requested class",
+					Blueprint->ParentClass.Get(), USMAssistTestParentInstance::StaticClass());
+			}
+		});
+
+		It("Fails when 'parent_class' cannot be loaded", [this]()
+		{
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			if (!TestNotNull("Assist subsystem available", Subsystem))
+			{
+				return;
+			}
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("name"), FGuid::NewGuid().ToString());
+			Args->SetStringField(TEXT("path"), FAssetHandler::DefaultGamePath());
+			Args->SetStringField(TEXT("parent_class"), TEXT("/Script/SMSystem.ThisClassDoesNotExist"));
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("ld.create_blueprint")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+			TestTrue("Error names parent_class", Result.ErrorMessage.Contains(TEXT("parent_class")));
+		});
+
+		// USMBlueprintFactory replaces a class that is not a USMInstance subclass with USMInstance and reports
+		// nothing, so the operation must fail instead of creating an asset with a different parent.
+		It("Refuses a 'parent_class' that is not a USMInstance subclass", [this]()
+		{
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			if (!TestNotNull("Assist subsystem available", Subsystem))
+			{
+				return;
+			}
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("name"), FGuid::NewGuid().ToString());
+			Args->SetStringField(TEXT("path"), FAssetHandler::DefaultGamePath());
+			Args->SetStringField(TEXT("parent_class"), AActor::StaticClass()->GetPathName());
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("ld.create_blueprint")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+			TestTrue("Error names the USMInstance requirement", Result.ErrorMessage.Contains(TEXT("USMInstance")));
+		});
+
+		// USMBlueprintFactory reports a non-blueprintable parent in a modal dialog, which blocks an MCP caller
+		// until it times out, so the operation must refuse the class before it reaches the factory.
+		It("Refuses a 'parent_class' that cannot be blueprinted", [this]()
+		{
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			if (!TestNotNull("Assist subsystem available", Subsystem))
+			{
+				return;
+			}
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("name"), FGuid::NewGuid().ToString());
+			Args->SetStringField(TEXT("path"), FAssetHandler::DefaultGamePath());
+			Args->SetStringField(TEXT("parent_class"), USMAssistTestNotBlueprintableInstance::StaticClass()->GetPathName());
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("ld.create_blueprint")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+			TestTrue("Error names the USMInstance requirement", Result.ErrorMessage.Contains(TEXT("USMInstance")));
+		});
+
+		It("Parents the blueprint to a state machine Blueprint by its class path or its asset path", [this]()
+		{
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			const FString BasePath = CreateTransientBlueprint();
+			if (!TestNotNull("Assist subsystem available", Subsystem) || !TestFalse("Base blueprint created", BasePath.IsEmpty()))
+			{
+				return;
+			}
+
+			const USMBlueprint* BaseBlueprint = LoadObject<USMBlueprint>(nullptr, *BasePath);
+			if (!TestNotNull("Base blueprint loads", BaseBlueprint) || !TestNotNull("Base blueprint has a generated class", BaseBlueprint->GeneratedClass.Get()))
+			{
+				return;
+			}
+
+			for (const FString& ParentArg : { BaseBlueprint->GeneratedClass->GetPathName(), BasePath })
+			{
+				const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+				Args->SetStringField(TEXT("name"), FGuid::NewGuid().ToString());
+				Args->SetStringField(TEXT("path"), FAssetHandler::DefaultGamePath());
+				Args->SetStringField(TEXT("parent_class"), ParentArg);
+
+				const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+					FName(TEXT("ld.create_blueprint")), Args);
+				if (!TestTrue(FString::Printf(TEXT("Creating with '%s' succeeds"), *ParentArg), Result.bSuccess)
+					|| !Result.Payload.IsValid())
+				{
+					continue;
+				}
+
+				FString ChildPath;
+				Result.Payload->TryGetStringField(TEXT("asset_path"), ChildPath);
+				const USMBlueprint* Child = LoadObject<USMBlueprint>(nullptr, *ChildPath);
+				if (TestNotNull("Child blueprint loads", Child))
+				{
+					TestEqual(FString::Printf(TEXT("Parent from '%s' is the base Blueprint's class"), *ParentArg),
+						Child->ParentClass.Get(), BaseBlueprint->GeneratedClass.Get());
+				}
+			}
 		});
 	});
 
@@ -2398,6 +2554,113 @@ void FAssistOperationsSpec::Define()
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error mentions unknown action",
 				Result.ErrorMessage.Contains(TEXT("array_action")));
+		});
+
+		It("Writes DynamicClassVariable on a state machine reference node", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			const FString TargetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()) || !TestFalse("Target created", TargetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const TSharedRef<FJsonObject> ReferenceArgs = MakeShared<FJsonObject>();
+			ReferenceArgs->SetStringField(TEXT("asset_path"), AssetPath);
+			ReferenceArgs->SetStringField(TEXT("state_name"), TEXT("Goal"));
+			ReferenceArgs->SetStringField(TEXT("reference_asset_path"), TargetPath);
+			const FSMAssistOperationResult ReferenceResult = Subsystem->ExecuteOperation(
+				FName(TEXT("ld.add_reference")), ReferenceArgs);
+			FString ReferenceGuid;
+			if (ReferenceResult.Payload.IsValid())
+			{
+				ReferenceResult.Payload->TryGetStringField(TEXT("state_guid"), ReferenceGuid);
+			}
+			if (!TestFalse("Reference created", ReferenceGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			constexpr const TCHAR* VariableName = TEXT("GoalClass");
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("node_guid"), ReferenceGuid);
+			Args->SetStringField(TEXT("property_name"), TEXT("DynamicClassVariable"));
+			Args->SetStringField(TEXT("value"), VariableName);
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("ld.set_node_property")), Args);
+			TestTrue("Result is success", Result.bSuccess);
+
+			const USMGraphNode_StateMachineStateNode* Node =
+				FindGraphNode<USMGraphNode_StateMachineStateNode>(AssetPath, ReferenceGuid);
+			if (TestNotNull("Reference node found", Node))
+			{
+				TestEqual("DynamicClassVariable is read back", Node->DynamicClassVariable, FName(VariableName));
+			}
+		});
+
+		It("Writes NodePosX and NodePosY on a transition reroute node", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString FromGuid = AddStateToBlueprint(AssetPath, TEXT("From"), nullptr, /*bIsEntry*/true);
+			const FString ToGuid = AddStateToBlueprint(AssetPath, TEXT("To"));
+			const FString TransitionGuid = AddTransitionBetween(AssetPath, FromGuid, ToGuid);
+			if (!TestFalse("Transition created", TransitionGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const TSharedRef<FJsonObject> RerouteArgs = MakeShared<FJsonObject>();
+			RerouteArgs->SetStringField(TEXT("asset_path"), AssetPath);
+			RerouteArgs->SetStringField(TEXT("transition_guid"), TransitionGuid);
+			RerouteArgs->SetNumberField(TEXT("position_x"), 300.0);
+			RerouteArgs->SetNumberField(TEXT("position_y"), 300.0);
+			const FSMAssistOperationResult RerouteResult = Subsystem->ExecuteOperation(
+				FName(TEXT("ld.add_transition_reroute")), RerouteArgs);
+			FString RerouteGuid;
+			if (RerouteResult.Payload.IsValid())
+			{
+				RerouteResult.Payload->TryGetStringField(TEXT("reroute_guid"), RerouteGuid);
+			}
+			if (!TestFalse("Reroute created", RerouteGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			// A negative Y is an ordinary canvas position, so the write must not treat it as "unset".
+			constexpr int32 NewX = 640;
+			constexpr int32 NewY = -96;
+			auto WritePosition = [this, Subsystem, &AssetPath, &RerouteGuid](const TCHAR* InPropertyName, int32 InValue)
+			{
+				const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+				Args->SetStringField(TEXT("asset_path"), AssetPath);
+				Args->SetStringField(TEXT("node_guid"), RerouteGuid);
+				Args->SetStringField(TEXT("property_name"), InPropertyName);
+				Args->SetStringField(TEXT("value"), FString::FromInt(InValue));
+
+				const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+					FName(TEXT("ld.set_node_property")), Args);
+				TestTrue(FString::Printf(TEXT("%s write succeeds"), InPropertyName), Result.bSuccess);
+			};
+			WritePosition(TEXT("NodePosX"), NewX);
+			WritePosition(TEXT("NodePosY"), NewY);
+
+			const USMGraphNode_RerouteNode* Reroute = FindGraphNode<USMGraphNode_RerouteNode>(AssetPath, RerouteGuid);
+			if (TestNotNull("Reroute node found", Reroute))
+			{
+				TestEqual("NodePosX is read back", Reroute->NodePosX, NewX);
+				TestEqual("NodePosY is read back", Reroute->NodePosY, NewY);
+			}
 		});
 	});
 
@@ -6450,6 +6713,81 @@ void FAssistOperationsSpec::Define()
 				FName(TEXT("ld.convert_to_reference")), Args);
 			TestFalse("Result is failure", Result.bSuccess);
 			TestTrue("Error names parent_class", Result.ErrorMessage.Contains(TEXT("parent_class")));
+		});
+
+		It("Refuses a 'parent_class' that is not a USMInstance subclass", [this]()
+		{
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			const FString InlineGuid = AddInlineStateMachine(AssetPath, TEXT("Inline"));
+			if (!TestFalse("Inline state machine guid populated", InlineGuid.IsEmpty()))
+			{
+				return;
+			}
+
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+
+			const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+			Args->SetStringField(TEXT("asset_path"), AssetPath);
+			Args->SetStringField(TEXT("node_guid"), InlineGuid);
+			Args->SetStringField(TEXT("parent_class"), AActor::StaticClass()->GetPathName());
+
+			const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+				FName(TEXT("ld.convert_to_reference")), Args);
+			TestFalse("Result is failure", Result.bSuccess);
+			TestTrue("Error names the USMInstance requirement", Result.ErrorMessage.Contains(TEXT("USMInstance")));
+		});
+
+		// Logic Driver sets the parent on USMBlueprintFactory's class default object, so a parent given to one call
+		// must not become the parent of the next call that gives none.
+		It("Parents the minted reference to 'parent_class' without carrying it to the next call", [this]()
+		{
+			USMAssistSubsystem* Subsystem = GetSubsystem();
+			const FString AssetPath = CreateTransientBlueprint();
+			if (!TestNotNull("Assist subsystem available", Subsystem) || !TestFalse("Blueprint created", AssetPath.IsEmpty()))
+			{
+				return;
+			}
+
+			auto ConvertNewInline = [this, Subsystem, &AssetPath](const FString& InStateName, const FString& InParentClass) -> UClass*
+			{
+				const FString InlineGuid = AddInlineStateMachine(AssetPath, InStateName);
+				if (!TestFalse("Inline state machine guid populated", InlineGuid.IsEmpty()))
+				{
+					return nullptr;
+				}
+
+				const TSharedRef<FJsonObject> Args = MakeShared<FJsonObject>();
+				Args->SetStringField(TEXT("asset_path"), AssetPath);
+				Args->SetStringField(TEXT("node_guid"), InlineGuid);
+				if (!InParentClass.IsEmpty())
+				{
+					Args->SetStringField(TEXT("parent_class"), InParentClass);
+				}
+
+				const FSMAssistOperationResult Result = Subsystem->ExecuteOperation(
+					FName(TEXT("ld.convert_to_reference")), Args);
+				if (!TestTrue(FString::Printf(TEXT("Converting %s succeeds"), *InStateName), Result.bSuccess)
+					|| !Result.Payload.IsValid())
+				{
+					return nullptr;
+				}
+
+				FString ReferencePath;
+				Result.Payload->TryGetStringField(TEXT("reference_asset_path"), ReferencePath);
+				const USMBlueprint* Reference = LoadObject<USMBlueprint>(nullptr, *ReferencePath);
+				return Reference ? Reference->ParentClass.Get() : nullptr;
+			};
+
+			TestEqual("Minted reference uses the requested parent",
+				ConvertNewInline(TEXT("WithParent"), USMAssistTestParentInstance::StaticClass()->GetPathName()),
+				USMAssistTestParentInstance::StaticClass());
+			TestEqual("A later conversion without 'parent_class' uses USMInstance",
+				ConvertNewInline(TEXT("WithoutParent"), FString()), USMInstance::StaticClass());
 		});
 	});
 
